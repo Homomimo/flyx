@@ -442,3 +442,80 @@ func TestNormalizePhase3Rules(t *testing.T) {
 		}
 	}
 }
+
+func TestSingboxACMEAndNaive(t *testing.T) {
+	acme := Security{Type: SecurityTLS, CertMode: CertModeACME, SNI: "hk.example.com", ACMEEmail: "me@example.com"}
+	list := []Inbound{
+		{ID: 1, Protocol: ProtocolNaive, Port: 443, Settings: Settings{Username: "flvx", Password: "naive-secret"}, Security: acme},
+		{ID: 2, Protocol: ProtocolHysteria2, Port: 443, Transport: Transport{Type: TransportQUIC}, Settings: Settings{Password: "hy2-secret"}, Security: acme},
+		{ID: 3, Protocol: ProtocolTrojan, Port: 8443, Settings: Settings{Password: "trojan-secret"},
+			Security: Security{Type: SecurityTLS, CertMode: CertModeACME, SNI: "cf.example.com", ACMEDNS: ACMEDNSCloudflare, ACMEDNSKey: "cf-token"}},
+	}
+	for i := range list {
+		if err := Normalize(TypeSingbox, &list[i]); err != nil {
+			t.Fatalf("inbound %d: %v", list[i].ID, err)
+		}
+	}
+	out, err := Render(TypeSingbox, list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := out.Files[0].Content
+	assertGolden(t, "singbox-acme.golden.json", cfg)
+	var parsed struct {
+		Providers []map[string]interface{} `json:"certificate_providers"`
+		Inbounds  []map[string]interface{} `json:"inbounds"`
+	}
+	if err := json.Unmarshal([]byte(cfg), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Providers) != 2 {
+		t.Fatalf("one provider per domain, got %d", len(parsed.Providers))
+	}
+	for i, want := range []string{"acme-1", "acme-1", "acme-2"} {
+		if got := parsed.Inbounds[i]["tls"].(map[string]interface{})["certificate_provider"]; got != want {
+			t.Fatalf("inbound %d provider %v, want %s", i, got, want)
+		}
+	}
+
+	for name, c := range map[string]struct {
+		kernel string
+		in     Inbound
+		want   string
+	}{
+		"acme on xray":       {TypeXray, Inbound{Protocol: ProtocolTrojan, Port: 1443, Security: acme}, "sing-box"},
+		"self-signed naive":  {TypeSingbox, Inbound{Protocol: ProtocolNaive, Port: 1443, Security: Security{Type: SecurityTLS, SNI: "a.example.com"}}, "真实证书"},
+		"acme without host":  {TypeSingbox, Inbound{Protocol: ProtocolHysteria2, Port: 1443, Transport: Transport{Type: TransportQUIC}, Security: Security{Type: SecurityTLS, CertMode: CertModeACME}}, "域名"},
+		"alidns w/o secret":  {TypeSingbox, Inbound{Protocol: ProtocolAnyTLS, Port: 1443, Security: Security{Type: SecurityTLS, CertMode: CertModeACME, SNI: "a.example.com", ACMEDNS: ACMEDNSAliDNS, ACMEDNSKey: "id"}}, "AccessKey"},
+		"naive bad username": {TypeSingbox, Inbound{Protocol: ProtocolNaive, Port: 1443, Settings: Settings{Username: "a b"}, Security: acme}, "用户名"},
+	} {
+		in := c.in
+		if err := Normalize(c.kernel, &in); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: got %v, want error containing %q", name, err, c.want)
+		}
+	}
+
+	naive := list[0]
+	direct := Endpoint{Name: "naive", Host: "hk.example.com", Port: 443, Inbound: naive, Direct: true}
+	relay := Endpoint{Name: "relay", Host: "198.51.100.7", Port: 31000, Inbound: naive}
+	if uri, _ := ShareURI(direct); uri != "naive+https://flvx:naive-secret@hk.example.com:443#naive" {
+		t.Fatalf("naive uri: %s", uri)
+	}
+	if uri, _ := ShareURI(relay); !strings.Contains(uri, "@198.51.100.7:31000?sni=hk.example.com#") {
+		t.Fatalf("relay naive uri needs sni: %s", uri)
+	}
+	if _, ok := ClashProxy(direct); ok {
+		t.Fatal("Mihomo has no naive client")
+	}
+	if _, ok := SurgeLine(direct); ok {
+		t.Fatal("Surge has no naive client")
+	}
+	o, _ := singboxOutbound(direct)
+	tls := o["tls"].(map[string]interface{})
+	if o["type"] != "naive" || tls["utls"] != nil || tls["insecure"] != nil {
+		t.Fatalf("sing-box naive outbound: %v", o)
+	}
+	if uri, _ := ShareURI(Endpoint{Name: "hy2", Host: "hk.example.com", Port: 443, Inbound: list[1], Direct: true}); strings.Contains(uri, "insecure") {
+		t.Fatalf("ACME certificates are trusted: %s", uri)
+	}
+}

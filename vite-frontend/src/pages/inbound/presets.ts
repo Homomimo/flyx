@@ -14,6 +14,7 @@ export const PROTOCOL_LABELS: Record<string, string> = {
   tuic: "TUIC v5",
   anytls: "AnyTLS",
   snell: "Snell",
+  naive: "NaïveProxy",
 };
 
 export const KERNEL_LABELS: Record<string, string> = {
@@ -35,6 +36,18 @@ export const SECURITY_LABELS: Record<string, string> = {
   tls: "TLS",
   reality: "Reality",
   shadowtls: "ShadowTLS v3",
+};
+
+export const CERT_MODE_LABELS: Record<string, string> = {
+  self: "自动生成自签证书",
+  file: "使用节点上的证书文件",
+  acme: "自动申请证书（ACME）",
+};
+
+export const ACME_DNS_LABELS: Record<string, string> = {
+  "": "HTTP 验证（需要节点 80 端口）",
+  cloudflare: "Cloudflare DNS",
+  alidns: "阿里云 DNS",
 };
 
 export const KERNEL_STATUS: Record<
@@ -62,6 +75,8 @@ export interface InboundForm {
   snellVersion: string;
   masquerade: string;
   backendPort: number;
+  portHopping: string;
+  username: string;
   transportType: string;
   path: string;
   host: string;
@@ -78,6 +93,11 @@ export interface InboundForm {
   realityPrivateKey: string;
   realityShortIds: string;
   shadowTlsPassword: string;
+  acmeEmail: string;
+  acmeDns: string;
+  acmeDnsKey: string;
+  acmeDnsSecret: string;
+  acmeDnsSet: boolean;
   shareHost: string;
   remark: string;
   extra: string;
@@ -98,6 +118,7 @@ export interface Preset {
   security: string;
   vision?: boolean;
   needsDomain?: boolean;
+  certMode?: string;
 }
 
 export const PRESETS: Preset[] = [
@@ -181,6 +202,17 @@ export const PRESETS: Preset[] = [
     security: "shadowtls",
   },
   {
+    key: "naive",
+    label: "NaïveProxy",
+    description: "伪装成正常 HTTPS 访问，需要域名（自动申请证书）",
+    kernel: "singbox",
+    protocol: "naive",
+    transport: "tcp",
+    security: "tls",
+    needsDomain: true,
+    certMode: "acme",
+  },
+  {
     key: "snell",
     label: "Snell",
     description: "Surge 专用协议",
@@ -235,6 +267,8 @@ export function emptyForm(
     snellVersion: "",
     masquerade: "",
     backendPort: 0,
+    portHopping: "",
+    username: "",
     transportType: "tcp",
     path: "",
     host: "",
@@ -251,6 +285,11 @@ export function emptyForm(
     realityPrivateKey: "",
     realityShortIds: "",
     shadowTlsPassword: "",
+    acmeEmail: "",
+    acmeDns: "",
+    acmeDnsKey: "",
+    acmeDnsSecret: "",
+    acmeDnsSet: false,
     shareHost: "",
     remark: "",
     extra: "",
@@ -286,6 +325,8 @@ export function applyPreset(
     securityType: preset.security,
     flowVision: Boolean(preset.vision),
     sni,
+    certMode:
+      preset.certMode ?? (form.certMode === "acme" ? "self" : form.certMode),
     name: form.name || preset.label,
   };
 }
@@ -308,6 +349,8 @@ export function formFromItem(item: InboundApiItem): InboundForm {
       : "",
     masquerade: item.settings.masquerade ?? "",
     backendPort: item.settings.backendPort ?? 0,
+    portHopping: item.settings.portHopping ?? "",
+    username: item.settings.username ?? "",
     transportType: item.transport.type || "tcp",
     path: item.transport.path ?? "",
     host: item.transport.host ?? "",
@@ -324,6 +367,11 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     realityPrivateKey: item.security.realityPrivateKey ?? "",
     realityShortIds: (item.security.realityShortIds ?? []).join(","),
     shadowTlsPassword: item.security.shadowTlsPassword ?? "",
+    acmeEmail: item.security.acmeEmail ?? "",
+    acmeDns: item.security.acmeDns ?? "",
+    acmeDnsKey: "",
+    acmeDnsSecret: "",
+    acmeDnsSet: Boolean(item.security.acmeDnsSet),
     shareHost: item.shareHost,
     remark: item.remark,
     extra: item.extra,
@@ -343,6 +391,7 @@ export const passwordProtocols = [
   "tuic",
   "anytls",
   "snell",
+  "naive",
 ];
 
 /** TLS on these protocols defaults its SNI server-side, so it is optional. */
@@ -388,6 +437,14 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
       masquerade:
         form.protocol === "hysteria2" ? form.masquerade.trim() : undefined,
       backendPort: form.backendPort || undefined,
+      portHopping:
+        form.protocol === "hysteria2"
+          ? form.portHopping.trim() || undefined
+          : undefined,
+      username:
+        form.protocol === "naive"
+          ? form.username.trim() || undefined
+          : undefined,
     },
     transport: {
       type: form.transportType,
@@ -413,6 +470,15 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
         form.securityType === "shadowtls"
           ? form.shadowTlsPassword.trim() || undefined
           : undefined,
+      ...(form.securityType === "tls" && form.certMode === "acme"
+        ? {
+            acmeEmail: form.acmeEmail.trim() || undefined,
+            acmeDns: form.acmeDns || undefined,
+            // Empty keeps the stored credentials when editing.
+            acmeDnsKey: form.acmeDnsKey.trim() || undefined,
+            acmeDnsSecret: form.acmeDnsSecret.trim() || undefined,
+          }
+        : {}),
     },
     extra: form.extra.trim(),
     shareHost: form.shareHost.trim(),
@@ -444,6 +510,7 @@ export function describeInbound(item: InboundApiItem): string {
     "hysteria2",
     "tuic",
     "anytls",
+    "naive",
   ];
 
   if (!implicitTransport.includes(item.protocol)) {
@@ -457,6 +524,12 @@ export function describeInbound(item: InboundApiItem): string {
   }
   if (item.settings.flow) {
     parts.push("Vision");
+  }
+  if (item.security.certMode === "acme") {
+    parts.push("ACME");
+  }
+  if (item.settings.portHopping) {
+    parts.push("端口跳跃");
   }
 
   return parts.join(" + ");

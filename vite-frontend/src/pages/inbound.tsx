@@ -33,6 +33,7 @@ import { RelayModal } from "@/pages/inbound/relay-modal";
 import { ShareModal, SubscriptionCard, copyText } from "@/pages/inbound/share";
 import {
   type InboundForm,
+  KERNEL_LABELS,
   KERNEL_STATUS,
   describeInbound,
   emptyForm,
@@ -92,12 +93,14 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
   const sec = item.security;
 
   if (s.uuid) rows.push(["UUID", s.uuid]);
+  if (s.username) rows.push(["用户名", s.username]);
   if (s.flow) rows.push(["Flow", s.flow]);
   if (s.method) rows.push(["加密方式", s.method]);
   if (s.password)
     rows.push([item.protocol === "snell" ? "PSK" : "密码", s.password]);
   if (s.snellVersion) rows.push(["Snell 版本", `v${s.snellVersion}`]);
   if (s.masquerade) rows.push(["伪装网站", s.masquerade]);
+  if (s.portHopping) rows.push(["端口跳跃", `${s.portHopping}（UDP）`]);
   if (t.path) rows.push(["路径", t.path]);
   if (t.host) rows.push(["Host", t.host]);
   if (t.serviceName) rows.push(["serviceName", t.serviceName]);
@@ -120,6 +123,12 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
   }
   if (sec.type === "tls" && sec.certMode === "self") {
     rows.push(["证书", "自签（客户端需允许不安全证书或固定证书）"]);
+  }
+  if (sec.type === "tls" && sec.certMode === "acme") {
+    rows.push([
+      "证书",
+      `自动申请（${sec.acmeDns ? `${sec.acmeDns} DNS 验证` : "HTTP 验证"}）`,
+    ]);
   }
 
   return rows;
@@ -363,7 +372,7 @@ export default function InboundPage() {
                         {describeInbound(item)}
                       </Chip>
                       <Chip size="sm" variant="flat">
-                        {item.kernelType}
+                        {KERNEL_LABELS[item.kernelType] ?? item.kernelType}
                       </Chip>
                       {item.relayCount > 0 && (
                         <Chip color="secondary" size="sm" variant="flat">

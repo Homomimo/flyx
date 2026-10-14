@@ -442,7 +442,7 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 				host = strings.TrimSpace(node.ServerIP)
 			}
 			if host != "" {
-				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in})
+				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true})
 				kinds = append(kinds, "direct")
 			}
 		}

@@ -223,11 +223,26 @@ func listNodeInboundPortsTx(tx *gorm.DB, nodeID int64, excludeInboundID int64) (
 
 // NodePortOccupant names what already uses port on a node, or "" when free.
 func (r *Repository) NodePortOccupant(nodeID int64, port int, excludeInboundID int64) (string, error) {
+	return r.NodePortRangeOccupant(nodeID, port, port, excludeInboundID)
+}
+
+// ListNodeInboundsByNode returns every inbound on a node (all kernels).
+func (r *Repository) ListNodeInboundsByNode(nodeID int64) ([]model.NodeInbound, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []model.NodeInbound
+	return rows, r.db.Where("node_id = ?", nodeID).Order("id ASC").Find(&rows).Error
+}
+
+// NodePortRangeOccupant reports what listens on any port in [lo, hi] of a
+// node: an inbound, a forward or a tunnel ("" when free).
+func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInboundID int64) (string, error) {
 	if r == nil || r.db == nil {
 		return "", errors.New("repository not initialized")
 	}
 	var count int64
-	q := r.db.Model(&model.NodeInbound{}).Where("node_id = ? AND port = ?", nodeID, port)
+	q := r.db.Model(&model.NodeInbound{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi)
 	if excludeInboundID > 0 {
 		q = q.Where("id <> ?", excludeInboundID)
 	}
@@ -237,13 +252,13 @@ func (r *Repository) NodePortOccupant(nodeID int64, port int, excludeInboundID i
 	if count > 0 {
 		return "其他节点服务", nil
 	}
-	if err := r.db.Model(&model.ForwardPort{}).Where("node_id = ? AND port = ?", nodeID, port).Count(&count).Error; err != nil {
+	if err := r.db.Model(&model.ForwardPort{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi).Count(&count).Error; err != nil {
 		return "", err
 	}
 	if count > 0 {
 		return "转发", nil
 	}
-	if err := r.db.Model(&model.ChainTunnel{}).Where("node_id = ? AND port = ?", nodeID, port).Count(&count).Error; err != nil {
+	if err := r.db.Model(&model.ChainTunnel{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi).Count(&count).Error; err != nil {
 		return "", err
 	}
 	if count > 0 {

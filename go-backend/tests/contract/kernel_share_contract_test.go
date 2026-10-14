@@ -2,6 +2,7 @@ package contract_test
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -374,8 +375,25 @@ func TestPhase3KernelsContract(t *testing.T) {
 	if entry["uri"] != "" || !strings.Contains(entry["surge"].(string), "shadow-tls-version=3") || !strings.Contains(entry["surge"].(string), "version=4") {
 		t.Fatalf("snell share must be a Surge line: %v", entry)
 	}
+	// Port hopping: the range is reserved on the node like a port.
+	hop := func(rng string) string {
+		return kernelContractPost(t, router, admin, "/api/v1/inbound/update",
+			`{"id":`+jsonInt64(hyID)+`,"name":"hy2","protocol":"hysteria2","port":443,"transport":{"type":"quic"},"security":{"type":"tls"},"settings":{"portHopping":"`+rng+`"}}`).Msg
+	}
+	if msg := hop("30005-30020"); !strings.Contains(msg, "转发端口段") {
+		t.Fatalf("hop range inside the node forwarding range must be rejected: %s", msg)
+	}
+	if msg := hop("6100-6200"); !strings.Contains(msg, "已被") {
+		t.Fatalf("hop range covering the snell port must be rejected: %s", msg)
+	}
+	if msg := hop("1100-1200"); strings.Contains(msg, "端口") {
+		t.Fatalf("free hop range: %s", msg)
+	}
+	if _, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"in-hop","protocol":"anytls","port":1150,"security":{"type":"tls"}}`); !strings.Contains(msg, "端口跳跃范围") {
+		t.Fatalf("port inside another inbound's hop range must be rejected: %s", msg)
+	}
 	hyShare := kernelContractPost(t, router, admin, "/api/v1/inbound/share", `{"id":`+jsonInt64(hyID)+`}`)
-	if !strings.HasPrefix(hyShare.Data.([]interface{})[0].(map[string]interface{})["uri"].(string), "hysteria2://") {
+	if uri := hyShare.Data.([]interface{})[0].(map[string]interface{})["uri"].(string); !strings.HasPrefix(uri, "hysteria2://") || !strings.Contains(uri, "mport=1100-1200") {
 		t.Fatalf("hy2 share: %+v", hyShare)
 	}
 
@@ -388,5 +406,59 @@ func TestPhase3KernelsContract(t *testing.T) {
 	clash := getSub(t, router, "/api/v1/open_api/sub/"+token, "clash-verge").Body.String()
 	if strings.Contains(clash, "snell") || !strings.Contains(clash, `type: "hysteria2"`) {
 		t.Fatalf("clash sub: %s", clash)
+	}
+}
+
+func TestACMEAndNaiveContract(t *testing.T) {
+	secret := "contract-jwt-secret"
+	router, r := setupContractRouter(t, secret)
+	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	nodeID := seedKernelNode(t, r, "landing")
+	oldNode := seedKernelNode(t, r, "old")
+	n, o := jsonInt64(nodeID), jsonInt64(oldNode)
+	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+n+`,"kernelType":"singbox"}`)
+	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+n+`,"kernelType":"xray"}`)
+	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+o+`,"kernelType":"singbox","version":"1.12.0"}`)
+
+	create := func(body string) (int64, string) {
+		out := kernelContractPost(t, router, admin, "/api/v1/inbound/create", body)
+		if out.Code != 0 {
+			return 0, out.Msg
+		}
+		return int64(out.Data.(map[string]interface{})["id"].(float64)), out.Msg
+	}
+	acme := `"security":{"type":"tls","certMode":"acme","sni":"hk.example.com","acmeDns":"cloudflare","acmeDnsKey":"cf-secret-token"}`
+
+	if _, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"self","protocol":"naive","port":2443,"security":{"type":"tls","sni":"hk.example.com"}}`); !strings.Contains(msg, "真实证书") {
+		t.Fatalf("self-signed naive must be rejected: %s", msg)
+	}
+	if _, msg := create(`{"nodeId":` + n + `,"kernelType":"xray","name":"x","protocol":"trojan","port":2444,` + acme + `}`); !strings.Contains(msg, "sing-box") {
+		t.Fatalf("ACME on Xray must be rejected: %s", msg)
+	}
+	if _, msg := create(`{"nodeId":` + o + `,"kernelType":"singbox","name":"old","protocol":"naive","port":2443,` + acme + `}`); !strings.Contains(msg, "1.14") {
+		t.Fatalf("ACME needs sing-box 1.14+: %s", msg)
+	}
+	naiveID, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"naive","protocol":"naive","port":2443,` + acme + `}`)
+	if naiveID == 0 {
+		t.Fatalf("naive + acme: %s", msg)
+	}
+
+	list := kernelContractPost(t, router, admin, "/api/v1/inbound/list", `{}`)
+	raw, _ := json.Marshal(list.Data)
+	if strings.Contains(string(raw), "cf-secret-token") || !strings.Contains(string(raw), `"acmeDnsSet":true`) {
+		t.Fatalf("DNS token must be hidden from the list: %s", raw)
+	}
+	// Saving without resending the token keeps it.
+	if out := kernelContractPost(t, router, admin, "/api/v1/inbound/update",
+		`{"id":`+jsonInt64(naiveID)+`,"name":"naive2","protocol":"naive","port":2443,"security":{"type":"tls","certMode":"acme","sni":"hk.example.com","acmeDns":"cloudflare"}}`); out.Code != 0 {
+		t.Fatalf("update: %+v", out)
+	}
+	if got := mustQueryString(t, r, `SELECT security FROM node_inbound WHERE id = ?`, naiveID); !strings.Contains(got, "cf-secret-token") {
+		t.Fatalf("token lost on update: %s", got)
+	}
+	share := kernelContractPost(t, router, admin, "/api/v1/inbound/share", `{"id":`+jsonInt64(naiveID)+`}`)
+	uri := share.Data.([]interface{})[0].(map[string]interface{})["uri"].(string)
+	if !strings.HasPrefix(uri, "naive+https://") || !strings.Contains(uri, "@203.0.113.10:2443?sni=hk.example.com#") {
+		t.Fatalf("naive share: %s", uri)
 	}
 }

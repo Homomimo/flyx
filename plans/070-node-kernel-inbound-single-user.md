@@ -472,9 +472,9 @@ API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 
 **sing-box 内核**
 - [x] B13 `render_singbox.go` + golden：Hysteria2（`ignore_client_bandwidth`、可选 masquerade）、TUIC v5（`congestion_control: bbr`）、AnyTLS，以及 VLESS-Reality / VMess / Trojan / SS2022（与 Xray 共用协议模型，节点可任选内核）；QUIC 协议 ALPN 固定 `h3`，SNI 留空默认 `www.bing.com`（自签）
-- [x] B14 证书：沿用面板自签证书（链接带 insecure）/ 节点证书路径。sing-box 内置 ACME 推迟（需要真实域名，后续按需）
+- [x] B14 证书：面板自签（链接带 insecure）/ 节点证书路径 / **sing-box 自动申请（ACME）**：1.14 起的 `certificate_providers`，同域名共用一个 provider，数据放在运行目录 `acme/`（重新下发不丢）；HTTP-01（需 80 端口）或 DNS-01（Cloudflare Token、阿里云 AccessKey）；DNS 凭据在列表接口中隐藏，编辑时留空保持不变；节点指定的 sing-box 版本低于 1.14 时拒绝
 - [x] A5 sing-box 适配器：从 GitHub release 下载 `sing-box-{ver}-linux-{arch}.tar.gz`，用 release API 给出的资产 SHA256 校验；agent 侧对所有内核强制校验，拿不到校验值就拒绝安装
-- [ ] B15 可选：Hysteria2 / TUIC 端口跳跃——在 agent 的 `flvx_kernel` 表里加 UDP 端口段重定向，订阅中写入 `ports` / `mport`（未做）
+- [x] B15 Hysteria2 端口跳跃：agent 在 `flvx_kernel` 表加 nat prerouting/output 链（`fib daddr type local udp dport A-B redirect to :端口`），重定向发生在过滤前，计数与白名单照常生效；跳跃范围参与端口冲突校验，且不能与节点转发端口段重叠；只给直连地址输出（URI `mport`、Clash `ports`、sing-box `server_ports`、Surge `port-hopping`），中转只转一个端口所以不带。TUIC 客户端普遍不支持跳跃，未做
 
 **Snell**
 - [x] B16 `render_snell.go`：v4 / v5 每个入站一个 `snell-server` 进程（`listen`、`psk`、`ipv6`、`obfs = off`）；协议版本只影响客户端配置，入站版本须与节点安装的 Snell 主版本匹配（v5 需要 5.x）
@@ -499,9 +499,18 @@ API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 - 浏览器走查：内核切换后模板列表随之变化（sing-box 8 个、Snell 2 个），Snell 版本 / PSK / ShadowTLS 表单，创建 TUIC、Snell+ShadowTLS 入站并下发。
 - 注意：入站默认监听 `::`（双栈）；内核启动参数禁用了 IPv6 的机器（`ipv6.disable=1`）上 shadow-tls 会绑定失败，需把监听地址改为 `0.0.0.0`。
 
+**NaïveProxy**
+- [x] 用 sing-box 原生 `naive` 入站（不需要 Caddy），用户名 + 密码，监听 TCP + UDP（HTTP/3）；必须使用真实证书（ACME 或证书文件），不允许自签
+- [x] 分享 `naive+https://user:pass@host:port`（经中转或用 IP 连接时带 `sni`）；sing-box 订阅输出 naive 出站（需 1.13+ 且带 cronet 的客户端）；Mihomo / Surge 不支持，不输出
+
+#### 补充验证记录（ACME / NaïveProxy / 端口跳跃）
+
+- ACME：本地 Pebble（Let's Encrypt 测试 CA）+ 按面板渲染格式配置的 sing-box 1.14.3，HTTP-01 实际签发成功，证书落在 `acme/`；渲染出的 DNS-01 配置通过 `sing-box check`。真实 Let's Encrypt / DNS 服务商无法在沙箱测试。
+- NaïveProxy：自写的最小 naive 客户端（HTTP/2 CONNECT + padding）经面板下发的 sing-box 连通，错误密码返回 407；没有可用的官方 naiveproxy / cronet 客户端。
+- 端口跳跃：面板 + agent 端到端，sing-box 客户端只知道 46000-46100（订阅里没有主端口）也能连通，入站 UDP 计数正常；Mihomo `-t`、sing-box `check` 均接受生成的跳跃配置；生成的 nft 脚本经真实 `nft -c` 校验。
+
 **暂不做**
-- NaïveProxy：需要带 forwardproxy 插件的 Caddy 和真实域名，后续按需
-- sing-box ACME、Hysteria2 / TUIC 端口跳跃
+- TUIC 端口跳跃（客户端支持不普遍）
 - 多用户、WARP / 分流、链式代理、负载均衡（单用户场景不需要）
 
 ### 验证（每个阶段）

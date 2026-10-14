@@ -83,6 +83,22 @@ func expandPorts(ports []Port) []counterRule {
 	return rules
 }
 
+// hopRule redirects a UDP port range to an inbound port (port hopping).
+type hopRule struct {
+	From, To, Port int
+}
+
+func expandHops(ports []Port) []hopRule {
+	var hops []hopRule
+	for _, p := range ports {
+		if p.HopFrom > 0 && p.HopTo > p.HopFrom {
+			hops = append(hops, hopRule{From: p.HopFrom, To: p.HopTo, Port: p.Port})
+		}
+	}
+	sort.Slice(hops, func(i, j int) bool { return hops[i].From < hops[j].From })
+	return hops
+}
+
 // allowGuard is the source whitelist of one inbound, split by family.
 type allowGuard struct {
 	v4, v6 []string
@@ -127,7 +143,11 @@ func writeSet(b *strings.Builder, name, typ string, elems []string) {
 // nftScript builds the atomic ruleset. Chains have policy accept and only
 // count, except that a port with a whitelist drops packets from sources not
 // on it (only that port; nothing else on the host is affected).
-func nftScript(rules []counterRule, guards map[int64]allowGuard) string {
+//
+// Hop ranges are redirected before filtering, so counters and whitelists see
+// the inbound port. Only traffic addressed to this host is redirected; the
+// output hook covers clients running on the node itself.
+func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {}\n", nftTable)
 	fmt.Fprintf(&b, "delete table inet %s\n", nftTable)
@@ -163,7 +183,17 @@ func nftScript(rules []counterRule, guards map[int64]allowGuard) string {
 	for _, r := range rules {
 		fmt.Fprintf(&b, "\t\t%s sport %d counter name %s\n", r.Proto, r.Port, r.name("out"))
 	}
-	b.WriteString("\t}\n}\n")
+	b.WriteString("\t}\n")
+	if len(hops) > 0 {
+		for _, hook := range []string{"prerouting", "output"} {
+			fmt.Fprintf(&b, "\tchain hop_%s {\n\t\ttype nat hook %s priority -100; policy accept;\n", hook, hook)
+			for _, h := range hops {
+				fmt.Fprintf(&b, "\t\tfib daddr type local udp dport %d-%d redirect to :%d\n", h.From, h.To, h.Port)
+			}
+			b.WriteString("\t}\n")
+		}
+	}
+	b.WriteString("}\n")
 	return b.String()
 }
 
@@ -202,7 +232,7 @@ func (n *nftCounters) sync(ports []Port) error {
 		return nil
 	}
 	rules := expandPorts(ports)
-	script := nftScript(rules, expandGuards(ports))
+	script := nftScript(rules, expandGuards(ports), expandHops(ports))
 	sig := hashString(script)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

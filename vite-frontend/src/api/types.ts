@@ -644,6 +644,7 @@ export interface KernelInfo {
   implemented: boolean;
   protocols: KernelProtocolCap[] | null;
   versions?: string[];
+  certModes?: string[];
 }
 
 export interface KernelCapabilitiesApiData {
@@ -693,6 +694,8 @@ export interface InboundSettings {
   snellVersion?: number;
   masquerade?: string;
   backendPort?: number;
+  portHopping?: string;
+  username?: string;
 }
 
 export interface InboundTransport {
@@ -716,6 +719,12 @@ export interface InboundSecurity {
   realityPublicKey?: string;
   realityShortIds?: string[];
   shadowTlsPassword?: string;
+  acmeEmail?: string;
+  acmeDns?: string;
+  acmeDnsKey?: string;
+  acmeDnsSecret?: string;
+  /** List output only: DNS credentials are stored but not returned. */
+  acmeDnsSet?: boolean;
 }
 
 export interface InboundApiItem {

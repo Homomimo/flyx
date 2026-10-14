@@ -23,6 +23,7 @@ const (
 	ProtocolTUIC        = "tuic"
 	ProtocolAnyTLS      = "anytls"
 	ProtocolSnell       = "snell"
+	ProtocolNaive       = "naive"
 )
 
 const (
@@ -79,8 +80,10 @@ type Info struct {
 	Protocols   []ProtocolCap `json:"protocols"`
 	// Versions, when set, is the closed list of installable versions (the
 	// first is the default); otherwise any version or "latest" is allowed.
-	Versions []string  `json:"versions,omitempty"`
-	Download *Download `json:"-"`
+	Versions []string `json:"versions,omitempty"`
+	// CertModes lists the TLS certificate sources the kernel supports.
+	CertModes []string  `json:"certModes"`
+	Download  *Download `json:"-"`
 }
 
 var xrayDownload = &Download{
@@ -151,6 +154,7 @@ var catalog = []Info{
 		Type:        TypeXray,
 		Name:        "Xray",
 		Implemented: true,
+		CertModes:   []string{"self", "file"},
 		Download:    xrayDownload,
 		Protocols: []ProtocolCap{
 			{Protocol: ProtocolVLESS, Transports: []TransportCap{
@@ -178,11 +182,13 @@ var catalog = []Info{
 		Type:        TypeSingbox,
 		Name:        "sing-box",
 		Implemented: true,
+		CertModes:   []string{"self", "file", "acme"},
 		Download:    singboxDownload,
 		Protocols: []ProtocolCap{
 			{Protocol: ProtocolHysteria2, Transports: []TransportCap{{Type: TransportQUIC, Securities: []string{SecurityTLS}}}},
 			{Protocol: ProtocolTUIC, Transports: []TransportCap{{Type: TransportQUIC, Securities: []string{SecurityTLS}}}},
 			{Protocol: ProtocolAnyTLS, Transports: []TransportCap{{Type: TransportTCP, Securities: []string{SecurityTLS}}}},
+			{Protocol: ProtocolNaive, Transports: []TransportCap{{Type: TransportTCP, Securities: []string{SecurityTLS}}}},
 			{Protocol: ProtocolVLESS, Transports: []TransportCap{
 				{Type: TransportTCP, Securities: []string{SecurityReality, SecurityTLS, SecurityNone}},
 				{Type: TransportWS, Securities: []string{SecurityTLS, SecurityNone}},
@@ -207,6 +213,7 @@ var catalog = []Info{
 		Type:        TypeSnell,
 		Name:        "Snell",
 		Implemented: true,
+		CertModes:   []string{},
 		Download:    snellDownload,
 		Versions:    []string{"5.0.1", "4.1.1"},
 		Protocols: []ProtocolCap{

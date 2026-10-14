@@ -8,6 +8,8 @@ import { useMemo, useState } from "react";
 import toast from "react-hot-toast";
 
 import {
+  ACME_DNS_LABELS,
+  CERT_MODE_LABELS,
   PROTOCOL_LABELS,
   SECURITY_LABELS,
   TRANSPORT_LABELS,
@@ -88,6 +90,13 @@ export function InboundFormModal({
   const installedKernel = kernels.find(
     (k) => String(k.nodeId) === form.nodeId && k.kernelType === form.kernelType,
   );
+  // NaïveProxy needs a certificate clients trust, so no self-signed option.
+  const certModes = (kernelInfo?.certModes ?? ["self", "file"]).filter(
+    (m) => !(form.protocol === "naive" && m === "self"),
+  );
+  const certMode = certModes.includes(form.certMode)
+    ? form.certMode
+    : (certModes[0] ?? "self");
   const pCap = protocolCap(caps, form.kernelType, form.protocol);
   const transports = pCap?.transports ?? [];
   const securities =
@@ -194,7 +203,34 @@ export function InboundFormModal({
     ) {
       return "TLS 需要填写域名";
     }
-    if (form.securityType === "tls" && form.certMode === "file") {
+    if (form.securityType === "tls" && certMode === "acme") {
+      if (!form.sni.trim()) return "自动申请证书需要填写解析到该节点的域名";
+      const needKey = !(isEdit && form.acmeDnsSet);
+
+      if (form.acmeDns === "cloudflare" && needKey && !form.acmeDnsKey.trim()) {
+        return "请填写 Cloudflare API Token";
+      }
+      if (
+        form.acmeDns === "alidns" &&
+        needKey &&
+        (!form.acmeDnsKey.trim() || !form.acmeDnsSecret.trim())
+      ) {
+        return "请填写阿里云 AccessKey ID 和 Secret";
+      }
+    }
+    if (form.protocol === "hysteria2" && form.portHopping.trim()) {
+      const m = form.portHopping.trim().match(/^(\d+)\s*[-:]\s*(\d+)$/);
+
+      if (
+        !m ||
+        Number(m[1]) < 1024 ||
+        Number(m[2]) > 65535 ||
+        Number(m[1]) >= Number(m[2])
+      ) {
+        return "端口跳跃格式为 起始-结束（1024-65535），例如 20000-30000";
+      }
+    }
+    if (form.securityType === "tls" && certMode === "file") {
       if (!form.certFile.trim() || !form.keyFile.trim()) {
         return "请填写证书和私钥在节点上的路径";
       }
@@ -224,7 +260,7 @@ export function InboundFormModal({
     }
     setSaving(true);
     try {
-      const payload = toPayload(form);
+      const payload = toPayload({ ...form, certMode });
       const res = isEdit
         ? await updateInbound(payload)
         : await createInbound(payload);
@@ -468,6 +504,15 @@ export function InboundFormModal({
                     ))}
                   </Select>
                 )}
+                {form.protocol === "naive" && (
+                  <Input
+                    label="用户名"
+                    placeholder="留空自动生成"
+                    value={form.username}
+                    variant="bordered"
+                    onChange={(e) => set("username", e.target.value)}
+                  />
+                )}
                 {passwordProtocols.includes(form.protocol) && (
                   <Input
                     description={
@@ -509,6 +554,16 @@ export function InboundFormModal({
                     value={form.masquerade}
                     variant="bordered"
                     onChange={(e) => set("masquerade", e.target.value)}
+                  />
+                )}
+                {form.protocol === "hysteria2" && (
+                  <Input
+                    description="客户端在这段 UDP 端口间随机切换，缓解运营商对单端口 UDP 的限速；节点上由 nftables 转到入站端口。经中转连接时不跳跃"
+                    label="端口跳跃（可选）"
+                    placeholder="例如 20000-30000"
+                    value={form.portHopping}
+                    variant="bordered"
+                    onChange={(e) => set("portHopping", e.target.value)}
                   />
                 )}
 
@@ -627,7 +682,8 @@ export function InboundFormModal({
                       <Input
                         label="域名 (SNI)"
                         placeholder={
-                          sniOptionalProtocols.includes(form.protocol)
+                          sniOptionalProtocols.includes(form.protocol) &&
+                          certMode === "self"
                             ? "留空使用 www.bing.com（自签）"
                             : "node.example.com"
                         }
@@ -637,20 +693,105 @@ export function InboundFormModal({
                       />
                       <Select
                         label="证书"
-                        selectedKeys={[form.certMode]}
+                        selectedKeys={[certMode]}
                         onSelectionChange={(keys) =>
-                          set("certMode", String(Array.from(keys)[0] ?? "self"))
+                          set(
+                            "certMode",
+                            String(Array.from(keys)[0] ?? certMode),
+                          )
                         }
                       >
-                        <SelectItem key="self" textValue="自动生成自签证书">
-                          自动生成自签证书
-                        </SelectItem>
-                        <SelectItem key="file" textValue="使用节点上的证书文件">
-                          使用节点上的证书文件
-                        </SelectItem>
+                        {certModes.map((m) => (
+                          <SelectItem
+                            key={m}
+                            textValue={CERT_MODE_LABELS[m] ?? m}
+                          >
+                            {CERT_MODE_LABELS[m] ?? m}
+                          </SelectItem>
+                        ))}
                       </Select>
                     </div>
-                    {form.certMode === "file" && (
+                    {certMode === "acme" && (
+                      <div className="space-y-3">
+                        <p className="text-xs text-default-500">
+                          由 sing-box 向 Let&apos;s Encrypt
+                          申请并自动续期，域名需要解析到该节点。 HTTP
+                          验证要求节点 80 端口可从公网访问；用 DNS
+                          验证则不需要。
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <Input
+                            label="邮箱（可选）"
+                            placeholder="用于证书到期提醒"
+                            value={form.acmeEmail}
+                            variant="bordered"
+                            onChange={(e) => set("acmeEmail", e.target.value)}
+                          />
+                          <Select
+                            label="验证方式"
+                            selectedKeys={[form.acmeDns || "http"]}
+                            onSelectionChange={(keys) => {
+                              const v = String(Array.from(keys)[0] ?? "http");
+
+                              setForm((prev) => ({
+                                ...prev,
+                                acmeDns: v === "http" ? "" : v,
+                                acmeDnsKey: "",
+                                acmeDnsSecret: "",
+                                acmeDnsSet: false,
+                              }));
+                            }}
+                          >
+                            {Object.entries(ACME_DNS_LABELS).map(
+                              ([k, label]) => (
+                                <SelectItem key={k || "http"} textValue={label}>
+                                  {label}
+                                </SelectItem>
+                              ),
+                            )}
+                          </Select>
+                        </div>
+                        {form.acmeDns && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <Input
+                              label={
+                                form.acmeDns === "cloudflare"
+                                  ? "API Token"
+                                  : "AccessKey ID"
+                              }
+                              placeholder={
+                                form.acmeDnsSet
+                                  ? "已保存，留空不修改"
+                                  : undefined
+                              }
+                              type="password"
+                              value={form.acmeDnsKey}
+                              variant="bordered"
+                              onChange={(e) =>
+                                set("acmeDnsKey", e.target.value)
+                              }
+                            />
+                            {form.acmeDns === "alidns" && (
+                              <Input
+                                label="AccessKey Secret"
+                                placeholder={
+                                  form.acmeDnsSet
+                                    ? "已保存，留空不修改"
+                                    : undefined
+                                }
+                                type="password"
+                                value={form.acmeDnsSecret}
+                                variant="bordered"
+                                onChange={(e) =>
+                                  set("acmeDnsSecret", e.target.value)
+                                }
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {certMode === "file" && (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <Input
                           label="证书路径"

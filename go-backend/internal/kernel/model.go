@@ -14,6 +14,7 @@ import (
 
 type Settings struct {
 	UUID     string `json:"uuid,omitempty"`
+	Username string `json:"username,omitempty"` // NaïveProxy
 	Flow     string `json:"flow,omitempty"`
 	Password string `json:"password,omitempty"`
 	Method   string `json:"method,omitempty"`
@@ -24,6 +25,35 @@ type Settings struct {
 	Masquerade string `json:"masquerade,omitempty"`
 	// BackendPort is the loopback port a ShadowTLS-fronted Snell listens on.
 	BackendPort int `json:"backendPort,omitempty"`
+	// PortHopping is a UDP range ("20000-30000") the agent redirects to the
+	// Hysteria2 port so clients can hop between ports.
+	PortHopping string `json:"portHopping,omitempty"`
+}
+
+// HopRange returns the port-hopping range, or 0, 0 when disabled.
+func (in Inbound) HopRange() (int, int) {
+	lo, hi, err := parseHopRange(in.Settings.PortHopping)
+	if err != nil {
+		return 0, 0
+	}
+	return lo, hi
+}
+
+func parseHopRange(spec string) (int, int, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return 0, 0, nil
+	}
+	parts := strings.Split(strings.ReplaceAll(spec, ":", "-"), "-")
+	if len(parts) != 2 {
+		return 0, 0, errors.New("端口跳跃格式应为 起始-结束，例如 20000-30000")
+	}
+	lo, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	hi, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil || lo < 1024 || hi > 65535 || lo >= hi {
+		return 0, 0, errors.New("端口跳跃范围需在 1024-65535 之间，且起始小于结束")
+	}
+	return lo, hi, nil
 }
 
 type Transport struct {
@@ -41,12 +71,22 @@ type Security struct {
 	Fingerprint string   `json:"fingerprint,omitempty"`
 
 	// TLS: "self" stores a generated certificate inline, "file" points at
-	// paths that already exist on the node.
+	// paths that already exist on the node, "acme" lets sing-box obtain a
+	// certificate for SNI (HTTP-01 / TLS-ALPN-01, or DNS-01 when configured).
 	CertMode string `json:"certMode,omitempty"`
 	CertPEM  string `json:"certPem,omitempty"`
 	KeyPEM   string `json:"keyPem,omitempty"`
 	CertFile string `json:"certFile,omitempty"`
 	KeyFile  string `json:"keyFile,omitempty"`
+
+	ACMEEmail string `json:"acmeEmail,omitempty"`
+	// ACMEDNS selects DNS-01 ("cloudflare" / "alidns"); empty uses HTTP-01,
+	// which needs TCP port 80 on the node reachable from the internet.
+	ACMEDNS string `json:"acmeDns,omitempty"`
+	// Cloudflare: API token. AliDNS: AccessKey ID.
+	ACMEDNSKey string `json:"acmeDnsKey,omitempty"`
+	// AliDNS: AccessKey secret.
+	ACMEDNSSecret string `json:"acmeDnsSecret,omitempty"`
 
 	RealityDest       string   `json:"realityDest,omitempty"`
 	RealityPrivateKey string   `json:"realityPrivateKey,omitempty"`
@@ -87,6 +127,9 @@ func (in Inbound) Network() string {
 			return "tcp"
 		}
 		return "tcp,udp"
+	case ProtocolNaive:
+		// HTTP/2 over TCP, plus HTTP/3 for clients that enable QUIC.
+		return "tcp,udp"
 	case ProtocolSnell:
 		// v5 adds UDP (QUIC proxy mode); behind ShadowTLS only TCP is exposed.
 		if in.Security.Type == SecurityShadowTLS || in.Settings.SnellVersion == 4 {
@@ -102,7 +145,12 @@ const (
 	DefaultRealitySNI   = "www.microsoft.com"
 	DefaultSSMethod     = "2022-blake3-aes-128-gcm"
 	DefaultFingerprint  = "chrome"
-	DefaultTLSCertMode  = "self"
+	DefaultTLSCertMode  = CertModeSelf
+	CertModeSelf        = "self"
+	CertModeFile        = "file"
+	CertModeACME        = "acme"
+	ACMEDNSCloudflare   = "cloudflare"
+	ACMEDNSAliDNS       = "alidns"
 	DefaultQUICSNI      = "www.bing.com"
 	DefaultSnellVersion = 5
 	defaultGRPCService  = "grpc"
@@ -189,7 +237,18 @@ func Normalize(kernelType string, in *Inbound) error {
 	if err := normalizeSettings(in); err != nil {
 		return err
 	}
-	return normalizeSecurity(in)
+	if err := normalizeSecurity(in); err != nil {
+		return err
+	}
+	if in.Security.CertMode == CertModeACME && kernelType != TypeSingbox {
+		return errors.New("自动申请证书（ACME）目前只支持 sing-box 内核")
+	}
+	if in.Protocol == ProtocolNaive && in.Security.CertMode == CertModeSelf {
+		// Naive clients verify certificates and self-signed ones are
+		// trivially fingerprinted, which defeats NaïveProxy.
+		return errors.New("NaïveProxy 需要真实证书：请选择自动申请证书或节点上的证书文件")
+	}
+	return nil
 }
 
 func normalizeExtra(in *Inbound) error {
@@ -248,6 +307,9 @@ func normalizeSettings(in *Inbound) error {
 	s.Password = strings.TrimSpace(s.Password)
 	s.Method = strings.TrimSpace(s.Method)
 	s.Flow = strings.TrimSpace(s.Flow)
+	if in.Protocol != ProtocolNaive {
+		s.Username = ""
+	}
 
 	switch in.Protocol {
 	case ProtocolVLESS, ProtocolVMess:
@@ -299,6 +361,21 @@ func normalizeSettings(in *Inbound) error {
 				return errors.New("伪装地址必须是 http(s):// 开头的网址")
 			}
 		}
+	case ProtocolNaive:
+		s.Username = strings.TrimSpace(s.Username)
+		if s.Username == "" {
+			s.Username = "u" + RealityShortID()[:8]
+		}
+		if !naiveUserPattern.MatchString(s.Username) {
+			return errors.New("用户名只能包含字母、数字和 -_，长度 1-32")
+		}
+		if s.Password == "" {
+			s.Password = RandomPassword()
+		}
+		if !snellPSKPattern.MatchString(s.Password) {
+			return errors.New("密码只能包含字母、数字和 -_，长度 8-64")
+		}
+		s.UUID, s.Method, s.Flow = "", "", ""
 	case ProtocolTUIC:
 		if s.UUID == "" {
 			s.UUID = NewUUID()
@@ -325,6 +402,21 @@ func normalizeSettings(in *Inbound) error {
 		}
 		s.UUID, s.Method, s.Flow = "", "", ""
 	}
+	if in.Protocol == ProtocolHysteria2 {
+		lo, hi, err := parseHopRange(s.PortHopping)
+		if err != nil {
+			return err
+		}
+		s.PortHopping = ""
+		if lo > 0 {
+			if in.Port >= lo && in.Port <= hi {
+				return errors.New("端口跳跃范围不能包含入站端口本身")
+			}
+			s.PortHopping = fmt.Sprintf("%d-%d", lo, hi)
+		}
+	} else {
+		s.PortHopping = ""
+	}
 	if in.Protocol == ProtocolSnell && in.Security.Type == SecurityShadowTLS {
 		if s.BackendPort == 0 {
 			s.BackendPort = randomPort(20000, 60000)
@@ -337,6 +429,8 @@ func normalizeSettings(in *Inbound) error {
 	}
 	return nil
 }
+
+var naiveUserPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 var snellPSKPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
@@ -385,8 +479,11 @@ func normalizeSecurity(in *Inbound) error {
 		if sec.CertMode == "" {
 			sec.CertMode = DefaultTLSCertMode
 		}
+		if sec.CertMode != CertModeACME {
+			sec.ACMEEmail, sec.ACMEDNS, sec.ACMEDNSKey, sec.ACMEDNSSecret = "", "", "", ""
+		}
 		switch sec.CertMode {
-		case "self":
+		case CertModeSelf:
 			if sec.SNI == "" {
 				return errors.New("TLS 需要填写域名 (SNI)")
 			}
@@ -398,19 +495,23 @@ func normalizeSecurity(in *Inbound) error {
 				}
 				sec.CertPEM, sec.KeyPEM = cert, key
 			}
-		case "file":
+		case CertModeFile:
 			sec.CertPEM, sec.KeyPEM = "", ""
 			sec.CertFile = strings.TrimSpace(sec.CertFile)
 			sec.KeyFile = strings.TrimSpace(sec.KeyFile)
 			if !strings.HasPrefix(sec.CertFile, "/") || !strings.HasPrefix(sec.KeyFile, "/") {
 				return errors.New("证书和私钥需要填写节点上的绝对路径")
 			}
+		case CertModeACME:
+			sec.CertPEM, sec.KeyPEM, sec.CertFile, sec.KeyFile = "", "", "", ""
+			return normalizeACME(sec)
 		default:
 			return fmt.Errorf("未知证书模式 %s", sec.CertMode)
 		}
 		return nil
 	case SecurityReality:
 		sec.CertMode, sec.CertPEM, sec.KeyPEM, sec.CertFile, sec.KeyFile = "", "", "", "", ""
+		sec.ACMEEmail, sec.ACMEDNS, sec.ACMEDNSKey, sec.ACMEDNSSecret = "", "", "", ""
 		sec.ShadowTLSPassword = ""
 		if sec.SNI == "" {
 			sec.SNI = DefaultRealitySNI
@@ -456,6 +557,37 @@ func normalizeSecurity(in *Inbound) error {
 		return nil
 	}
 	return fmt.Errorf("未知安全层 %s", sec.Type)
+}
+
+var acmeEmailPattern = regexp.MustCompile(`^[^@\s"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$`)
+
+func normalizeACME(sec *Security) error {
+	if sec.SNI == "" || net.ParseIP(sec.SNI) != nil || !strings.Contains(sec.SNI, ".") || sec.SNI == DefaultQUICSNI {
+		return errors.New("自动申请证书需要填写解析到该节点的域名")
+	}
+	sec.ACMEEmail = strings.TrimSpace(sec.ACMEEmail)
+	if sec.ACMEEmail != "" && !acmeEmailPattern.MatchString(sec.ACMEEmail) {
+		return errors.New("ACME 邮箱格式错误")
+	}
+	sec.ACMEDNS = strings.ToLower(strings.TrimSpace(sec.ACMEDNS))
+	sec.ACMEDNSKey = strings.TrimSpace(sec.ACMEDNSKey)
+	sec.ACMEDNSSecret = strings.TrimSpace(sec.ACMEDNSSecret)
+	switch sec.ACMEDNS {
+	case "":
+		sec.ACMEDNSKey, sec.ACMEDNSSecret = "", ""
+	case ACMEDNSCloudflare:
+		sec.ACMEDNSSecret = ""
+		if sec.ACMEDNSKey == "" {
+			return errors.New("请填写 Cloudflare API Token")
+		}
+	case ACMEDNSAliDNS:
+		if sec.ACMEDNSKey == "" || sec.ACMEDNSSecret == "" {
+			return errors.New("请填写阿里云 AccessKey ID 和 Secret")
+		}
+	default:
+		return fmt.Errorf("不支持的 DNS 服务商 %s", sec.ACMEDNS)
+	}
+	return nil
 }
 
 // Regenerate replaces every secret of an inbound while keeping its shape.

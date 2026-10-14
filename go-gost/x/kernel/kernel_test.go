@@ -290,7 +290,7 @@ func TestParseChecksum(t *testing.T) {
 }
 
 func TestNftScriptOnlyCounts(t *testing.T) {
-	script := nftScript(expandPorts([]Port{{InboundID: 2, Port: 80, Network: "tcp,udp"}, {InboundID: 1, Port: 443, Network: "tcp"}}), nil)
+	script := nftScript(expandPorts([]Port{{InboundID: 2, Port: 80, Network: "tcp,udp"}, {InboundID: 1, Port: 443, Network: "tcp"}}), nil, nil)
 	for _, bad := range []string{"drop", "reject", "policy drop"} {
 		if strings.Contains(script, bad) {
 			t.Fatalf("counting table must never filter: %s", script)
@@ -333,7 +333,7 @@ func TestNftScriptWhitelist(t *testing.T) {
 		{InboundID: 1, Port: 443, Network: "tcp", Allow: []string{"127.0.0.0/8", "::1/128", "198.51.100.7/32", "127.0.0.1/32"}},
 		{InboundID: 2, Port: 8388, Network: "tcp,udp"},
 	}
-	script := nftScript(expandPorts(ports), expandGuards(ports))
+	script := nftScript(expandPorts(ports), expandGuards(ports), expandHops(ports))
 	for _, want := range []string{
 		"set allow4_1 {",
 		"elements = { 127.0.0.0/8, 127.0.0.1/32, 198.51.100.7/32 }",
@@ -510,5 +510,40 @@ func TestLogRingStripsANSI(t *testing.T) {
 	r.add("[stls-3] \x1b[2m2026-10-14T16:14:14Z\x1b[0m \x1b[31mERROR\x1b[0m bind failed")
 	if got := r.tail(1)[0]; got != "[stls-3] 2026-10-14T16:14:14Z ERROR bind failed" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestNftScriptPortHopping(t *testing.T) {
+	ports := []Port{
+		{InboundID: 3, Port: 443, Network: "udp", HopFrom: 20000, HopTo: 30000, Allow: []string{"127.0.0.0/8"}},
+		{InboundID: 4, Port: 8443, Network: "udp"},
+	}
+	script := nftScript(expandPorts(ports), expandGuards(ports), expandHops(ports))
+	for _, want := range []string{
+		"type nat hook prerouting priority -100;",
+		"type nat hook output priority -100;",
+		"fib daddr type local udp dport 20000-30000 redirect to :443",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("missing %q in:\n%s", want, script)
+		}
+	}
+	if strings.Count(script, "redirect") != 2 {
+		t.Fatalf("only the hopping inbound is redirected (once per hook):\n%s", script)
+	}
+	if strings.Contains(nftScript(expandPorts(ports[1:]), nil, expandHops(ports[1:])), "hop_") {
+		t.Fatal("no hop chains without hop ranges")
+	}
+	if _, err := exec.LookPath("nft"); err == nil && os.Geteuid() == 0 {
+		cmd := exec.Command("nft", "-c", "-f", "-")
+		cmd.Stdin = strings.NewReader(script)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("nft rejected the script: %v\n%s\n%s", err, out, script)
+		}
+	}
+
+	bad := ApplyRequest{Type: "singbox", Ports: []Port{{InboundID: 1, Port: 25000, Network: "udp", HopFrom: 20000, HopTo: 30000}}}
+	if err := bad.validatePorts(); err == nil {
+		t.Fatal("hop range containing the inbound port must be rejected")
 	}
 }

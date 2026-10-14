@@ -62,6 +62,9 @@ type Port struct {
 	// Allow, when present, restricts the port to these source CIDRs; every
 	// other packet to it is dropped. Absent means no restriction.
 	Allow []string `json:"allow,omitempty"`
+	// HopFrom..HopTo (UDP) are redirected to Port: Hysteria2 port hopping.
+	HopFrom int `json:"hopFrom,omitempty"`
+	HopTo   int `json:"hopTo,omitempty"`
 }
 
 // ApplyRequest is the KernelApply command body.
@@ -165,9 +168,18 @@ func (r *ApplyRequest) validate() error {
 			return fmt.Errorf("非法配置文件名: %s", f.Name)
 		}
 	}
+	return r.validatePorts()
+}
+
+func (r *ApplyRequest) validatePorts() error {
 	for _, p := range r.Ports {
 		if p.Port < 1 || p.Port > 65535 || p.InboundID <= 0 {
 			return fmt.Errorf("非法端口: %d", p.Port)
+		}
+		if p.HopFrom != 0 || p.HopTo != 0 {
+			if p.HopFrom < 1 || p.HopTo > 65535 || p.HopFrom >= p.HopTo || (p.Port >= p.HopFrom && p.Port <= p.HopTo) {
+				return fmt.Errorf("非法端口跳跃范围: %d-%d", p.HopFrom, p.HopTo)
+			}
 		}
 		if len(p.Allow) > 512 {
 			return fmt.Errorf("白名单条目过多")

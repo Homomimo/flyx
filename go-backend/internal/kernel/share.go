@@ -17,6 +17,17 @@ type Endpoint struct {
 	Host    string
 	Port    int
 	Inbound Inbound
+	// Direct marks the landing node's own address; only direct endpoints
+	// carry the Hysteria2 port-hopping range (relays forward one port).
+	Direct bool
+}
+
+// hopRange is the port-hopping range clients may use for this endpoint.
+func (e Endpoint) hopRange() (int, int) {
+	if !e.Direct || e.Inbound.Protocol != ProtocolHysteria2 {
+		return 0, 0
+	}
+	return e.Inbound.HopRange()
 }
 
 const (
@@ -27,7 +38,7 @@ const (
 )
 
 func (e Endpoint) selfSigned() bool {
-	return e.Inbound.Security.Type == SecurityTLS && e.Inbound.Security.CertMode != "file"
+	return e.Inbound.Security.Type == SecurityTLS && e.Inbound.Security.CertMode == CertModeSelf
 }
 
 func hostPort(host string, port int) string {
@@ -99,6 +110,9 @@ func ShareURI(e Endpoint) (string, bool) {
 		if e.selfSigned() {
 			q.Set("insecure", "1")
 		}
+		if lo, hi := e.hopRange(); lo > 0 {
+			q.Set("mport", fmt.Sprintf("%d-%d", lo, hi)) // v2rayN / NekoBox convention
+		}
 		return fmt.Sprintf("hysteria2://%s@%s/?%s#%s", url.PathEscape(in.Settings.Password), hostPort(e.Host, e.Port),
 			q.Encode(), url.PathEscape(e.Name)), true
 	case ProtocolTUIC:
@@ -112,6 +126,15 @@ func ShareURI(e Endpoint) (string, bool) {
 		}
 		return fmt.Sprintf("tuic://%s:%s@%s?%s#%s", in.Settings.UUID, url.PathEscape(in.Settings.Password),
 			hostPort(e.Host, e.Port), q.Encode(), url.PathEscape(e.Name)), true
+	case ProtocolNaive:
+		// naive+https://user:pass@host:port (NekoBox / v2rayN); sni only when
+		// connecting by address (e.g. through a relay).
+		q := ""
+		if strings.Trim(e.Host, "[]") != in.Security.SNI {
+			q = "?sni=" + url.QueryEscape(in.Security.SNI)
+		}
+		return fmt.Sprintf("naive+https://%s:%s@%s%s#%s", url.PathEscape(in.Settings.Username), url.PathEscape(in.Settings.Password),
+			hostPort(e.Host, e.Port), q, url.PathEscape(e.Name)), true
 	case ProtocolAnyTLS:
 		q := url.Values{}
 		q.Set("sni", in.Security.SNI)
@@ -171,8 +194,8 @@ func addSecurityQuery(q url.Values, e Endpoint) {
 // because Mihomo support for it is not stable across client versions.
 func ClashProxy(e Endpoint) (yamlNode, bool) {
 	in := e.Inbound
-	if in.Transport.Type == TransportXHTTP || in.Protocol == ProtocolSnell {
-		// Mihomo only speaks Snell v1-v3.
+	if in.Transport.Type == TransportXHTTP || in.Protocol == ProtocolSnell || in.Protocol == ProtocolNaive {
+		// Mihomo only speaks Snell v1-v3 and has no NaïveProxy client.
 		return nil, false
 	}
 	switch in.Protocol {
@@ -325,6 +348,12 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 	case ProtocolHysteria2:
 		o["type"] = "hysteria2"
 		o["password"] = in.Settings.Password
+		if lo, hi := e.hopRange(); lo > 0 {
+			// server_ports replaces server_port; every port in it reaches the inbound.
+			delete(o, "server_port")
+			o["server_ports"] = []string{fmt.Sprintf("%d:%d", lo, hi)}
+			o["hop_interval"] = "30s"
+		}
 	case ProtocolTUIC:
 		o["type"] = "tuic"
 		o["uuid"] = in.Settings.UUID
@@ -333,6 +362,11 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 		o["udp_relay_mode"] = "native"
 	case ProtocolAnyTLS:
 		o["type"] = "anytls"
+		o["password"] = in.Settings.Password
+	case ProtocolNaive:
+		// sing-box 1.13+ (builds with the cronet-based naive outbound).
+		o["type"] = "naive"
+		o["username"] = in.Settings.Username
 		o["password"] = in.Settings.Password
 	default:
 		return nil, false
@@ -355,8 +389,9 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 			"enabled":     true,
 			"server_name": sec.SNI,
 		}
-		// uTLS only applies to TCP; sing-box rejects it on QUIC outbounds.
-		if in.Network() != "udp" && sec.Fingerprint != "" {
+		// uTLS only applies to TCP; sing-box rejects it on QUIC outbounds,
+		// and naive uses Chromium's own TLS stack.
+		if in.Network() != "udp" && in.Protocol != ProtocolNaive && sec.Fingerprint != "" {
 			tls["utls"] = map[string]interface{}{"enabled": true, "fingerprint": sec.Fingerprint}
 		}
 		if len(sec.ALPN) > 0 {
@@ -418,6 +453,9 @@ func SurgeLine(e Endpoint) (string, bool) {
 		return name + " = " + strings.Join(parts, ", "), true
 	case ProtocolHysteria2:
 		parts = append(parts, "hysteria2", host, strconv.Itoa(e.Port), "password="+in.Settings.Password)
+		if lo, hi := e.hopRange(); lo > 0 {
+			parts = append(parts, fmt.Sprintf("port-hopping=\"%d-%d\"", lo, hi), "port-hopping-interval=30")
+		}
 		return name + " = " + strings.Join(append(parts, tlsTail()...), ", "), true
 	case ProtocolTUIC:
 		parts = append(parts, "tuic-v5", host, strconv.Itoa(e.Port), "password="+in.Settings.Password,
@@ -615,6 +653,9 @@ func clashQUICFamily(e Endpoint) yamlNode {
 	switch in.Protocol {
 	case ProtocolHysteria2:
 		p = append(p, yamlField{"password", in.Settings.Password}, yamlField{"alpn", []string{"h3"}})
+		if lo, hi := e.hopRange(); lo > 0 {
+			p = append(p, yamlField{"ports", fmt.Sprintf("%d-%d", lo, hi)}, yamlField{"hop-interval", 30})
+		}
 	case ProtocolTUIC:
 		p = append(p,
 			yamlField{"uuid", in.Settings.UUID},

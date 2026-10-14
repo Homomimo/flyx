@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,11 +89,15 @@ type inboundView struct {
 	UpdatedTime    int64              `json:"updatedTime"`
 }
 
-// kernelSecurityView hides the self-signed private material from list output.
+// kernelSecurityView hides the self-signed private material and DNS API
+// credentials from list output; saving without them keeps the stored ones.
 type kernelSecurityView struct {
 	kernel.Security
-	CertPEM string `json:"certPem,omitempty"`
-	KeyPEM  string `json:"keyPem,omitempty"`
+	CertPEM       string `json:"certPem,omitempty"`
+	KeyPEM        string `json:"keyPem,omitempty"`
+	ACMEDNSKey    string `json:"acmeDnsKey,omitempty"`
+	ACMEDNSSecret string `json:"acmeDnsSecret,omitempty"`
+	ACMEDNSSet    bool   `json:"acmeDnsSet,omitempty"`
 }
 
 type inboundRequest struct {
@@ -517,7 +522,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			Network:        in.Network(),
 			Settings:       in.Settings,
 			Transport:      in.Transport,
-			Security:       kernelSecurityView{Security: in.Security},
+			Security:       kernelSecurityView{Security: in.Security, ACMEDNSSet: in.Security.ACMEDNSKey != ""},
 			Extra:          row.Extra,
 			ShareHost:      row.ShareHost,
 			Remark:         row.Remark,
@@ -591,6 +596,10 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 			req.Security.CertPEM == "" && req.Security.KeyPEM == "" {
 			req.Security.CertPEM, req.Security.KeyPEM = old.Security.CertPEM, old.Security.KeyPEM
 		}
+		if req.Security.CertMode == kernel.CertModeACME && req.Security.ACMEDNS == old.Security.ACMEDNS &&
+			req.Security.ACMEDNSKey == "" && req.Security.ACMEDNSSecret == "" {
+			req.Security.ACMEDNSKey, req.Security.ACMEDNSSecret = old.Security.ACMEDNSKey, old.Security.ACMEDNSSecret
+		}
 	} else {
 		if _, err := h.kernelNodeEligible(req.NodeID); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -638,25 +647,21 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	if in.Security.CertMode == kernel.CertModeACME && versionBelow(k.Version, 1, 14) {
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("自动申请证书需要 sing-box 1.14 及以上，节点安装的是 %s", k.Version)))
+		return
+	}
 	if in.Protocol == kernel.ProtocolSnell {
 		if major := snellMajor(k.Version); in.Settings.SnellVersion > major {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点安装的是 Snell %s，不支持 v%d 客户端", k.Version, in.Settings.SnellVersion)))
 			return
 		}
 	}
-	if in.Settings.BackendPort > 0 {
-		if occ, err := h.repo.NodePortOccupant(row.NodeID, in.Settings.BackendPort, row.ID); err == nil && occ != "" {
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("后端端口 %d 已被%s占用", in.Settings.BackendPort, occ)))
-			return
-		}
-	}
-	occupant, err := h.repo.NodePortOccupant(row.NodeID, in.Port, row.ID)
-	if err != nil {
+	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	if occupant != "" {
-		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("端口 %d 已被%s占用", in.Port, occupant)))
+	} else if msg != "" {
+		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
 
@@ -715,15 +720,94 @@ func boolToInt(b bool) int {
 func (h *Handler) pickFreeInboundPort(nodeID, excludeInboundID int64) (int, error) {
 	for i := 0; i < 64; i++ {
 		port := 20000 + rand.Intn(40000)
-		occupant, err := h.repo.NodePortOccupant(nodeID, port, excludeInboundID)
+		msg, err := h.inboundPortConflict(nodeID, kernel.Inbound{Port: port}, excludeInboundID)
 		if err != nil {
 			return 0, err
 		}
-		if occupant == "" {
+		if msg == "" {
 			return port, nil
 		}
 	}
 	return 0, errors.New("未找到可用端口，请手动指定")
+}
+
+// portSpan is a port range an inbound occupies on its node.
+type portSpan struct {
+	lo, hi int
+	what   string
+}
+
+func (s portSpan) String() string {
+	if s.lo == s.hi {
+		return fmt.Sprintf("%s %d", s.what, s.lo)
+	}
+	return fmt.Sprintf("%s %d-%d", s.what, s.lo, s.hi)
+}
+
+func (s portSpan) overlaps(o portSpan) bool { return s.lo <= o.hi && o.lo <= s.hi }
+
+// inboundSpans lists the ports an inbound needs: its listen port, the
+// loopback backend of a ShadowTLS front, and the port-hopping range.
+func inboundSpans(in kernel.Inbound) []portSpan {
+	spans := []portSpan{{in.Port, in.Port, "端口"}}
+	if bp := in.Settings.BackendPort; bp > 0 {
+		spans = append(spans, portSpan{bp, bp, "后端端口"})
+	}
+	if lo, hi := in.HopRange(); lo > 0 {
+		spans = append(spans, portSpan{lo, hi, "端口跳跃范围"})
+	}
+	return spans
+}
+
+// inboundPortConflict describes the first clash between the ports an
+// inbound needs and what already runs on the node ("" when there is none).
+func (h *Handler) inboundPortConflict(nodeID int64, in kernel.Inbound, excludeInboundID int64) (string, error) {
+	spans := inboundSpans(in)
+	for _, sp := range spans {
+		occ, err := h.repo.NodePortRangeOccupant(nodeID, sp.lo, sp.hi, excludeInboundID)
+		if err != nil {
+			return "", err
+		}
+		if occ != "" {
+			return fmt.Sprintf("%s 已被%s占用", sp, occ), nil
+		}
+	}
+	for _, sp := range spans {
+		if sp.lo == sp.hi {
+			continue
+		}
+		// A hop range inside the node's forwarding range would capture the
+		// UDP traffic of forwards created there later.
+		spec, err := h.repo.GetNodePortRange(nodeID)
+		if err != nil {
+			return "", err
+		}
+		if lo, hi := parsePortRangeMinMax(spec); lo > 0 && sp.overlaps(portSpan{lo: lo, hi: hi}) {
+			return fmt.Sprintf("%s 与节点的转发端口段 %s 重叠", sp, spec), nil
+		}
+	}
+	others, err := h.repo.ListNodeInboundsByNode(nodeID)
+	if err != nil {
+		return "", err
+	}
+	for _, row := range others {
+		if row.ID == excludeInboundID {
+			continue
+		}
+		other, err := inboundFromModel(row)
+		if err != nil {
+			continue
+		}
+		// Listen ports were checked by the query above; compare the rest.
+		for _, os := range inboundSpans(other)[1:] {
+			for _, sp := range spans {
+				if sp.overlaps(os) {
+					return fmt.Sprintf("%s 与入站「%s」的%s 冲突", sp, row.Name, os), nil
+				}
+			}
+		}
+	}
+	return "", nil
 }
 
 func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
@@ -892,6 +976,9 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		}
 		inbounds = append(inbounds, in)
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
+		if lo, hi := in.HopRange(); lo > 0 {
+			port["hopFrom"], port["hopTo"] = lo, hi
+		}
 		if row.RelayWhitelist == 1 {
 			port["allow"] = h.inboundAllowList(row)
 		}
@@ -937,6 +1024,21 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		payload["extras"] = extras
 	}
 	return payload, rendered.Hash, nil
+}
+
+// versionBelow reports whether a concrete "x.y[.z]" version is older than
+// major.minor; "latest" and unparsable versions are not.
+func versionBelow(version string, major, minor int) bool {
+	parts := strings.SplitN(strings.TrimPrefix(version, "v"), ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	ma, err1 := strconv.Atoi(parts[0])
+	mi, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return ma < major || (ma == major && mi < minor)
 }
 
 // snellMajor returns the protocol major version a Snell binary serves.

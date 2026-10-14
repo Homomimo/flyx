@@ -189,3 +189,53 @@ func TestSharePhase3(t *testing.T) {
 		t.Fatal("snell v5 must not be offered to Mihomo")
 	}
 }
+
+func TestHysteria2PortHopping(t *testing.T) {
+	in := Inbound{ID: 7, Protocol: ProtocolHysteria2, Port: 443, Settings: Settings{Password: "hop-secret", PortHopping: " 20000:30000 "},
+		Transport: Transport{Type: TransportQUIC}, Security: Security{Type: SecurityTLS}}
+	if err := Normalize(TypeSingbox, &in); err != nil {
+		t.Fatal(err)
+	}
+	if in.Settings.PortHopping != "20000-30000" {
+		t.Fatalf("range not normalized: %q", in.Settings.PortHopping)
+	}
+	direct := Endpoint{Name: "hy2", Host: "203.0.113.10", Port: 443, Inbound: in, Direct: true}
+	relay := Endpoint{Name: "relay", Host: "198.51.100.7", Port: 31000, Inbound: in}
+
+	if uri, _ := ShareURI(direct); !strings.Contains(uri, "mport=20000-30000") {
+		t.Fatalf("direct uri lacks mport: %s", uri)
+	}
+	if uri, _ := ShareURI(relay); strings.Contains(uri, "mport") {
+		t.Fatalf("relays forward a single port: %s", uri)
+	}
+	if line, _ := SurgeLine(direct); !strings.Contains(line, `port-hopping="20000-30000", port-hopping-interval=30`) {
+		t.Fatalf("surge: %s", line)
+	}
+	o, _ := singboxOutbound(direct)
+	if _, has := o["server_port"]; has || o["server_ports"].([]string)[0] != "20000:30000" {
+		t.Fatalf("sing-box: %v", o)
+	}
+	clash := marshalYAML(clashQUICFamily(direct))
+	if !strings.Contains(clash, `ports: "20000-30000"`) || !strings.Contains(clash, "hop-interval: 30") {
+		t.Fatalf("clash:\n%s", clash)
+	}
+	if strings.Contains(marshalYAML(clashQUICFamily(relay)), "ports") {
+		t.Fatal("relay must not hop")
+	}
+
+	bad := in
+	bad.Settings.PortHopping = "400-500"
+	if err := Normalize(TypeSingbox, &bad); err == nil {
+		t.Fatal("ports below 1024 must be rejected")
+	}
+	bad.Settings.PortHopping = "400-30000"
+	bad.Port = 25000
+	if err := Normalize(TypeSingbox, &bad); err == nil {
+		t.Fatal("range containing the listen port must be rejected")
+	}
+	tuic := Inbound{ID: 8, Protocol: ProtocolTUIC, Port: 8443, Settings: Settings{PortHopping: "20000-30000"},
+		Transport: Transport{Type: TransportQUIC}, Security: Security{Type: SecurityTLS}}
+	if err := Normalize(TypeSingbox, &tuic); err != nil || tuic.Settings.PortHopping != "" {
+		t.Fatalf("hopping is Hysteria2 only: %v %q", err, tuic.Settings.PortHopping)
+	}
+}
