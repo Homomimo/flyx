@@ -8,7 +8,7 @@ FLVX 目前只做端口转发 / 隧道。目标是在**同一个面板**里增�
 - **不使用 GOST 自带协议**做节点，GOST 继续只负责转发 / 隧道
 - **单用户自用**：不做多用户、配额、到期、按用户计费
 - 生成分享链接、二维码和订阅，客户端一键导入
-- 后期支持"节点经由中转入口"，订阅地址自动替换为转发入口
+- **核心场景：在落地机搭节点、在中转机做转发，一键对接**，订阅中自动给出中转入口（详见"落地 + 中转对接"）
 
 ### 非目标
 
@@ -77,7 +77,9 @@ Agent 只负责"拿到配置文本，写文件，启动或重启进程"，不理
 | settings | text(JSON) | 协议凭据和参数：`uuid`、`flow`、`password`、`method`、`psk`、`obfs`、`version` 等 |
 | extra | text(JSON) | 内核特有参数透传（高级用户使用，原样合并进渲染结果） |
 | share_host | varchar(255) | 分享 / 订阅中使用的地址，为空时使用节点 `server_ip` |
-| via_forward_id | int64, nullable | 第 4 阶段：经由某条转发，订阅时使用转发入口的地址和端口 |
+| relay_only | int | 1=订阅中不输出直连节点 |
+| allow_relay_only | int | 1=nft 白名单，仅允许中转 IP 访问（模式 A） |
+| accept_proxy_protocol | int | 1=入站接收 PROXY protocol（与中转 Forward 联动） |
 | enabled | int | |
 | upload_bytes / download_bytes | int64 | 累计流量（由 nft 计数累加） |
 | created_time / updated_time | int64 | |
@@ -227,7 +229,7 @@ table inet flvx_kernel {
 ```
 
 - `in` = 客户端上传，`out` = 下发给客户端。只统计"客户端 ↔ 节点"这一段，不重复统计"节点 ↔ 目标网站"的流量
-- 只用计数，**不做 drop / accept 以外的动作**，不影响现有防火墙规则
+- 默认只计数，不过滤，不影响现有防火墙规则；唯一的例外是可选的"仅允许中转访问"白名单（见"落地 + 中转对接"）
 - 每次 Apply 都整表重建（`nft -f` 原子替换）
 - 机器上没有 `nft` 时降级：内核照常运行，面板显示"流量统计不可用"
 - 面板侧沿用 `nftables_traffic.go` 的做法：根据快照和上次的值算增量，计数值变小时视为计数器被重置，然后累加到 `node_inbound.upload_bytes/download_bytes`
@@ -320,6 +322,78 @@ Snell 每个进程只能有一个监听端口和一个 PSK。处理方式：
 
 API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 
+## 落地 + 中转对接（核心场景）
+
+目标拓扑：**在落地机上搭节点，在中转机上做转发，订阅里给出中转入口。**
+
+```
+客户端 ──► 中转机 (GOST 转发入口 relay_ip:X) ──► 落地机 (内核入站 :Y) ──► 互联网
+            现有 Forward / Tunnel                   本方案的 node_inbound
+```
+
+落地机和中转机都是面板里的普通节点（都装 agent）。"落地"和"中转"只是使用角色，不需要新增节点类型。
+
+### 两种对接模式
+
+| 模式 | 现有能力 | 落地入站监听 | 中转 → 落地链路 | 适用 |
+|---|---|---|---|---|
+| **A. 端口转发**（tunnel.type=1） | 中转入口直接 dial `落地IP:Y` | `::`（公网） | 原样 TCP/UDP 转发，开销最小 | 最常用；节点协议本身已加密（Reality/TLS） |
+| **B. 隧道转发**（tunnel.type=2，出口为落地机） | 入口 → GOST 隧道 → 落地机上的出口 → dial `127.0.0.1:Y` | `127.0.0.1`（**不暴露公网**） | 经 GOST 隧道（tls/kcp 等），可多级链路 | 想隐藏落地端口、需要多跳，或中转↔落地线路需要改善 |
+
+在模式 B 中，落地入站只监听本机，外部完全扫描不到。这是"落地机隐身"最干净的做法。实施时需要验证：隧道出口节点 dial `127.0.0.1` 时，Forward 的目标地址校验是否允许回环地址（如果被拦截，需要对"目标是本方案入站"的情况放行）。
+
+### 落地入站白名单（模式 A 的补充）
+
+模式 A 中，落地端口仍然暴露在公网。可以选择开启"仅允许中转访问"：agent 在 `inet flvx_kernel` 表里为该端口加入 `ip saddr != {中转IP集合} drop`。中转 IP 集合由面板根据绑定的转发自动计算（入口节点 IP 或隧道出站 IP）。这是本方案中**唯一会丢弃流量**的 nft 规则，默认关闭，只作用于该入站端口。
+
+### 一键对接流程
+
+在入站的"对接中转"操作中：
+
+1. 选择一条现有隧道（或者新建：选中转节点作为入口；模式 B 还需要把落地节点设为出口）
+2. 面板自动创建一条 Forward：
+   - 模式 A：`remote_addr = 落地share_host或server_ip:Y`
+   - 模式 B：`remote_addr = 127.0.0.1:Y`
+   - 协议：TCP + UDP（Hysteria2 / TUIC 这类基于 UDP 的协议必须带 UDP，依赖 plan 069 修复后的 UDP 转发）
+   - 入口端口：自动分配，或手动指定
+3. 写入关联表 `node_inbound_relay`，订阅自动多出一个节点
+
+### 数据模型调整
+
+一个落地入站可以同时挂多个中转，所以用一对多的关联表：
+
+#### `node_inbound_relay`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | int64 PK | |
+| inbound_id | int64, index | |
+| forward_id | int64, uniqueIndex | 对应的 Forward（转发删除时级联删除这条关联） |
+| name | varchar(100) | 订阅中的节点名，默认 `"{中转节点名} → {入站名}"` |
+| share_host | varchar(255) | 为空时使用转发入口 IP（`ForwardPort.InIP`，或入口节点 `server_ip`） |
+| managed | int | 1=由"一键对接"创建（删除入站时一起删除该 Forward）；0=绑定已有的转发（只解除关联） |
+| created_time | int64 | |
+
+### 订阅输出
+
+每个入站输出：
+
+- **直连节点**（可在入站上关闭："仅中转"，模式 B 下强制关闭）
+- **每个中转一个节点**：地址和端口替换为中转入口，其余参数（UUID、SNI、Reality 公钥、传输等）与直连节点完全相同
+
+节点命名示例：`🇯🇵 东京-Reality（直连）`、`🇭🇰 香港中转 → 东京-Reality`。Clash 订阅可以选择附带一个包含所有中转节点的 `url-test` 组。
+
+### 中转场景下的注意事项
+
+| 问题 | 处理 |
+|---|---|
+| Reality / TLS 经过中转 | 中转是 TCP 透明转发，SNI 和握手是端到端的，无需改动 |
+| UDP 协议（Hysteria2/TUIC/SS UDP） | 中转 Forward 必须开启 UDP；模式 B 需要确认隧道协议支持 UDP 承载 |
+| 落地机看到的客户端 IP | 是中转机的 IP。如果需要真实 IP，可以开启 Forward 的 `proxy_protocol_send`，同时在入站开启"接收 PROXY protocol"（Xray `acceptProxyProtocol` / sing-box 的对应字段）；两端必须同时开或同时关，面板负责联动 |
+| 流量统计 | 落地入站的 nft 计数（含所有中转的流量）和转发自己的流量统计是两套数据，页面上分开显示，不相加 |
+| 删除顺序 | 删除入站时，先删除 `managed=1` 的 Forward，再删除入站；删除转发时，只移除关联 |
+| 落地 IP 变化 | 模式 A 下，Forward 的 remote_addr 来自落地节点 IP。节点 IP 变更时提示"同步对接的转发" |
+
 ## 与上游合并的策略
 
 - 新代码集中放在：`go-backend/internal/kernel/`、`go-backend/internal/http/handler/kernel_*.go`、`go-gost/x/kernel/`、`vite-frontend/src/pages/inbound*`
@@ -334,7 +408,7 @@ API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 | Snell 闭源 | 下载地址和许可以官方为准，不允许把二进制打包进仓库 | agent 安装时从官方地址下载，下载地址做成配置项 |
 | 下载被墙 | 国内节点访问 GitHub 困难 | 下载地址支持配置镜像前缀（与 agent 升级共用设置，如果存在的话） |
 | 端口冲突 | 与 GOST 转发端口冲突 | 创建时校验；agent Apply 前再用 `net.Listen` 试探一次 |
-| nft 与现有防火墙 | 可能与用户自定义规则相互影响 | 独立表，只计数不过滤，优先级 -150 |
+| nft 与现有防火墙 | 可能与用户自定义规则相互影响 | 独立表，优先级 -150；默认只计数，白名单 drop 只在用户显式开启时作用于对应入站端口 |
 | 证书 | Xray 没有内置 ACME | 第一版 Xray 只提供 Reality 和自签证书 |
 | CI Go 版本 | CI 用 1.23 构建 | 只使用 1.23 已有的标准库（`crypto/ecdh` 从 1.20 开始提供） |
 
@@ -353,25 +427,26 @@ API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 - [ ] F1 `/inbound` 页面：列表、新建/编辑（模板化）、启停删除
 - [ ] F2 节点详情页"内核"标签页（安装、状态、日志）
 
-### 第 2 阶段：分享与订阅
+### 第 2 阶段：分享、订阅、对接中转（目标：完整可用）
 
 - [ ] B6 `share.go`：各协议 URI + 测试
 - [ ] B7 `subscription.go`：base64 / clash / singbox / surge + UA 识别 + `subscription-userinfo`
 - [ ] B8 订阅 token 生成与重置
+- [ ] B9 `node_inbound_relay` 模型 + "一键对接"API（模式 A：端口转发）+ contract 测试
+- [ ] B10 订阅输出中转节点、`relay_only`；删除时的级联逻辑
+- [ ] B11 模式 B：隧道出口 dial `127.0.0.1`，入站监听 `127.0.0.1`；验证回环目标校验
+- [ ] B12 PROXY protocol 联动（Forward `proxy_protocol_send` ↔ 入站 `accept_proxy_protocol`）
+- [ ] A4 nft 白名单（`allow_relay_only`），中转 IP 集合随转发变化自动更新
 - [ ] F3 分享弹窗（二维码）、订阅卡片
+- [ ] F4 入站"对接中转"弹窗：选择/新建隧道、模式 A/B、入口端口；入站列表展示已对接的中转
 
 ### 第 3 阶段：更多内核
 
-- [ ] B9 `render_singbox.go` + golden（含 Hysteria2、TUIC、AnyTLS、ACME）
-- [ ] A4 sing-box 适配器
-- [ ] B10 `render_snell.go`、Snell 每个入站一个进程的实例键
-- [ ] A5 snell 适配器
+- [ ] B13 `render_singbox.go` + golden（含 Hysteria2、TUIC、AnyTLS、ACME）
+- [ ] A5 sing-box 适配器
+- [ ] B14 `render_snell.go`、Snell 每个入站一个进程的实例键
+- [ ] A6 snell 适配器
 - [ ] （可选）Hysteria2 官方版、shadowsocks-rust 适配器
-
-### 第 4 阶段：与转发打通
-
-- [ ] B11 `via_forward_id`：订阅和分享中使用转发入口的地址和端口；创建入站时可选择"同时创建一条指向它的转发"
-- [ ] F4 入站编辑中选择中转转发
 
 ### 验证（每个阶段）
 
@@ -379,16 +454,18 @@ API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 - [ ] `(cd go-gost && go build ./...)`，以及 `x` 模块的单元测试
 - [ ] `(cd vite-frontend && pnpm run build && pnpm run lint)`
 - [ ] 在真实节点上实测：安装内核 → 创建入站 → 客户端导入订阅 → 能正常连接 → 流量计数增长 → agent 重启后内核自动恢复
+- [ ] 中转实测：模式 A / B 各对接一次 → 订阅出现中转节点 → 经中转连通（TCP 和 UDP 协议各一个）→ 开启白名单后直连失败、中转正常
 
 ## 文件变更清单（预计）
 
 | 文件 | 变更类型 |
 |---|---|
-| `go-backend/internal/store/model/node_kernel.go` | 新增 |
+| `go-backend/internal/store/model/node_kernel.go` | 新增（含 `NodeInboundRelay`） |
 | `go-backend/internal/store/repo/repository.go` | 修改（AutoMigrate 列表） |
 | `go-backend/internal/store/repo/node_kernel.go` | 新增（Repository 方法） |
 | `go-backend/internal/kernel/*` | 新增 |
-| `go-backend/internal/http/handler/kernel_*.go` | 新增 |
+| `go-backend/internal/http/handler/kernel_*.go` | 新增（含 `kernel_relay.go` 对接中转） |
+| `go-backend/internal/http/handler/mutations.go` | 可能修改（模式 B 回环目标校验放行） |
 | `go-backend/internal/http/handler/handler.go` | 修改（路由注册） |
 | `go-backend/internal/ws/server.go` | 修改（处理 `kernel_status` / `kernel_traffic` 消息） |
 | `go-backend/tests/contract/kernel_*_test.go` | 新增 |
