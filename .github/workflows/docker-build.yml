@@ -8,6 +8,13 @@ on:
   push:
     tags:
       - '[0-9]*'  # 匹配 2.0.8, 2.0.8-beta 等格式
+  # 手动发版：在 Actions 页面填写版本号，release 时会在当前提交上创建同名 tag
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 3.0.0，不带 v）'
+        required: true
+        type: string
 
 jobs:
   check-version:
@@ -31,10 +38,14 @@ jobs:
           IMAGE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "image_owner=$IMAGE_OWNER" >> $GITHUB_OUTPUT
 
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            # Tag 触发：直接使用 tag 名作为版本，全量构建
-            VERSION="${{ github.ref_name }}"
-            echo "🏷️ Tag trigger detected: $VERSION"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.ref_type }}" == "tag" ]]; then
+            # Tag 或手动触发：使用 tag 名 / 填写的版本号，全量构建并发版
+            VERSION="${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}"
+            if [[ ! "$VERSION" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
+              echo "::error::版本号必须以数字开头，例如 3.0.0"
+              exit 1
+            fi
+            echo "🏷️ Release version: $VERSION"
             echo "version=$VERSION" >> $GITHUB_OUTPUT
             echo "is_tag=true" >> $GITHUB_OUTPUT
             echo "should_build=true" >> $GITHUB_OUTPUT
@@ -324,6 +335,7 @@ jobs:
 
           # 创建 release
           gh release create "${VERSION}" \
+            --target "${{ github.sha }}" \
             --title "Release ${VERSION}" \
             --notes "## 📝 Release Information
 
