@@ -20,8 +20,12 @@ type failedForward struct {
 	err     error
 }
 
+// githubRepo is where releases (node installer, agent binaries, panel
+// compose files) are fetched from. Release builds set it to the repository
+// that built them via -ldflags "-X go-backend/internal/http/handler.githubRepo=owner/repo".
+var githubRepo = "Sagit-chu/flvx"
+
 const (
-	githubRepo     = "Sagit-chu/flvx"
 	githubAPIBase  = "https://api.github.com"
 	githubHTMLBase = "https://github.com"
 	upgradeTimeout = 5 * time.Minute

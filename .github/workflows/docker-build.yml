@@ -230,6 +230,7 @@ jobs:
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --build-arg KEYGEN_ACCOUNT_ID=${{ secrets.KEYGEN_ACCOUNT_ID }} \
+            --build-arg GITHUB_REPO=${{ github.repository }} \
             --push \
             -t ${{ env.REGISTRY }}/${OWNER}/flux-panel-backend:latest \
             -t ${{ env.REGISTRY }}/${OWNER}/flux-panel-backend:${VERSION} \
@@ -295,8 +296,10 @@ jobs:
           cp panel_install.sh ./artifacts/panel_install.sh
 
           # 替换仓库地址和版本号
-          sed -i "s|bqlpfy/flux-panel|${REPO}|g" ./artifacts/install.sh
-          sed -i "s|bqlpfy/flux-panel|${REPO}|g" ./artifacts/panel_install.sh
+          # Point the installers at this repository's releases, whatever
+          # upstream name the checked-in scripts carry.
+          sed -i -E "s|^REPO=\"[^\"]*\"|REPO=\"${REPO}\"|" ./artifacts/install.sh ./artifacts/panel_install.sh
+          grep -q "^REPO=\"${REPO}\"" ./artifacts/install.sh && grep -q "^REPO=\"${REPO}\"" ./artifacts/panel_install.sh
           sed -i "s|2.0.7-beta|${VERSION}|g" ./artifacts/install.sh
           sed -i "s|2.0.7-beta|${VERSION}|g" ./artifacts/panel_install.sh
 
