@@ -287,12 +287,28 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("版本号格式错误"))
 		return
 	}
+	// Kernels with a closed version list (Snell) store the concrete version
+	// so the binary directory and protocol checks agree with what is pinned.
+	resolved, err := kernel.ResolveVersion(info, version)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if len(info.Versions) > 0 {
+		version = resolved
+	}
 
 	now := time.Now().UnixMilli()
 	k, err := h.repo.GetNodeKernelByType(req.NodeID, info.Type)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	if k != nil && info.Type == kernel.TypeSnell {
+		if err := h.checkSnellVersions(k.ID, version); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 	}
 	if k == nil {
 		k = &model.NodeKernel{
@@ -622,6 +638,18 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	if in.Protocol == kernel.ProtocolSnell {
+		if major := snellMajor(k.Version); in.Settings.SnellVersion > major {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点安装的是 Snell %s，不支持 v%d 客户端", k.Version, in.Settings.SnellVersion)))
+			return
+		}
+	}
+	if in.Settings.BackendPort > 0 {
+		if occ, err := h.repo.NodePortOccupant(row.NodeID, in.Settings.BackendPort, row.ID); err == nil && occ != "" {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("后端端口 %d 已被%s占用", in.Settings.BackendPort, occ)))
+			return
+		}
+	}
 	occupant, err := h.repo.NodePortOccupant(row.NodeID, in.Port, row.ID)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -877,17 +905,63 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
 		proxy = proxyURL
 	}
-	download, _ := kernel.ResolveDownload(info, k.Version, proxy)
-	return map[string]interface{}{
+	download, err := kernel.ResolveDownload(info, k.Version, proxy)
+	if err != nil {
+		return nil, "", err
+	}
+	payload := map[string]interface{}{
 		"type":     k.KernelType,
 		"version":  k.Version,
 		"download": download,
 		"files":    rendered.Files,
 		"args":     rendered.Args,
 		"hash":     rendered.Hash,
-		"enabled":  k.Enabled == 1,
+		"enabled":  k.Enabled == 1 && !rendered.Idle,
 		"ports":    ports,
-	}, rendered.Hash, nil
+	}
+	if len(rendered.Processes) > 0 {
+		payload["processes"] = rendered.Processes
+	}
+	if len(rendered.Extras) > 0 {
+		extras := make([]map[string]interface{}, 0, len(rendered.Extras))
+		for _, name := range rendered.Extras {
+			if name != kernel.ShadowTLSExtra {
+				return nil, "", fmt.Errorf("未知的附加程序 %s", name)
+			}
+			d, err := kernel.ExtraDownload(kernel.ShadowTLSDownload(), kernel.ShadowTLSVersion, proxy)
+			if err != nil {
+				return nil, "", err
+			}
+			extras = append(extras, map[string]interface{}{"name": name, "version": kernel.ShadowTLSVersion, "download": d})
+		}
+		payload["extras"] = extras
+	}
+	return payload, rendered.Hash, nil
+}
+
+// snellMajor returns the protocol major version a Snell binary serves.
+func snellMajor(version string) int {
+	if strings.HasPrefix(version, "4.") {
+		return 4
+	}
+	return 5
+}
+
+// checkSnellVersions refuses to install a Snell binary older than the
+// protocol version an existing inbound advertises to clients.
+func (h *Handler) checkSnellVersions(kernelID int64, version string) error {
+	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
+	if err != nil {
+		return err
+	}
+	major := snellMajor(version)
+	for _, row := range rows {
+		in, err := inboundFromModel(row)
+		if err == nil && in.Settings.SnellVersion > major {
+			return fmt.Errorf("入站 %s 使用 Snell v%d，不能安装 %s", row.Name, in.Settings.SnellVersion, version)
+		}
+	}
+	return nil
 }
 
 // applyKernel pushes the current configuration of a kernel to its node. An

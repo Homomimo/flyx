@@ -643,6 +643,7 @@ export interface KernelInfo {
   name: string;
   implemented: boolean;
   protocols: KernelProtocolCap[] | null;
+  versions?: string[];
 }
 
 export interface KernelCapabilitiesApiData {
@@ -689,6 +690,9 @@ export interface InboundSettings {
   flow?: string;
   password?: string;
   method?: string;
+  snellVersion?: number;
+  masquerade?: string;
+  backendPort?: number;
 }
 
 export interface InboundTransport {
@@ -711,6 +715,7 @@ export interface InboundSecurity {
   realityPrivateKey?: string;
   realityPublicKey?: string;
   realityShortIds?: string[];
+  shadowTlsPassword?: string;
 }
 
 export interface InboundApiItem {
@@ -771,6 +776,7 @@ export interface InboundShareEntry {
   host: string;
   port: number;
   uri: string;
+  surge: string;
 }
 
 export interface InboundRelayApiItem {

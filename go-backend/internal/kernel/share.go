@@ -354,7 +354,10 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 		tls := map[string]interface{}{
 			"enabled":     true,
 			"server_name": sec.SNI,
-			"utls":        map[string]interface{}{"enabled": true, "fingerprint": sec.Fingerprint},
+		}
+		// uTLS only applies to TCP; sing-box rejects it on QUIC outbounds.
+		if in.Network() != "udp" && sec.Fingerprint != "" {
+			tls["utls"] = map[string]interface{}{"enabled": true, "fingerprint": sec.Fingerprint}
 		}
 		if len(sec.ALPN) > 0 {
 			tls["alpn"] = sec.ALPN

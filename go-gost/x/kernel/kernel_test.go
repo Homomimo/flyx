@@ -504,3 +504,11 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 		t.Fatal("process referencing an undeclared binary must be rejected")
 	}
 }
+
+func TestLogRingStripsANSI(t *testing.T) {
+	r := &logRing{}
+	r.add("[stls-3] \x1b[2m2026-10-14T16:14:14Z\x1b[0m \x1b[31mERROR\x1b[0m bind failed")
+	if got := r.tail(1)[0]; got != "[stls-3] 2026-10-14T16:14:14Z ERROR bind failed" {
+		t.Fatalf("got %q", got)
+	}
+}

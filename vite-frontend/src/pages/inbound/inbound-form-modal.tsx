@@ -8,14 +8,17 @@ import { useMemo, useState } from "react";
 import toast from "react-hot-toast";
 
 import {
-  PRESETS,
   PROTOCOL_LABELS,
   SECURITY_LABELS,
   TRANSPORT_LABELS,
   type InboundForm,
   applyPreset,
+  passwordProtocols,
+  presetsFor,
   protocolCap,
+  sniOptionalProtocols,
   toPayload,
+  uuidProtocols,
   visionAllowed,
 } from "./presets";
 
@@ -90,16 +93,39 @@ export function InboundFormModal({
   const securities =
     transports.find((t) => t.type === form.transportType)?.securities ?? [];
 
-  // The Reality SNI is a borrowed public site; it must never leak into a TLS
-  // SNI (a self-signed cert would be issued for it), and vice versa.
+  // Reality / ShadowTLS borrow a public site's name; it must never leak into
+  // a TLS SNI (a self-signed cert would be issued for it), and vice versa.
+  const borrowed = (t: string) => t === "reality" || t === "shadowtls";
   const nextSni = (prevSecurity: string, prevSni: string, security: string) => {
-    if (security === "reality") {
-      return prevSecurity === "reality" && prevSni
+    if (borrowed(security)) {
+      return borrowed(prevSecurity) && prevSni
         ? prevSni
         : (caps?.defaults.realitySni ?? "");
     }
 
-    return prevSecurity === "reality" ? "" : prevSni;
+    return borrowed(prevSecurity) ? "" : prevSni;
+  };
+
+  const changeKernel = (kernelType: string) => {
+    const info = caps?.kernels.find((k) => k.type === kernelType);
+    const first = presetsFor(caps, kernelType)[0];
+
+    setForm((prev) => {
+      const next = { ...prev, kernelType };
+
+      if (info?.protocols?.some((p) => p.protocol === prev.protocol)) {
+        return next;
+      }
+      if (first) return applyPreset(next, first, caps);
+      const proto = info?.protocols?.[0];
+
+      return {
+        ...next,
+        protocol: proto?.protocol ?? prev.protocol,
+        transportType: proto?.transports[0]?.type ?? "tcp",
+        securityType: proto?.transports[0]?.securities[0] ?? "none",
+      };
+    });
   };
 
   const pickSecurity = (secs: string[], current: string) =>
@@ -161,7 +187,11 @@ export function InboundFormModal({
         return "端口必须在 1-65535 之间";
       }
     }
-    if (form.securityType === "tls" && !form.sni.trim()) {
+    if (
+      form.securityType === "tls" &&
+      !form.sni.trim() &&
+      !sniOptionalProtocols.includes(form.protocol)
+    ) {
       return "TLS 需要填写域名";
     }
     if (form.securityType === "tls" && form.certMode === "file") {
@@ -269,7 +299,7 @@ export function InboundFormModal({
                     label="内核"
                     selectedKeys={[form.kernelType]}
                     onSelectionChange={(keys) =>
-                      set("kernelType", String(Array.from(keys)[0] ?? "xray"))
+                      changeKernel(String(Array.from(keys)[0] ?? "xray"))
                     }
                   >
                     {implementedKernels.map((k) => (
@@ -302,9 +332,7 @@ export function InboundFormModal({
                   <div>
                     <p className="text-sm font-medium mb-2">快速模板</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {PRESETS.filter((p) =>
-                        protocolCap(caps, form.kernelType, p.protocol),
-                      ).map((p) => {
+                      {presetsFor(caps, form.kernelType).map((p) => {
                         const active =
                           form.protocol === p.protocol &&
                           form.transportType === p.transport &&
@@ -402,7 +430,7 @@ export function InboundFormModal({
                   </Select>
                 </div>
 
-                {(form.protocol === "vless" || form.protocol === "vmess") && (
+                {uuidProtocols.includes(form.protocol) && (
                   <Input
                     label="UUID"
                     placeholder="留空自动生成"
@@ -440,19 +468,47 @@ export function InboundFormModal({
                     ))}
                   </Select>
                 )}
-                {(form.protocol === "trojan" ||
-                  form.protocol === "shadowsocks") && (
+                {passwordProtocols.includes(form.protocol) && (
                   <Input
                     description={
+                      form.protocol === "shadowsocks" &&
                       form.method.startsWith("2022-")
                         ? "SS2022 需要 base64 密钥，建议留空自动生成"
                         : undefined
                     }
-                    label="密码"
+                    label={form.protocol === "snell" ? "PSK" : "密码"}
                     placeholder="留空自动生成"
                     value={form.password}
                     variant="bordered"
                     onChange={(e) => set("password", e.target.value)}
+                  />
+                )}
+
+                {form.protocol === "snell" && (
+                  <Select
+                    description="客户端使用的协议版本；v5 需要节点安装 Snell 5.x"
+                    label="Snell 版本"
+                    selectedKeys={[form.snellVersion || "5"]}
+                    onSelectionChange={(keys) =>
+                      set("snellVersion", String(Array.from(keys)[0] ?? "5"))
+                    }
+                  >
+                    <SelectItem key="5" textValue="v5">
+                      v5
+                    </SelectItem>
+                    <SelectItem key="4" textValue="v4">
+                      v4
+                    </SelectItem>
+                  </Select>
+                )}
+                {form.protocol === "hysteria2" && (
+                  <Input
+                    description="非客户端访问时返回此网站内容，留空不伪装"
+                    label="伪装网站（可选）"
+                    placeholder="https://www.bing.com"
+                    value={form.masquerade}
+                    variant="bordered"
+                    onChange={(e) => set("masquerade", e.target.value)}
                   />
                 )}
 
@@ -540,13 +596,41 @@ export function InboundFormModal({
                   </div>
                 )}
 
+                {form.securityType === "shadowtls" && (
+                  <div className="space-y-3 rounded-xl border border-divider p-3">
+                    <p className="text-sm font-medium">ShadowTLS v3</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <Input
+                        description="握手转发到该网站的 443 端口，需支持 TLS1.3"
+                        label="伪装网站"
+                        value={form.sni}
+                        variant="bordered"
+                        onChange={(e) => set("sni", e.target.value)}
+                      />
+                      <Input
+                        label="ShadowTLS 密码"
+                        placeholder="留空自动生成"
+                        value={form.shadowTlsPassword}
+                        variant="bordered"
+                        onChange={(e) =>
+                          set("shadowTlsPassword", e.target.value)
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {form.securityType === "tls" && (
                   <div className="space-y-3 rounded-xl border border-divider p-3">
                     <p className="text-sm font-medium">TLS</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <Input
                         label="域名 (SNI)"
-                        placeholder="node.example.com"
+                        placeholder={
+                          sniOptionalProtocols.includes(form.protocol)
+                            ? "留空使用 www.bing.com（自签）"
+                            : "node.example.com"
+                        }
                         value={form.sni}
                         variant="bordered"
                         onChange={(e) => set("sni", e.target.value)}
@@ -584,13 +668,16 @@ export function InboundFormModal({
                         />
                       </div>
                     )}
-                    <Input
-                      label="ALPN（可选）"
-                      placeholder="h2,http/1.1"
-                      value={form.alpn}
-                      variant="bordered"
-                      onChange={(e) => set("alpn", e.target.value)}
-                    />
+                    {form.protocol !== "hysteria2" &&
+                      form.protocol !== "tuic" && (
+                        <Input
+                          label="ALPN（可选）"
+                          placeholder="h2,http/1.1"
+                          value={form.alpn}
+                          variant="bordered"
+                          onChange={(e) => set("alpn", e.target.value)}
+                        />
+                      )}
                   </div>
                 )}
 
@@ -639,6 +726,10 @@ export function InboundFormModal({
                       </div>
                       <div className="flex items-start gap-2">
                         <Switch
+                          isDisabled={
+                            form.kernelType !== "xray" &&
+                            !form.acceptProxyProtocol
+                          }
                           isSelected={form.acceptProxyProtocol}
                           size="sm"
                           onValueChange={(v) => set("acceptProxyProtocol", v)}
@@ -648,8 +739,9 @@ export function InboundFormModal({
                             获取真实客户端 IP（PROXY protocol）
                           </p>
                           <p className="text-xs text-default-500">
-                            中转转发会附带客户端地址，落地内核日志可见真实
-                            IP。开启后直连将无法使用，自动变为仅中转
+                            {form.kernelType === "xray"
+                              ? "中转转发会附带客户端地址，落地内核日志可见真实 IP。开启后直连将无法使用，自动变为仅中转"
+                              : "目前只有 Xray 内核支持"}
                           </p>
                         </div>
                       </div>

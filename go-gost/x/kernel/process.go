@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,12 +21,17 @@ const (
 	startupProbeIn = 1500 * time.Millisecond
 )
 
+// ansiEscape matches terminal colour sequences; shadow-tls and sing-box
+// colour their output even when it is not a TTY.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
 type logRing struct {
 	mu    sync.Mutex
 	lines []string
 }
 
 func (r *logRing) add(line string) {
+	line = ansiEscape.ReplaceAllString(line, "")
 	if len(line) > maxLogLineLen {
 		line = line[:maxLogLineLen] + "…"
 	}

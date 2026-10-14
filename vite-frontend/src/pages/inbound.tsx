@@ -94,12 +94,24 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
   if (s.uuid) rows.push(["UUID", s.uuid]);
   if (s.flow) rows.push(["Flow", s.flow]);
   if (s.method) rows.push(["加密方式", s.method]);
-  if (s.password) rows.push(["密码", s.password]);
+  if (s.password)
+    rows.push([item.protocol === "snell" ? "PSK" : "密码", s.password]);
+  if (s.snellVersion) rows.push(["Snell 版本", `v${s.snellVersion}`]);
+  if (s.masquerade) rows.push(["伪装网站", s.masquerade]);
   if (t.path) rows.push(["路径", t.path]);
   if (t.host) rows.push(["Host", t.host]);
   if (t.serviceName) rows.push(["serviceName", t.serviceName]);
   if (t.mode) rows.push(["XHTTP 模式", t.mode]);
-  if (sec.sni) rows.push(["SNI", sec.sni]);
+  if (sec.sni) {
+    rows.push([
+      sec.type === "shadowtls" ? "ShadowTLS 伪装网站" : "SNI",
+      sec.sni,
+    ]);
+  }
+  if (sec.shadowTlsPassword) {
+    rows.push(["ShadowTLS 密码", sec.shadowTlsPassword]);
+    rows.push(["ShadowTLS 版本", "3"]);
+  }
   if (sec.fingerprint) rows.push(["指纹 (fp)", sec.fingerprint]);
   if (sec.realityPublicKey)
     rows.push(["Reality 公钥 (pbk)", sec.realityPublicKey]);

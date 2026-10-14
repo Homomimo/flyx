@@ -316,3 +316,77 @@ func TestInboundProxyProtocolAndWhitelistContract(t *testing.T) {
 		t.Fatal("relay forward must stop sending PROXY protocol")
 	}
 }
+
+func TestPhase3KernelsContract(t *testing.T) {
+	secret := "contract-jwt-secret"
+	router, r := setupContractRouter(t, secret)
+	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	nodeID := seedKernelNode(t, r, "landing")
+
+	// Offline node: kernels are registered, versions resolved.
+	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"snell","version":"4.1.1"}`)
+	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"singbox"}`)
+	if got := mustQueryString(t, r, `SELECT version FROM node_kernel WHERE kernel_type = 'snell'`); got != "4.1.1" {
+		t.Fatalf("snell version: %q", got)
+	}
+	if got := mustQueryString(t, r, `SELECT version FROM node_kernel WHERE kernel_type = 'singbox'`); got != "latest" {
+		t.Fatalf("sing-box version: %q", got)
+	}
+
+	create := func(body string) (int64, string) {
+		out := kernelContractPost(t, router, admin, "/api/v1/inbound/create", body)
+		if out.Code != 0 {
+			return 0, out.Msg
+		}
+		return int64(out.Data.(map[string]interface{})["id"].(float64)), out.Msg
+	}
+	n := jsonInt64(nodeID)
+
+	if _, msg := create(`{"nodeId":` + n + `,"kernelType":"snell","name":"s5","protocol":"snell","port":6160,"settings":{"snellVersion":5}}`); !strings.Contains(msg, "4.1.1") {
+		t.Fatalf("v5 inbound on a 4.1.1 binary must be rejected: %s", msg)
+	}
+	snellID, msg := create(`{"nodeId":` + n + `,"kernelType":"snell","name":"s4","protocol":"snell","port":6160,"settings":{"snellVersion":4},"security":{"type":"shadowtls","sni":"www.microsoft.com"}}`)
+	if snellID == 0 {
+		t.Fatalf("snell v4 + shadowtls: %s", msg)
+	}
+	hyID, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"hy2","protocol":"hysteria2","port":443,"transport":{"type":"quic"},"security":{"type":"tls"}}`)
+	if hyID == 0 {
+		t.Fatalf("hysteria2: %s", msg)
+	}
+	if _, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"pp","protocol":"vless","port":9443,"acceptProxyProtocol":true,"security":{"type":"reality"}}`); !strings.Contains(msg, "Xray") {
+		t.Fatalf("PROXY protocol must be Xray-only: %s", msg)
+	}
+	if _, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"dup","protocol":"anytls","port":6160,"security":{"type":"tls"}}`); !strings.Contains(msg, "已被") {
+		t.Fatalf("port shared with the snell inbound must be rejected: %s", msg)
+	}
+	if got := mustQueryString(t, r, `SELECT settings FROM node_inbound WHERE id = ?`, snellID); !strings.Contains(got, `"backendPort"`) {
+		t.Fatalf("shadowtls snell needs a backend port: %s", got)
+	}
+
+	// Upgrading the binary is fine; downgrading below a v5 inbound is not.
+	if out := kernelContractPost(t, router, admin, "/api/v1/inbound/update",
+		`{"id":`+jsonInt64(snellID)+`,"name":"s4","protocol":"snell","port":6160,"settings":{"snellVersion":4},"security":{"type":"shadowtls","sni":"www.microsoft.com"}}`); out.Code != 0 {
+		t.Fatalf("update: %+v", out)
+	}
+
+	share := kernelContractPost(t, router, admin, "/api/v1/inbound/share", `{"id":`+jsonInt64(snellID)+`}`)
+	entry := share.Data.([]interface{})[0].(map[string]interface{})
+	if entry["uri"] != "" || !strings.Contains(entry["surge"].(string), "shadow-tls-version=3") || !strings.Contains(entry["surge"].(string), "version=4") {
+		t.Fatalf("snell share must be a Surge line: %v", entry)
+	}
+	hyShare := kernelContractPost(t, router, admin, "/api/v1/inbound/share", `{"id":`+jsonInt64(hyID)+`}`)
+	if !strings.HasPrefix(hyShare.Data.([]interface{})[0].(map[string]interface{})["uri"].(string), "hysteria2://") {
+		t.Fatalf("hy2 share: %+v", hyShare)
+	}
+
+	info := kernelContractPost(t, router, admin, "/api/v1/inbound/sub/info", `{}`)
+	token := info.Data.(map[string]interface{})["token"].(string)
+	surge := getSub(t, router, "/api/v1/open_api/sub/"+token+"?format=surge", "").Body.String()
+	if !strings.Contains(surge, "= snell,") || !strings.Contains(surge, "= hysteria2,") {
+		t.Fatalf("surge sub: %s", surge)
+	}
+	clash := getSub(t, router, "/api/v1/open_api/sub/"+token, "clash-verge").Body.String()
+	if strings.Contains(clash, "snell") || !strings.Contains(clash, `type: "hysteria2"`) {
+		t.Fatalf("clash sub: %s", clash)
+	}
+}

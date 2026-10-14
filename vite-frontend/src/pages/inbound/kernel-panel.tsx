@@ -171,6 +171,9 @@ export function KernelPanel({
   };
 
   const installNodeOptions = eligibleNodes(nodes);
+  const pinnedVersions =
+    caps?.kernels.find((k) => k.type === installForm.kernelType)?.versions ??
+    [];
 
   return (
     <div className="mb-6">
@@ -342,6 +345,10 @@ export function KernelPanel({
                       setInstallForm((p) => ({
                         ...p,
                         kernelType: String(Array.from(keys)[0] ?? "xray"),
+                        version:
+                          caps?.kernels.find(
+                            (k) => k.type === String(Array.from(keys)[0]),
+                          )?.versions?.[0] ?? "latest",
                       }))
                     }
                   >
@@ -356,15 +363,42 @@ export function KernelPanel({
                       </SelectItem>
                     ))}
                   </Select>
-                  <Input
-                    description="latest 表示最新版，也可填写具体版本号，如 26.3.27"
-                    label="版本"
-                    value={installForm.version}
-                    variant="bordered"
-                    onChange={(e) =>
-                      setInstallForm((p) => ({ ...p, version: e.target.value }))
-                    }
-                  />
+                  {pinnedVersions.length > 0 ? (
+                    <Select
+                      description="官方渠道不提供校验文件，仅开放已核对 SHA256 的版本"
+                      label="版本"
+                      selectedKeys={[
+                        pinnedVersions.includes(installForm.version)
+                          ? installForm.version
+                          : pinnedVersions[0],
+                      ]}
+                      onSelectionChange={(keys) =>
+                        setInstallForm((p) => ({
+                          ...p,
+                          version: String(Array.from(keys)[0] ?? ""),
+                        }))
+                      }
+                    >
+                      {pinnedVersions.map((v) => (
+                        <SelectItem key={v} textValue={v}>
+                          {v}
+                        </SelectItem>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Input
+                      description="latest 表示最新版，也可填写具体版本号"
+                      label="版本"
+                      value={installForm.version}
+                      variant="bordered"
+                      onChange={(e) =>
+                        setInstallForm((p) => ({
+                          ...p,
+                          version: e.target.value,
+                        }))
+                      }
+                    />
+                  )}
                 </div>
               </ModalBody>
               <ModalFooter>

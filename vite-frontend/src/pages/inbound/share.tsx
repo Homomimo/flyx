@@ -158,31 +158,53 @@ export function ShareModal({
                         </p>
                       </div>
                       <div className="flex gap-1 shrink-0">
-                        <Button
-                          isIconOnly
-                          aria-label="二维码"
-                          size="sm"
-                          variant="flat"
-                          onPress={() =>
-                            setQrFor(qrFor === e.uri ? null : e.uri)
-                          }
-                        >
-                          <QrCode className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          color="primary"
-                          size="sm"
-                          startContent={<Copy className="w-3.5 h-3.5" />}
-                          variant="flat"
-                          onPress={() => copyText(e.uri, "链接已复制")}
-                        >
-                          复制
-                        </Button>
+                        {e.surge && (
+                          <Button
+                            size="sm"
+                            startContent={<Copy className="w-3.5 h-3.5" />}
+                            variant="flat"
+                            onPress={() =>
+                              copyText(e.surge, "Surge 配置行已复制")
+                            }
+                          >
+                            Surge
+                          </Button>
+                        )}
+                        {e.uri && (
+                          <Button
+                            isIconOnly
+                            aria-label="二维码"
+                            size="sm"
+                            variant="flat"
+                            onPress={() =>
+                              setQrFor(qrFor === e.uri ? null : e.uri)
+                            }
+                          >
+                            <QrCode className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {e.uri && (
+                          <Button
+                            color="primary"
+                            size="sm"
+                            startContent={<Copy className="w-3.5 h-3.5" />}
+                            variant="flat"
+                            onPress={() => copyText(e.uri, "链接已复制")}
+                          >
+                            复制
+                          </Button>
+                        )}
                       </div>
                     </div>
                     <p className="text-xs font-mono break-all text-default-600 line-clamp-2">
-                      {e.uri}
+                      {e.uri || e.surge}
                     </p>
+                    {!e.uri && (
+                      <p className="text-xs text-warning">
+                        该协议没有通用分享链接，请复制 Surge 配置行或使用 Surge
+                        订阅
+                      </p>
+                    )}
                     {qrFor === e.uri && (
                       <div className="flex justify-center pt-1">
                         <QrImage text={e.uri} />

@@ -10,6 +10,16 @@ export const PROTOCOL_LABELS: Record<string, string> = {
   vmess: "VMess",
   trojan: "Trojan",
   shadowsocks: "Shadowsocks",
+  hysteria2: "Hysteria2",
+  tuic: "TUIC v5",
+  anytls: "AnyTLS",
+  snell: "Snell",
+};
+
+export const KERNEL_LABELS: Record<string, string> = {
+  xray: "Xray",
+  singbox: "sing-box",
+  snell: "Snell",
 };
 
 export const TRANSPORT_LABELS: Record<string, string> = {
@@ -17,12 +27,14 @@ export const TRANSPORT_LABELS: Record<string, string> = {
   ws: "WebSocket",
   grpc: "gRPC",
   xhttp: "XHTTP",
+  quic: "QUIC",
 };
 
 export const SECURITY_LABELS: Record<string, string> = {
   none: "无",
   tls: "TLS",
   reality: "Reality",
+  shadowtls: "ShadowTLS v3",
 };
 
 export const KERNEL_STATUS: Record<
@@ -47,6 +59,9 @@ export interface InboundForm {
   flowVision: boolean;
   password: string;
   method: string;
+  snellVersion: string;
+  masquerade: string;
+  backendPort: number;
   transportType: string;
   path: string;
   host: string;
@@ -62,6 +77,7 @@ export interface InboundForm {
   realityDest: string;
   realityPrivateKey: string;
   realityShortIds: string;
+  shadowTlsPassword: string;
   shareHost: string;
   remark: string;
   extra: string;
@@ -76,6 +92,7 @@ export interface Preset {
   key: string;
   label: string;
   description: string;
+  kernel?: string; // only offered for this kernel
   protocol: string;
   transport: string;
   security: string;
@@ -127,7 +144,78 @@ export const PRESETS: Preset[] = [
     security: "tls",
     needsDomain: true,
   },
+  {
+    key: "hysteria2",
+    label: "Hysteria2",
+    description: "基于 QUIC，弱网/高延迟线路表现好（自签证书）",
+    kernel: "singbox",
+    protocol: "hysteria2",
+    transport: "quic",
+    security: "tls",
+  },
+  {
+    key: "tuic",
+    label: "TUIC v5",
+    description: "基于 QUIC，BBR 拥塞控制（自签证书）",
+    kernel: "singbox",
+    protocol: "tuic",
+    transport: "quic",
+    security: "tls",
+  },
+  {
+    key: "anytls",
+    label: "AnyTLS",
+    description: "TLS 内多路复用，减少 TLS-in-TLS 特征",
+    kernel: "singbox",
+    protocol: "anytls",
+    transport: "tcp",
+    security: "tls",
+  },
+  {
+    key: "ss2022-shadowtls",
+    label: "SS2022 + ShadowTLS",
+    description: "握手伪装成访问真实网站（仅 TCP）",
+    kernel: "singbox",
+    protocol: "shadowsocks",
+    transport: "tcp",
+    security: "shadowtls",
+  },
+  {
+    key: "snell",
+    label: "Snell",
+    description: "Surge 专用协议",
+    kernel: "snell",
+    protocol: "snell",
+    transport: "tcp",
+    security: "none",
+  },
+  {
+    key: "snell-shadowtls",
+    label: "Snell + ShadowTLS",
+    description: "Surge 专用，握手伪装成访问真实网站",
+    kernel: "snell",
+    protocol: "snell",
+    transport: "tcp",
+    security: "shadowtls",
+  },
 ];
+
+/** Presets the given kernel can serve with its exact transport + security. */
+export function presetsFor(
+  caps: KernelCapabilitiesApiData | null,
+  kernelType: string,
+): Preset[] {
+  return PRESETS.filter((p) => {
+    if (p.kernel && p.kernel !== kernelType) return false;
+    const cap = protocolCap(caps, kernelType, p.protocol);
+
+    return Boolean(
+      cap?.transports.some(
+        (t) => t.type === p.transport && t.securities.includes(p.security),
+      ),
+    );
+  });
+}
 
 export function emptyForm(
   caps: KernelCapabilitiesApiData | null,
@@ -144,6 +232,9 @@ export function emptyForm(
     flowVision: true,
     password: "",
     method: caps?.defaults.ssMethod ?? "2022-blake3-aes-128-gcm",
+    snellVersion: "",
+    masquerade: "",
+    backendPort: 0,
     transportType: "tcp",
     path: "",
     host: "",
@@ -159,6 +250,7 @@ export function emptyForm(
     realityDest: "",
     realityPrivateKey: "",
     realityShortIds: "",
+    shadowTlsPassword: "",
     shareHost: "",
     remark: "",
     extra: "",
@@ -176,6 +268,16 @@ export function applyPreset(
   caps: KernelCapabilitiesApiData | null,
 ): InboundForm {
   const realitySni = caps?.defaults.realitySni ?? "";
+  // A borrowed public site (Reality / ShadowTLS) must not leak into a TLS
+  // SNI and vice versa; QUIC/AnyTLS fall back to the server default.
+  const borrowed = (t: string) => t === "reality" || t === "shadowtls";
+  let sni = form.sni;
+
+  if (borrowed(preset.security)) {
+    sni = borrowed(form.securityType) && form.sni ? form.sni : realitySni;
+  } else if (borrowed(form.securityType)) {
+    sni = "";
+  }
 
   return {
     ...form,
@@ -183,14 +285,7 @@ export function applyPreset(
     transportType: preset.transport,
     securityType: preset.security,
     flowVision: Boolean(preset.vision),
-    sni:
-      preset.security === "reality"
-        ? form.sni && form.securityType === "reality"
-          ? form.sni
-          : realitySni
-        : form.securityType === "reality"
-          ? ""
-          : form.sni,
+    sni,
     name: form.name || preset.label,
   };
 }
@@ -208,6 +303,11 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     flowVision: Boolean(item.settings.flow),
     password: item.settings.password ?? "",
     method: item.settings.method ?? "",
+    snellVersion: item.settings.snellVersion
+      ? String(item.settings.snellVersion)
+      : "",
+    masquerade: item.settings.masquerade ?? "",
+    backendPort: item.settings.backendPort ?? 0,
     transportType: item.transport.type || "tcp",
     path: item.transport.path ?? "",
     host: item.transport.host ?? "",
@@ -223,6 +323,7 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     realityDest: item.security.realityDest ?? "",
     realityPrivateKey: item.security.realityPrivateKey ?? "",
     realityShortIds: (item.security.realityShortIds ?? []).join(","),
+    shadowTlsPassword: item.security.shadowTlsPassword ?? "",
     shareHost: item.shareHost,
     remark: item.remark,
     extra: item.extra,
@@ -233,6 +334,19 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     enabled: item.enabled,
   };
 }
+
+export const uuidProtocols = ["vless", "vmess", "tuic"];
+export const passwordProtocols = [
+  "trojan",
+  "shadowsocks",
+  "hysteria2",
+  "tuic",
+  "anytls",
+  "snell",
+];
+
+/** TLS on these protocols defaults its SNI server-side, so it is optional. */
+export const sniOptionalProtocols = ["hysteria2", "tuic", "anytls"];
 
 function splitList(v: string): string[] {
   return v
@@ -250,9 +364,8 @@ export function visionAllowed(form: InboundForm): boolean {
 }
 
 export function toPayload(form: InboundForm): InboundMutationPayload {
-  const usesUUID = form.protocol === "vless" || form.protocol === "vmess";
-  const usesPassword =
-    form.protocol === "trojan" || form.protocol === "shadowsocks";
+  const usesUUID = uuidProtocols.includes(form.protocol);
+  const usesPassword = passwordProtocols.includes(form.protocol);
 
   return {
     id: form.id,
@@ -268,6 +381,13 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
         visionAllowed(form) && form.flowVision ? "xtls-rprx-vision" : undefined,
       password: usesPassword ? form.password.trim() : undefined,
       method: form.protocol === "shadowsocks" ? form.method : undefined,
+      snellVersion:
+        form.protocol === "snell" && form.snellVersion
+          ? Number(form.snellVersion)
+          : undefined,
+      masquerade:
+        form.protocol === "hysteria2" ? form.masquerade.trim() : undefined,
+      backendPort: form.backendPort || undefined,
     },
     transport: {
       type: form.transportType,
@@ -289,6 +409,10 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
       realityShortIds: form.realityShortIds.trim()
         ? splitList(form.realityShortIds)
         : undefined,
+      shadowTlsPassword:
+        form.securityType === "shadowtls"
+          ? form.shadowTlsPassword.trim() || undefined
+          : undefined,
     },
     extra: form.extra.trim(),
     shareHost: form.shareHost.trim(),
@@ -314,8 +438,19 @@ export function protocolCap(
 export function describeInbound(item: InboundApiItem): string {
   const parts = [PROTOCOL_LABELS[item.protocol] ?? item.protocol];
 
-  if (item.protocol !== "shadowsocks") {
+  const implicitTransport = [
+    "shadowsocks",
+    "snell",
+    "hysteria2",
+    "tuic",
+    "anytls",
+  ];
+
+  if (!implicitTransport.includes(item.protocol)) {
     parts.push(TRANSPORT_LABELS[item.transport.type] ?? item.transport.type);
+  }
+  if (item.protocol === "snell" && item.settings.snellVersion) {
+    parts[0] = `Snell v${item.settings.snellVersion}`;
   }
   if (item.security.type && item.security.type !== "none") {
     parts.push(SECURITY_LABELS[item.security.type] ?? item.security.type);

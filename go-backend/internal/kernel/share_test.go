@@ -179,6 +179,12 @@ func TestSharePhase3(t *testing.T) {
 			t.Fatalf("missing %q", want)
 		}
 	}
+	for _, e := range eps[:2] { // hysteria2, tuic
+		o, _ := singboxOutbound(e)
+		if _, bad := o["tls"].(map[string]interface{})["utls"]; bad {
+			t.Fatalf("sing-box rejects uTLS on QUIC outbound %s", e.Name)
+		}
+	}
 	if strings.Contains(out[strings.Index(out, "### clash"):strings.Index(out, "### singbox")], "snell") {
 		t.Fatal("snell v5 must not be offered to Mihomo")
 	}

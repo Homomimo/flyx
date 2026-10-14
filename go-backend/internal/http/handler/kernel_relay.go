@@ -45,6 +45,8 @@ type shareEntry struct {
 	Host string `json:"host"`
 	Port int    `json:"port"`
 	URI  string `json:"uri"`
+	// Surge is the Surge [Proxy] line; for Snell it is the only export.
+	Surge string `json:"surge"`
 }
 
 func relayMode(tunnelType int) string {
@@ -481,7 +483,8 @@ func (h *Handler) inboundShare(w http.ResponseWriter, r *http.Request) {
 	out := make([]shareEntry, 0, len(endpoints))
 	for i, e := range endpoints {
 		uri, _ := kernel.ShareURI(e)
-		out = append(out, shareEntry{Name: e.Name, Kind: kinds[i], Host: e.Host, Port: e.Port, URI: uri})
+		surge, _ := kernel.SurgeLine(e)
+		out = append(out, shareEntry{Name: e.Name, Kind: kinds[i], Host: e.Host, Port: e.Port, URI: uri, Surge: surge})
 	}
 	response.WriteJSON(w, response.OK(out))
 }
