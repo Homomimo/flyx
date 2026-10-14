@@ -34,6 +34,7 @@ type NodeInbound struct {
 	Extra         string `gorm:"type:text;not null;default:''"`
 	ShareHost     string `gorm:"column:share_host;type:varchar(255);not null;default:''"`
 	Remark        string `gorm:"type:text;not null;default:''"`
+	RelayOnly     int    `gorm:"column:relay_only;not null;default:0"`
 	Enabled       int    `gorm:"not null;default:1"`
 	UploadBytes   int64  `gorm:"column:upload_bytes;not null;default:0"`
 	DownloadBytes int64  `gorm:"column:download_bytes;not null;default:0"`
@@ -58,3 +59,18 @@ type NodeInboundCounter struct {
 }
 
 func (NodeInboundCounter) TableName() string { return "node_inbound_counter" }
+
+// NodeInboundRelay links an inbound to a forward whose entry clients use
+// instead of the landing node itself. Managed relays were created by the
+// panel for this purpose and are deleted together with the inbound.
+type NodeInboundRelay struct {
+	ID          int64  `gorm:"primaryKey;autoIncrement"`
+	InboundID   int64  `gorm:"column:inbound_id;not null;index"`
+	ForwardID   int64  `gorm:"column:forward_id;not null;uniqueIndex"`
+	Name        string `gorm:"type:varchar(100);not null;default:''"`
+	ShareHost   string `gorm:"column:share_host;type:varchar(255);not null;default:''"`
+	Managed     int    `gorm:"not null;default:1"`
+	CreatedTime int64  `gorm:"column:created_time;not null"`
+}
+
+func (NodeInboundRelay) TableName() string { return "node_inbound_relay" }

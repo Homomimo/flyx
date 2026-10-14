@@ -28,6 +28,7 @@ var sensitiveConfigKeys = map[string]struct{}{
 	"license_machine_id":    {},
 	"machine_fingerprint":   {},
 	"cloudflare_secret_key": {},
+	"node_sub_token":        {},
 }
 
 var systemManagedConfigKeys = map[string]struct{}{
@@ -36,6 +37,7 @@ var systemManagedConfigKeys = map[string]struct{}{
 	"license_machine_id":  {},
 	"is_commercial":       {},
 	"machine_fingerprint": {},
+	"node_sub_token":      {},
 }
 
 func PolicyForConfig(name string) ConfigAccessPolicy {

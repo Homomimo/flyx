@@ -76,6 +76,8 @@ type inboundView struct {
 	Extra         string             `json:"extra"`
 	ShareHost     string             `json:"shareHost"`
 	Remark        string             `json:"remark"`
+	RelayOnly     bool               `json:"relayOnly"`
+	RelayCount    int                `json:"relayCount"`
 	Enabled       bool               `json:"enabled"`
 	UploadBytes   int64              `json:"uploadBytes"`
 	DownloadBytes int64              `json:"downloadBytes"`
@@ -104,6 +106,7 @@ type inboundRequest struct {
 	Extra      string           `json:"extra"`
 	ShareHost  string           `json:"shareHost"`
 	Remark     string           `json:"remark"`
+	RelayOnly  bool             `json:"relayOnly"`
 	Enabled    *bool            `json:"enabled"`
 }
 
@@ -386,6 +389,11 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("节点卸载失败: "+err.Error()+"（可强制删除面板记录）"))
 			return
 		}
+		if rows, lerr := h.repo.ListNodeInboundsByKernel(k.ID); lerr == nil {
+			for _, row := range rows {
+				h.removeInboundRelays(row.ID)
+			}
+		}
 		err = h.repo.DeleteNodeKernel(k.ID)
 		unlock()
 		if err != nil {
@@ -447,6 +455,15 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	relays, err := h.repo.ListInboundRelays(0)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	relayCounts := make(map[int64]int)
+	for _, rel := range relays {
+		relayCounts[rel.InboundID]++
+	}
 	kernelByID := make(map[int64]model.NodeKernel, len(kernels))
 	for _, k := range kernels {
 		kernelByID[k.ID] = k
@@ -481,6 +498,8 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			Extra:         row.Extra,
 			ShareHost:     row.ShareHost,
 			Remark:        row.Remark,
+			RelayOnly:     row.RelayOnly == 1,
+			RelayCount:    relayCounts[row.ID],
 			Enabled:       row.Enabled == 1,
 			UploadBytes:   row.UploadBytes,
 			DownloadBytes: row.DownloadBytes,
@@ -603,6 +622,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	row.Name = req.Name
 	row.ShareHost = req.ShareHost
 	row.Remark = strings.TrimSpace(req.Remark)
+	row.RelayOnly = boolToInt(req.RelayOnly)
 	if req.Enabled != nil {
 		row.Enabled = boolToInt(*req.Enabled)
 	}
@@ -656,6 +676,7 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
 		return
 	}
+	h.removeInboundRelays(id)
 	if err := h.repo.DeleteNodeInbound(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

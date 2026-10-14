@@ -50,6 +50,9 @@ import type {
   KernelStateApiData,
   InboundApiItem,
   InboundMutationPayload,
+  InboundShareEntry,
+  InboundRelayApiItem,
+  SubInfoApiData,
 } from "./types";
 
 import axios from "axios";
@@ -648,3 +651,18 @@ export const resetInboundTraffic = (id: number) =>
   Network.post("/inbound/reset-traffic", { id });
 export const regenerateInbound = (id: number) =>
   Network.post("/inbound/regenerate", { id });
+export const getInboundShare = (id: number) =>
+  Network.post<InboundShareEntry[]>("/inbound/share", { id });
+export const getSubInfo = (reset = false) =>
+  Network.post<SubInfoApiData>("/inbound/sub/info", { reset });
+export const getInboundRelays = (inboundId: number) =>
+  Network.post<InboundRelayApiItem[]>("/inbound/relay/list", { inboundId });
+export const createInboundRelay = (data: {
+  inboundId: number;
+  tunnelId: number;
+  inPort?: number;
+  name?: string;
+  shareHost?: string;
+}) => Network.post<{ id: number }>("/inbound/relay/create", data);
+export const deleteInboundRelay = (id: number, force = false) =>
+  Network.post("/inbound/relay/delete", { id, force });

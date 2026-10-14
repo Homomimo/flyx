@@ -1,0 +1,269 @@
+package contract_test
+
+import (
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"go-backend/internal/auth"
+	"go-backend/internal/store/repo"
+)
+
+// seedInboundOnNode creates a kernel + inbound directly, bypassing dispatch.
+func seedInboundOnNode(t *testing.T, router http.Handler, r *repo.Repository, admin string, nodeID int64, body string) int64 {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	if mustQueryInt(t, r, `SELECT COUNT(*) FROM node_kernel WHERE node_id = ?`, nodeID) == 0 {
+		if err := r.DB().Exec(`INSERT INTO node_kernel(node_id, kernel_type, version, status, created_time, updated_time) VALUES(?, 'xray', 'latest', 'pending', ?, ?)`, nodeID, now, now).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := kernelContractPost(t, router, admin, "/api/v1/inbound/create", body)
+	if out.Code != 0 {
+		t.Fatalf("create inbound: %+v", out)
+	}
+	return int64(out.Data.(map[string]interface{})["id"].(float64))
+}
+
+func seedRelayForward(t *testing.T, r *repo.Repository, tunnelType int, entryNodeID, exitNodeID int64, entryPort int, inboundID int64) (tunnelID, forwardID int64) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	if err := r.DB().Exec(`
+		INSERT INTO tunnel(name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, in_ip, inx)
+		VALUES('香港中转', 1.0, ?, 'tls', 99999, ?, ?, 1, NULL, 0)`, tunnelType, now, now).Error; err != nil {
+		t.Fatal(err)
+	}
+	tunnelID = mustLastInsertID(t, r, "tunnel")
+	if err := r.DB().Exec(`INSERT INTO chain_tunnel(tunnel_id, chain_type, node_id, port, strategy, inx, protocol) VALUES(?, 1, ?, NULL, 'round', 1, 'tls')`, tunnelID, entryNodeID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if exitNodeID > 0 {
+		if err := r.DB().Exec(`INSERT INTO chain_tunnel(tunnel_id, chain_type, node_id, port, strategy, inx, protocol) VALUES(?, 3, ?, 31000, 'round', 1, 'tls')`, tunnelID, exitNodeID).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if inboundID == 0 {
+		return tunnelID, 0
+	}
+	if err := r.DB().Exec(`
+		INSERT INTO forward(user_id, user_name, name, tunnel_id, remote_addr, strategy, in_flow, out_flow, created_time, updated_time, status, inx)
+		VALUES(1, 'admin_user', 'relay-fwd', ?, '203.0.113.10:443', 'fifo', 0, 0, ?, ?, 1, 0)`, tunnelID, now, now).Error; err != nil {
+		t.Fatal(err)
+	}
+	forwardID = mustLastInsertID(t, r, "forward")
+	if err := r.DB().Exec(`INSERT INTO forward_port(forward_id, node_id, port) VALUES(?, ?, ?)`, forwardID, entryNodeID, entryPort).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DB().Exec(`INSERT INTO node_inbound_relay(inbound_id, forward_id, name, share_host, managed, created_time) VALUES(?, ?, '香港中转 → 东京', '', 1, ?)`, inboundID, forwardID, now).Error; err != nil {
+		t.Fatal(err)
+	}
+	return tunnelID, forwardID
+}
+
+func getSub(t *testing.T, router http.Handler, path, ua string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	return res
+}
+
+func TestInboundShareAndSubscriptionContract(t *testing.T) {
+	secret := "contract-jwt-secret"
+	router, r := setupContractRouter(t, secret)
+	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	landing := seedKernelNode(t, r, "东京落地")
+	relayNode := seedKernelNode(t, r, "香港中转")
+	if err := r.DB().Exec(`UPDATE node SET server_ip = '198.51.100.7' WHERE id = ?`, relayNode).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	inboundID := seedInboundOnNode(t, router, r, admin, landing,
+		`{"nodeId":`+jsonInt64(landing)+`,"kernelType":"xray","name":"东京","protocol":"vless","port":443,"settings":{"flow":"xtls-rprx-vision"},"security":{"type":"reality"}}`)
+	seedInboundOnNode(t, router, r, admin, landing,
+		`{"nodeId":`+jsonInt64(landing)+`,"kernelType":"xray","name":"本机","protocol":"shadowsocks","listen":"127.0.0.1","port":8388}`)
+	_, forwardID := seedRelayForward(t, r, 1, relayNode, 0, 30005, inboundID)
+
+	share := kernelContractPost(t, router, admin, "/api/v1/inbound/share", `{"id":`+jsonInt64(inboundID)+`}`)
+	items, _ := share.Data.([]interface{})
+	if share.Code != 0 || len(items) != 2 {
+		t.Fatalf("share should list direct + relay: %+v", share)
+	}
+	direct, relay := items[0].(map[string]interface{}), items[1].(map[string]interface{})
+	if direct["kind"] != "direct" || !strings.Contains(direct["uri"].(string), "@203.0.113.10:443?") {
+		t.Fatalf("direct entry: %v", direct)
+	}
+	if relay["kind"] != "relay" || !strings.Contains(relay["uri"].(string), "@198.51.100.7:30005?") {
+		t.Fatalf("relay entry must use the relay entry address: %v", relay)
+	}
+
+	info := kernelContractPost(t, router, admin, "/api/v1/inbound/sub/info", `{}`)
+	token := info.Data.(map[string]interface{})["token"].(string)
+	if len(token) != 32 {
+		t.Fatalf("token: %q", token)
+	}
+	again := kernelContractPost(t, router, admin, "/api/v1/inbound/sub/info", `{}`)
+	if again.Data.(map[string]interface{})["token"] != token {
+		t.Fatal("token must be stable until reset")
+	}
+
+	t.Run("token is not readable through config endpoints by users", func(t *testing.T) {
+		seedContractUser(t, r, 2, "normal_user", 1, 1)
+		userToken, _ := auth.GenerateToken(2, "normal_user", 1, secret)
+		out := kernelContractPost(t, router, userToken, "/api/v1/config/get", `{"name":"node_sub_token"}`)
+		if out.Code == 0 {
+			t.Fatalf("subscription token leaked: %+v", out)
+		}
+		out = kernelContractPost(t, router, admin, "/api/v1/config/update-single", `{"name":"node_sub_token","value":"`+strings.Repeat("a", 32)+`"}`)
+		if mustQueryString(t, r, `SELECT value FROM vite_config WHERE name = 'node_sub_token'`) != token {
+			t.Fatalf("token must not be writable through config update: %+v", out)
+		}
+	})
+
+	t.Run("bad token is 404", func(t *testing.T) {
+		if res := getSub(t, router, "/api/v1/open_api/sub/"+strings.Repeat("0", 32), ""); res.Code != http.StatusNotFound {
+			t.Fatalf("status %d", res.Code)
+		}
+		if res := getSub(t, router, "/api/v1/open_api/sub/", ""); res.Code != http.StatusNotFound {
+			t.Fatalf("empty token status %d", res.Code)
+		}
+	})
+
+	t.Run("base64 default", func(t *testing.T) {
+		res := getSub(t, router, "/api/v1/open_api/sub/"+token, "v2rayN/7.0")
+		if res.Code != http.StatusOK {
+			t.Fatalf("status %d", res.Code)
+		}
+		raw, err := base64.StdEncoding.DecodeString(res.Body.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(raw)
+		hasSS := false
+		for _, line := range strings.Split(body, "\n") {
+			hasSS = hasSS || strings.HasPrefix(line, "ss://")
+		}
+		if strings.Count(body, "vless://") != 2 || hasSS {
+			t.Fatalf("loopback-only inbound must not be shared directly: %s", body)
+		}
+		if !strings.HasPrefix(res.Header().Get("Subscription-Userinfo"), "upload=0; download=0") {
+			t.Fatalf("userinfo header: %q", res.Header().Get("Subscription-Userinfo"))
+		}
+	})
+
+	t.Run("clash by user agent", func(t *testing.T) {
+		res := getSub(t, router, "/api/v1/open_api/sub/"+token, "clash-verge/v2")
+		if !strings.Contains(res.Body.String(), "proxy-groups:") || !strings.Contains(res.Header().Get("Content-Type"), "yaml") {
+			t.Fatalf("clash body: %s", res.Body.String())
+		}
+	})
+
+	t.Run("explicit format wins", func(t *testing.T) {
+		res := getSub(t, router, "/api/v1/open_api/sub/"+token+"?format=singbox", "clash-verge/v2")
+		if !strings.Contains(res.Body.String(), `"outbounds"`) {
+			t.Fatalf("singbox body: %s", res.Body.String())
+		}
+	})
+
+	t.Run("relay only hides the landing address", func(t *testing.T) {
+		upd := kernelContractPost(t, router, admin, "/api/v1/inbound/update",
+			`{"id":`+jsonInt64(inboundID)+`,"name":"东京","protocol":"vless","port":443,"relayOnly":true,"settings":{"flow":"xtls-rprx-vision"},"security":`+
+				mustQueryString(t, r, `SELECT security FROM node_inbound WHERE id = ?`, inboundID)+`}`)
+		if upd.Code != 0 {
+			t.Fatalf("update: %+v", upd)
+		}
+		raw, _ := base64.StdEncoding.DecodeString(getSub(t, router, "/api/v1/open_api/sub/"+token, "").Body.String())
+		if strings.Contains(string(raw), "203.0.113.10") || !strings.Contains(string(raw), "198.51.100.7:30005") {
+			t.Fatalf("relay-only sub: %s", raw)
+		}
+	})
+
+	t.Run("disabled relay forward is skipped", func(t *testing.T) {
+		if err := r.DB().Exec(`UPDATE forward SET status = 0 WHERE id = ?`, forwardID).Error; err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := base64.StdEncoding.DecodeString(getSub(t, router, "/api/v1/open_api/sub/"+token, "").Body.String())
+		if strings.Contains(string(raw), "198.51.100.7") {
+			t.Fatalf("paused relay must not be offered: %s", raw)
+		}
+		_ = r.DB().Exec(`UPDATE forward SET status = 1 WHERE id = ?`, forwardID).Error
+	})
+
+	t.Run("reset rotates token", func(t *testing.T) {
+		out := kernelContractPost(t, router, admin, "/api/v1/inbound/sub/info", `{"reset":true}`)
+		if out.Data.(map[string]interface{})["token"] == token {
+			t.Fatal("token not rotated")
+		}
+		if res := getSub(t, router, "/api/v1/open_api/sub/"+token, ""); res.Code != http.StatusNotFound {
+			t.Fatal("old token must stop working")
+		}
+	})
+
+	t.Run("relay list and forward deletion cascade", func(t *testing.T) {
+		list := kernelContractPost(t, router, admin, "/api/v1/inbound/relay/list", `{"inboundId":`+jsonInt64(inboundID)+`}`)
+		rels, _ := list.Data.([]interface{})
+		if len(rels) != 1 {
+			t.Fatalf("relays: %+v", list)
+		}
+		rel := rels[0].(map[string]interface{})
+		if rel["mode"] != "port" || rel["tunnelName"] != "香港中转" || len(rel["entries"].([]interface{})) != 1 {
+			t.Fatalf("relay view: %v", rel)
+		}
+		inList := kernelContractPost(t, router, admin, "/api/v1/inbound/list", `{}`)
+		for _, it := range inList.Data.([]interface{}) {
+			m := it.(map[string]interface{})
+			if int64(m["id"].(float64)) == inboundID && valueAsInt(m["relayCount"]) != 1 {
+				t.Fatalf("relayCount: %v", m["relayCount"])
+			}
+		}
+		if err := r.DeleteForwardCascade(forwardID); err != nil {
+			t.Fatal(err)
+		}
+		if mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound_relay`) != 0 {
+			t.Fatal("deleting the forward must drop the relay link")
+		}
+	})
+}
+
+func TestInboundRelayValidationContract(t *testing.T) {
+	secret := "contract-jwt-secret"
+	router, r := setupContractRouter(t, secret)
+	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	landing := seedKernelNode(t, r, "landing")
+	relayNode := seedKernelNode(t, r, "relay")
+	other := seedKernelNode(t, r, "other")
+
+	public := seedInboundOnNode(t, router, r, admin, landing,
+		`{"nodeId":`+jsonInt64(landing)+`,"kernelType":"xray","name":"pub","protocol":"vless","port":443,"security":{"type":"reality"}}`)
+	local := seedInboundOnNode(t, router, r, admin, landing,
+		`{"nodeId":`+jsonInt64(landing)+`,"kernelType":"xray","name":"local","protocol":"vless","listen":"127.0.0.1","port":444,"security":{"type":"reality"}}`)
+
+	portTunnel, _ := seedRelayForward(t, r, 1, relayNode, 0, 0, 0)
+	wrongExit, _ := seedRelayForward(t, r, 2, relayNode, other, 0, 0)
+
+	cases := []struct {
+		name, body, want string
+	}{
+		{"loopback inbound over port forward", `{"inboundId":` + jsonInt64(local) + `,"tunnelId":` + jsonInt64(portTunnel) + `}`, "只监听本机"},
+		{"tunnel exiting elsewhere", `{"inboundId":` + jsonInt64(public) + `,"tunnelId":` + jsonInt64(wrongExit) + `}`, "出口节点"},
+		{"missing inbound", `{"inboundId":999,"tunnelId":` + jsonInt64(portTunnel) + `}`, "入站不存在"},
+		{"missing tunnel", `{"inboundId":` + jsonInt64(public) + `,"tunnelId":999}`, "隧道不存在"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := kernelContractPost(t, router, admin, "/api/v1/inbound/relay/create", tc.body)
+			if out.Code == 0 || !strings.Contains(out.Msg, tc.want) {
+				t.Fatalf("want error containing %q, got %+v", tc.want, out)
+			}
+		})
+	}
+	if mustQueryInt(t, r, `SELECT COUNT(*) FROM forward`) != 0 {
+		t.Fatal("rejected relays must not leave forwards behind")
+	}
+}

@@ -619,6 +619,19 @@ export function InboundFormModal({
                         onChange={(e) => set("shareHost", e.target.value)}
                       />
                     </div>
+                    <div className="flex items-start gap-2">
+                      <Switch
+                        isSelected={form.relayOnly}
+                        size="sm"
+                        onValueChange={(v) => set("relayOnly", v)}
+                      />
+                      <div>
+                        <p className="text-sm">仅通过中转提供</p>
+                        <p className="text-xs text-default-500">
+                          订阅和分享中不再给出落地节点的直连地址
+                        </p>
+                      </div>
+                    </div>
                     <Input
                       label="备注"
                       value={form.remark}

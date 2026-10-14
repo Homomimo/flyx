@@ -443,18 +443,26 @@ API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 - 面板 + agent 端到端：经 API 安装 Xray（真实下载 + 校验）、创建入站、产生流量、面板记账、停用、agent `kill -9` 后内核随之退出并在重启后恢复、卸载后进程 / 文件 / nft 表全部清理。
 - 浏览器（Playwright）走查：登录、安装内核、模板创建、编辑保留凭据、启停、删除、日志、移动端布局。
 
-### 第 2 阶段：分享、订阅、对接中转（目标：完整可用）
+### 第 2 阶段：分享、订阅、对接中转（目标：完整可用）✅（B12、A4 延后）
 
-- [ ] B6 `share.go`：各协议 URI + 测试
-- [ ] B7 `subscription.go`：base64 / clash / singbox / surge + UA 识别 + `subscription-userinfo`
-- [ ] B8 订阅 token 生成与重置
-- [ ] B9 `node_inbound_relay` 模型 + "一键对接"API（模式 A：端口转发）+ contract 测试
-- [ ] B10 订阅输出中转节点、`relay_only`；删除时的级联逻辑
-- [ ] B11 模式 B：隧道出口 dial `127.0.0.1`，入站监听 `127.0.0.1`；验证回环目标校验
-- [ ] B12 PROXY protocol 联动（Forward `proxy_protocol_send` ↔ 入站 `accept_proxy_protocol`）
-- [ ] A4 nft 白名单（`allow_relay_only`），中转 IP 集合随转发变化自动更新
-- [ ] F3 分享弹窗（二维码）、订阅卡片
-- [ ] F4 入站"对接中转"弹窗：选择/新建隧道、模式 A/B、入口端口；入站列表展示已对接的中转
+- [x] B6 `share.go`：VLESS / VMess / Trojan / SS（SIP002，2022 用 SIP022 明文 userinfo）URI + golden 测试
+- [x] B7 订阅：base64 / Clash(Mihomo) / sing-box / Surge，按 UA 识别，`Subscription-Userinfo` 头；节点名自动去重
+- [x] B8 订阅 token（`node_sub_token`，标记为敏感 + 系统管理，普通用户不可读、配置接口不可改），支持重置
+- [x] B9 `node_inbound_relay` + 一键对接（端口转发隧道 = 模式 A），失败时回滚已创建的转发
+- [x] B10 订阅输出中转节点、`relay_only`；删除中转 / 入站 / 内核 / 转发时级联清理
+- [x] B11 模式 B：隧道转发出口必须是落地节点，转发目标为 `127.0.0.1:端口`（管理员转发本就允许本地地址，无需改动校验）
+- [ ] B12 PROXY protocol 联动 —— 延后：开启后直连客户端会失效，需要与"仅中转"强绑定，单独做
+- [ ] A4 nft 白名单（仅允许中转 IP 访问）—— 延后：模式 B 已能让落地端口完全不暴露公网，白名单作为补充
+- [x] F3 分享弹窗（链接 + 二维码）、订阅卡片（各格式一键复制、二维码、重置）
+- [x] F4 入站"中转"弹窗：按隧道类型自动判断可用性、创建 / 删除中转；入站卡片显示中转数量
+
+#### 第 2 阶段验证记录
+
+- 订阅文件用真实客户端校验：sing-box 1.14.3 `check` 通过，Mihomo（v1.19.32 源码构建）`-t` 通过。
+- 真实流量：Xray 服务端 + sing-box / Mihomo 客户端，VLESS-Reality-Vision、SS2022、Trojan-WS-TLS（自签）、VMess-gRPC-TLS（自签）、VLESS-WS 五种全部连通。
+- 面板 + 两个 agent（落地 / 中转）端到端：从公开订阅地址拉取 sing-box 配置，直连、模式 A（端口转发）、模式 B（隧道转发，含仅监听本机的 SS）4 个节点全部连通；删除中转 / 入站后中转机端口确实关闭。
+- 浏览器走查：订阅复制（链接可直接拉取）、二维码、分享弹窗、中转创建 / 删除、仅本机入站只能选隧道转发、移动端。
+- 已知：Xray 新版客户端不再接受 `allowInsecure`，自签证书链接对 v2rayN 等仍有效（其自行映射），Mihomo 用 `skip-cert-verify`，sing-box 用 `insecure`。
 
 ### 第 3 阶段：更多内核
 

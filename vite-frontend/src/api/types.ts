@@ -732,6 +732,8 @@ export interface InboundApiItem {
   extra: string;
   shareHost: string;
   remark: string;
+  relayOnly: boolean;
+  relayCount: number;
   enabled: boolean;
   uploadBytes: number;
   downloadBytes: number;
@@ -753,5 +755,37 @@ export interface InboundMutationPayload {
   extra: string;
   shareHost: string;
   remark: string;
+  relayOnly: boolean;
   enabled?: boolean;
+}
+
+export interface InboundShareEntry {
+  name: string;
+  kind: "direct" | "relay";
+  host: string;
+  port: number;
+  uri: string;
+}
+
+export interface InboundRelayApiItem {
+  id: number;
+  inboundId: number;
+  forwardId: number;
+  name: string;
+  shareHost: string;
+  managed: boolean;
+  mode: "port" | "tunnel";
+  forwardName: string;
+  forwardStatus: number;
+  forwardExists: boolean;
+  tunnelId: number;
+  tunnelName: string;
+  remoteAddr: string;
+  entries: { Host: string; Port: number }[];
+  createdTime: number;
+}
+
+export interface SubInfoApiData {
+  token: string;
+  path: string;
 }

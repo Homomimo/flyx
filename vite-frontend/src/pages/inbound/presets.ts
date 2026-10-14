@@ -65,6 +65,7 @@ export interface InboundForm {
   shareHost: string;
   remark: string;
   extra: string;
+  relayOnly: boolean;
   enabled: boolean;
 }
 
@@ -158,6 +159,7 @@ export function emptyForm(
     shareHost: "",
     remark: "",
     extra: "",
+    relayOnly: false,
     enabled: true,
   };
 }
@@ -218,6 +220,7 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     shareHost: item.shareHost,
     remark: item.remark,
     extra: item.extra,
+    relayOnly: item.relayOnly,
     enabled: item.enabled,
   };
 }
@@ -281,6 +284,7 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     extra: form.extra.trim(),
     shareHost: form.shareHost.trim(),
     remark: form.remark.trim(),
+    relayOnly: form.relayOnly,
     enabled: form.enabled,
   };
 }

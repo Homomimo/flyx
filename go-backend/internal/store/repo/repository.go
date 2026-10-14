@@ -324,6 +324,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NodeKernel{},
 		&model.NodeInbound{},
 		&model.NodeInboundCounter{},
+		&model.NodeInboundRelay{},
 	}
 
 	if db.Dialector.Name() != "sqlite" {

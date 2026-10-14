@@ -1,7 +1,11 @@
 package repo
 
 import (
+	"database/sql"
 	"errors"
+	"net"
+	"strconv"
+	"strings"
 
 	"go-backend/internal/store/model"
 
@@ -91,6 +95,9 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundCounter{}).Error; err != nil {
 				return err
 			}
+			if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+				return err
+			}
 		}
 		if err := tx.Where("kernel_id = ?", id).Delete(&model.NodeInbound{}).Error; err != nil {
 			return err
@@ -106,6 +113,9 @@ func deleteNodeKernelsTx(tx *gorm.DB, nodeID int64) error {
 	}
 	if len(ids) > 0 {
 		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundCounter{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("inbound_id IN ?", ids).Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return err
 		}
 	}
@@ -167,6 +177,7 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		"extra":        in.Extra,
 		"share_host":   in.ShareHost,
 		"remark":       in.Remark,
+		"relay_only":   in.RelayOnly,
 		"enabled":      in.Enabled,
 		"updated_time": in.UpdatedTime,
 	}).Error
@@ -178,6 +189,9 @@ func (r *Repository) DeleteNodeInbound(id int64) error {
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("inbound_id = ?", id).Delete(&model.NodeInboundCounter{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("inbound_id = ?", id).Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", id).Delete(&model.NodeInbound{}).Error
@@ -322,4 +336,131 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 		}
 		return nil
 	})
+}
+
+// InboundRelayView is a relay joined with the forward and tunnel behind it.
+type InboundRelayView struct {
+	model.NodeInboundRelay
+	ForwardName   string
+	ForwardStatus int
+	RemoteAddr    string
+	TunnelID      int64
+	TunnelName    string
+	TunnelType    int
+	ForwardExists bool
+}
+
+// ForwardEntry is one public address a forward listens on.
+type ForwardEntry struct {
+	Host string
+	Port int
+}
+
+func (r *Repository) ListInboundRelays(inboundID int64) ([]InboundRelayView, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	type row struct {
+		model.NodeInboundRelay
+		ForwardName   sql.NullString
+		ForwardStatus sql.NullInt64
+		RemoteAddr    sql.NullString
+		TunnelID      sql.NullInt64
+		TunnelName    sql.NullString
+		TunnelType    sql.NullInt64
+	}
+	var rows []row
+	q := r.db.Model(&model.NodeInboundRelay{}).
+		Select("node_inbound_relay.*, forward.name AS forward_name, forward.status AS forward_status, forward.remote_addr AS remote_addr, forward.tunnel_id AS tunnel_id, tunnel.name AS tunnel_name, tunnel.type AS tunnel_type").
+		Joins("LEFT JOIN forward ON forward.id = node_inbound_relay.forward_id").
+		Joins("LEFT JOIN tunnel ON tunnel.id = forward.tunnel_id").
+		Order("node_inbound_relay.id ASC")
+	if inboundID > 0 {
+		q = q.Where("node_inbound_relay.inbound_id = ?", inboundID)
+	}
+	if err := q.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]InboundRelayView, 0, len(rows))
+	for _, rw := range rows {
+		out = append(out, InboundRelayView{
+			NodeInboundRelay: rw.NodeInboundRelay,
+			ForwardName:      rw.ForwardName.String,
+			ForwardStatus:    int(rw.ForwardStatus.Int64),
+			RemoteAddr:       rw.RemoteAddr.String,
+			TunnelID:         rw.TunnelID.Int64,
+			TunnelName:       rw.TunnelName.String,
+			TunnelType:       int(rw.TunnelType.Int64),
+			ForwardExists:    rw.ForwardName.Valid,
+		})
+	}
+	return out, nil
+}
+
+func (r *Repository) GetInboundRelay(id int64) (*model.NodeInboundRelay, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rel model.NodeInboundRelay
+	err := r.db.Where("id = ?", id).First(&rel).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &rel, err
+}
+
+func (r *Repository) CreateInboundRelay(rel *model.NodeInboundRelay) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Create(rel).Error
+}
+
+func (r *Repository) DeleteInboundRelay(id int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Where("id = ?", id).Delete(&model.NodeInboundRelay{}).Error
+}
+
+// ForwardEntries lists the public host:port pairs of a forward's entry nodes.
+func (r *Repository) ForwardEntries(forwardID, tunnelID int64) ([]ForwardEntry, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	joined, _, err := resolveForwardIngress(r.db, forwardID, tunnelID)
+	if err != nil {
+		return nil, err
+	}
+	var out []ForwardEntry
+	for _, pair := range strings.Split(joined, ",") {
+		host, portStr, err := net.SplitHostPort(strings.TrimSpace(pair))
+		if err != nil {
+			continue
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port <= 0 {
+			continue
+		}
+		out = append(out, ForwardEntry{Host: host, Port: port})
+	}
+	return out, nil
+}
+
+func (r *Repository) TunnelExitNodeIDs(tunnelID int64) ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	err := r.db.Model(&model.ChainTunnel{}).
+		Where("tunnel_id = ? AND chain_type = ?", tunnelID, "3").
+		Pluck("node_id", &ids).Error
+	return ids, err
+}
+
+func (r *Repository) SetNodeInboundRelayOnly(id int64, relayOnly int) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.NodeInbound{}).Where("id = ?", id).Update("relay_only", relayOnly).Error
 }

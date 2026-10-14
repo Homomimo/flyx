@@ -29,6 +29,8 @@ import { SearchBar } from "@/components/search-bar";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { InboundFormModal } from "@/pages/inbound/inbound-form-modal";
 import { type InstallRequest, KernelPanel } from "@/pages/inbound/kernel-panel";
+import { RelayModal } from "@/pages/inbound/relay-modal";
+import { ShareModal, SubscriptionCard, copyText } from "@/pages/inbound/share";
 import {
   type InboundForm,
   KERNEL_STATUS,
@@ -77,15 +79,6 @@ const CONFIRM_TEXT: Record<
     color: "warning",
   },
 };
-
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success("已复制");
-  } catch {
-    toast.error("复制失败");
-  }
-}
 
 function detailRows(item: InboundApiItem): Array<[string, string]> {
   const host = item.shareHost || item.nodeServerIp;
@@ -140,6 +133,8 @@ export default function InboundPage() {
     null,
   );
   const [details, setDetails] = useState<InboundApiItem | null>(null);
+  const [sharing, setSharing] = useState<InboundApiItem | null>(null);
+  const [relaying, setRelaying] = useState<InboundApiItem | null>(null);
   const [confirm, setConfirm] = useState<{
     action: ConfirmAction;
     item: InboundApiItem;
@@ -274,6 +269,8 @@ export default function InboundPage() {
         onInstallRequestHandled={() => setInstallRequest(null)}
       />
 
+      {inbounds.length > 0 && <SubscriptionCard />}
+
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between mb-4 gap-3">
         <div className="flex-1 max-w-sm flex items-center gap-2">
           <h3 className="text-base font-semibold shrink-0">入站</h3>
@@ -356,6 +353,16 @@ export default function InboundPage() {
                       <Chip size="sm" variant="flat">
                         {item.kernelType}
                       </Chip>
+                      {item.relayCount > 0 && (
+                        <Chip color="secondary" size="sm" variant="flat">
+                          {item.relayCount} 个中转
+                        </Chip>
+                      )}
+                      {item.relayOnly && (
+                        <Chip size="sm" variant="flat">
+                          仅中转
+                        </Chip>
+                      )}
                       {item.enabled &&
                         kst &&
                         item.kernelStatus !== "running" && (
@@ -379,6 +386,21 @@ export default function InboundPage() {
                     <div className="flex flex-wrap gap-1.5">
                       <Button
                         color="primary"
+                        size="sm"
+                        variant="flat"
+                        onPress={() => setSharing(item)}
+                      >
+                        分享
+                      </Button>
+                      <Button
+                        color="secondary"
+                        size="sm"
+                        variant="flat"
+                        onPress={() => setRelaying(item)}
+                      >
+                        中转
+                      </Button>
+                      <Button
                         size="sm"
                         variant="flat"
                         onPress={() => setDetails(item)}
@@ -425,6 +447,13 @@ export default function InboundPage() {
         </StaggerList>
       )}
 
+      <ShareModal item={sharing} onClose={() => setSharing(null)} />
+      <RelayModal
+        item={relaying}
+        onChanged={() => loadData(false)}
+        onClose={() => setRelaying(null)}
+      />
+
       <InboundFormModal
         caps={caps}
         initial={formInitial}
@@ -451,7 +480,7 @@ export default function InboundPage() {
               <ModalHeader className="flex flex-col gap-1">
                 <h2 className="text-lg font-bold">{details?.name}</h2>
                 <p className="text-small text-default-500">
-                  客户端连接参数（分享链接与订阅将在下一阶段提供）
+                  手动配置客户端时使用；一般直接用“分享”或订阅导入即可
                 </p>
               </ModalHeader>
               <ModalBody>

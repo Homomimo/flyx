@@ -819,6 +819,9 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NodeInboundRelay{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", forwardID).Delete(&model.Forward{}).Error
 	})
 }
