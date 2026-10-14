@@ -734,6 +734,9 @@ export interface InboundApiItem {
   remark: string;
   relayOnly: boolean;
   relayCount: number;
+  acceptProxyProtocol: boolean;
+  relayWhitelist: boolean;
+  whitelistExtra: string;
   enabled: boolean;
   uploadBytes: number;
   downloadBytes: number;
@@ -756,6 +759,9 @@ export interface InboundMutationPayload {
   shareHost: string;
   remark: string;
   relayOnly: boolean;
+  acceptProxyProtocol: boolean;
+  relayWhitelist: boolean;
+  whitelistExtra: string;
   enabled?: boolean;
 }
 

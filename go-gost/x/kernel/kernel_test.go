@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -288,7 +289,7 @@ func TestParseChecksum(t *testing.T) {
 }
 
 func TestNftScriptOnlyCounts(t *testing.T) {
-	script := nftScript(expandPorts([]Port{{InboundID: 2, Port: 80, Network: "tcp,udp"}, {InboundID: 1, Port: 443, Network: "tcp"}}))
+	script := nftScript(expandPorts([]Port{{InboundID: 2, Port: 80, Network: "tcp,udp"}, {InboundID: 1, Port: 443, Network: "tcp"}}), nil)
 	for _, bad := range []string{"drop", "reject", "policy drop"} {
 		if strings.Contains(script, bad) {
 			t.Fatalf("counting table must never filter: %s", script)
@@ -323,5 +324,48 @@ func TestProcessBackoffRestarts(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(logs.tail(0), "\n"), "boom") {
 		t.Fatal("process output not captured")
+	}
+}
+
+func TestNftScriptWhitelist(t *testing.T) {
+	ports := []Port{
+		{InboundID: 1, Port: 443, Network: "tcp", Allow: []string{"127.0.0.0/8", "::1/128", "198.51.100.7/32", "127.0.0.1/32"}},
+		{InboundID: 2, Port: 8388, Network: "tcp,udp"},
+	}
+	script := nftScript(expandPorts(ports), expandGuards(ports))
+	for _, want := range []string{
+		"set allow4_1 {",
+		"elements = { 127.0.0.0/8, 127.0.0.1/32, 198.51.100.7/32 }",
+		"elements = { ::1/128 }",
+		"meta nfproto ipv4 tcp dport 443 ip saddr != @allow4_1 drop",
+		"meta nfproto ipv6 tcp dport 443 ip6 saddr != @allow6_1 drop",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("missing %q in:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "dport 8388 ip saddr") || strings.Contains(script, "allow4_2") {
+		t.Fatalf("unguarded inbound must not be filtered:\n%s", script)
+	}
+	if strings.Index(script, "drop") > strings.Index(script, "counter name in_1_tcp") {
+		t.Fatal("drop rules must come before the counters")
+	}
+
+	// Validate with the real nft parser when we can (root + nft installed).
+	if _, err := exec.LookPath("nft"); err == nil && os.Geteuid() == 0 {
+		cmd := exec.Command("nft", "-c", "-f", "-")
+		cmd.Stdin = strings.NewReader(script)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("nft rejected the script: %v\n%s\n%s", err, out, script)
+		}
+	}
+}
+
+func TestApplyRejectsBadAllow(t *testing.T) {
+	m := NewManager(t.TempDir())
+	r := ApplyRequest{Type: "xray", Version: "latest", Download: &Download{BinName: "xray", Archive: "zip"},
+		Ports: []Port{{InboundID: 1, Port: 443, Network: "tcp", Allow: []string{"1.2.3.4/32; drop"}}}}
+	if _, err := m.Apply(r); err == nil || !strings.Contains(err.Error(), "白名单") {
+		t.Fatalf("expected whitelist validation error, got %v", err)
 	}
 }

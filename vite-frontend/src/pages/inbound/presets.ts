@@ -66,6 +66,9 @@ export interface InboundForm {
   remark: string;
   extra: string;
   relayOnly: boolean;
+  acceptProxyProtocol: boolean;
+  relayWhitelist: boolean;
+  whitelistExtra: string;
   enabled: boolean;
 }
 
@@ -160,6 +163,9 @@ export function emptyForm(
     remark: "",
     extra: "",
     relayOnly: false,
+    acceptProxyProtocol: false,
+    relayWhitelist: false,
+    whitelistExtra: "",
     enabled: true,
   };
 }
@@ -221,6 +227,9 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     remark: item.remark,
     extra: item.extra,
     relayOnly: item.relayOnly,
+    acceptProxyProtocol: item.acceptProxyProtocol,
+    relayWhitelist: item.relayWhitelist,
+    whitelistExtra: item.whitelistExtra,
     enabled: item.enabled,
   };
 }
@@ -284,7 +293,10 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     extra: form.extra.trim(),
     shareHost: form.shareHost.trim(),
     remark: form.remark.trim(),
-    relayOnly: form.relayOnly,
+    relayOnly: form.relayOnly || form.acceptProxyProtocol,
+    acceptProxyProtocol: form.acceptProxyProtocol,
+    relayWhitelist: form.relayWhitelist,
+    whitelistExtra: form.relayWhitelist ? form.whitelistExtra.trim() : "",
     enabled: form.enabled,
   };
 }

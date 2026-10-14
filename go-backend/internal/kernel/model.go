@@ -56,6 +56,9 @@ type Inbound struct {
 	Transport Transport       `json:"transport"`
 	Security  Security        `json:"security"`
 	Extra     json.RawMessage `json:"extra,omitempty"`
+	// AcceptProxyProtocol makes the inbound require a PROXY protocol header
+	// (sent by relay forwards) so the kernel sees the real client address.
+	AcceptProxyProtocol bool `json:"acceptProxyProtocol,omitempty"`
 }
 
 func (in Inbound) Tag() string {
@@ -360,4 +363,46 @@ func Regenerate(kernelType string, in *Inbound) error {
 	in.Security.CertPEM = ""
 	in.Security.KeyPEM = ""
 	return Normalize(kernelType, in)
+}
+
+const maxAllowEntries = 256
+
+// ParseAllowList validates a comma / whitespace separated list of IPs and
+// CIDRs and returns the normalized entries (bare IPs become /32 or /128).
+func ParseAllowList(raw string) ([]string, error) {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '，' || r == ';' || r == ' ' || r == '\n' || r == '\t' || r == '\r'
+	})
+	if len(fields) > maxAllowEntries {
+		return nil, fmt.Errorf("白名单最多 %d 条", maxAllowEntries)
+	}
+	seen := make(map[string]bool, len(fields))
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		cidr, err := NormalizeAllowEntry(f)
+		if err != nil {
+			return nil, err
+		}
+		if !seen[cidr] {
+			seen[cidr] = true
+			out = append(out, cidr)
+		}
+	}
+	return out, nil
+}
+
+// NormalizeAllowEntry turns an IP or CIDR into canonical CIDR form.
+func NormalizeAllowEntry(entry string) (string, error) {
+	entry = strings.TrimSpace(entry)
+	if ip := net.ParseIP(entry); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String() + "/32", nil
+		}
+		return ip.String() + "/128", nil
+	}
+	_, ipnet, err := net.ParseCIDR(entry)
+	if err != nil {
+		return "", fmt.Errorf("白名单条目 %q 不是合法的 IP 或网段", entry)
+	}
+	return ipnet.String(), nil
 }

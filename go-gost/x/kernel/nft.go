@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,9 +83,51 @@ func expandPorts(ports []Port) []counterRule {
 	return rules
 }
 
-// nftScript builds an atomic ruleset that only counts: every chain has policy
-// accept and no rule drops, so it never interferes with other firewalls.
-func nftScript(rules []counterRule) string {
+// allowGuard is the source whitelist of one inbound, split by family.
+type allowGuard struct {
+	v4, v6 []string
+}
+
+// expandGuards collects the whitelists keyed by inbound. Entries were
+// validated as CIDRs; they are re-rendered from the parsed form so nothing
+// but an address can reach the nft script.
+func expandGuards(ports []Port) map[int64]allowGuard {
+	guards := make(map[int64]allowGuard)
+	for _, p := range ports {
+		if p.Allow == nil {
+			continue
+		}
+		g := guards[p.InboundID]
+		for _, c := range p.Allow {
+			_, ipnet, err := net.ParseCIDR(c)
+			if err != nil {
+				continue
+			}
+			if ipnet.IP.To4() != nil {
+				g.v4 = append(g.v4, ipnet.String())
+			} else {
+				g.v6 = append(g.v6, ipnet.String())
+			}
+		}
+		sort.Strings(g.v4)
+		sort.Strings(g.v6)
+		guards[p.InboundID] = g
+	}
+	return guards
+}
+
+func writeSet(b *strings.Builder, name, typ string, elems []string) {
+	fmt.Fprintf(b, "\tset %s {\n\t\ttype %s\n\t\tflags interval\n\t\tauto-merge\n", name, typ)
+	if len(elems) > 0 {
+		fmt.Fprintf(b, "\t\telements = { %s }\n", strings.Join(elems, ", "))
+	}
+	b.WriteString("\t}\n")
+}
+
+// nftScript builds the atomic ruleset. Chains have policy accept and only
+// count, except that a port with a whitelist drops packets from sources not
+// on it (only that port; nothing else on the host is affected).
+func nftScript(rules []counterRule, guards map[int64]allowGuard) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {}\n", nftTable)
 	fmt.Fprintf(&b, "delete table inet %s\n", nftTable)
@@ -96,7 +139,23 @@ func nftScript(rules []counterRule) string {
 		fmt.Fprintf(&b, "\tcounter %s {}\n", r.name("in"))
 		fmt.Fprintf(&b, "\tcounter %s {}\n", r.name("out"))
 	}
+	guarded := make([]int64, 0, len(guards))
+	for id := range guards {
+		guarded = append(guarded, id)
+	}
+	sort.Slice(guarded, func(i, j int) bool { return guarded[i] < guarded[j] })
+	for _, id := range guarded {
+		writeSet(&b, fmt.Sprintf("allow4_%d", id), "ipv4_addr", guards[id].v4)
+		writeSet(&b, fmt.Sprintf("allow6_%d", id), "ipv6_addr", guards[id].v6)
+	}
 	b.WriteString("\tchain input {\n\t\ttype filter hook input priority -150; policy accept;\n")
+	for _, r := range rules {
+		if _, ok := guards[r.InboundID]; !ok {
+			continue
+		}
+		fmt.Fprintf(&b, "\t\tmeta nfproto ipv4 %s dport %d ip saddr != @allow4_%d drop\n", r.Proto, r.Port, r.InboundID)
+		fmt.Fprintf(&b, "\t\tmeta nfproto ipv6 %s dport %d ip6 saddr != @allow6_%d drop\n", r.Proto, r.Port, r.InboundID)
+	}
 	for _, r := range rules {
 		fmt.Fprintf(&b, "\t\t%s dport %d counter name %s\n", r.Proto, r.Port, r.name("in"))
 	}
@@ -143,7 +202,7 @@ func (n *nftCounters) sync(ports []Port) error {
 		return nil
 	}
 	rules := expandPorts(ports)
-	script := nftScript(rules)
+	script := nftScript(rules, expandGuards(ports))
 	sig := hashString(script)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

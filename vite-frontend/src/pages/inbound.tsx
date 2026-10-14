@@ -363,6 +363,16 @@ export default function InboundPage() {
                           仅中转
                         </Chip>
                       )}
+                      {item.acceptProxyProtocol && (
+                        <Chip size="sm" variant="flat">
+                          真实 IP
+                        </Chip>
+                      )}
+                      {item.relayWhitelist && (
+                        <Chip color="warning" size="sm" variant="flat">
+                          白名单
+                        </Chip>
+                      )}
                       {item.enabled &&
                         kst &&
                         item.kernelStatus !== "running" && (

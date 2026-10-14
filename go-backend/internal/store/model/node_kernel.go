@@ -21,26 +21,33 @@ func (NodeKernel) TableName() string { return "node_kernel" }
 // NodeInbound is one listening proxy service served by a NodeKernel. The
 // protocol specific parts are stored as JSON text (see internal/kernel).
 type NodeInbound struct {
-	ID            int64  `gorm:"primaryKey;autoIncrement"`
-	KernelID      int64  `gorm:"column:kernel_id;not null;index"`
-	NodeID        int64  `gorm:"column:node_id;not null;index"`
-	Name          string `gorm:"type:varchar(100);not null"`
-	Protocol      string `gorm:"type:varchar(30);not null"`
-	Listen        string `gorm:"type:varchar(100);not null;default:'::'"`
-	Port          int    `gorm:"not null"`
-	Transport     string `gorm:"type:text;not null;default:''"`
-	Security      string `gorm:"type:text;not null;default:''"`
-	Settings      string `gorm:"type:text;not null;default:''"`
-	Extra         string `gorm:"type:text;not null;default:''"`
-	ShareHost     string `gorm:"column:share_host;type:varchar(255);not null;default:''"`
-	Remark        string `gorm:"type:text;not null;default:''"`
-	RelayOnly     int    `gorm:"column:relay_only;not null;default:0"`
-	Enabled       int    `gorm:"not null;default:1"`
-	UploadBytes   int64  `gorm:"column:upload_bytes;not null;default:0"`
-	DownloadBytes int64  `gorm:"column:download_bytes;not null;default:0"`
-	Inx           int    `gorm:"not null;default:0"`
-	CreatedTime   int64  `gorm:"column:created_time;not null"`
-	UpdatedTime   int64  `gorm:"column:updated_time;not null"`
+	ID        int64  `gorm:"primaryKey;autoIncrement"`
+	KernelID  int64  `gorm:"column:kernel_id;not null;index"`
+	NodeID    int64  `gorm:"column:node_id;not null;index"`
+	Name      string `gorm:"type:varchar(100);not null"`
+	Protocol  string `gorm:"type:varchar(30);not null"`
+	Listen    string `gorm:"type:varchar(100);not null;default:'::'"`
+	Port      int    `gorm:"not null"`
+	Transport string `gorm:"type:text;not null;default:''"`
+	Security  string `gorm:"type:text;not null;default:''"`
+	Settings  string `gorm:"type:text;not null;default:''"`
+	Extra     string `gorm:"type:text;not null;default:''"`
+	ShareHost string `gorm:"column:share_host;type:varchar(255);not null;default:''"`
+	Remark    string `gorm:"type:text;not null;default:''"`
+	RelayOnly int    `gorm:"column:relay_only;not null;default:0"`
+	// AcceptProxyProtocol: relays send PROXY protocol so the kernel sees
+	// the real client IP; direct access is then impossible (forces RelayOnly).
+	AcceptProxyProtocol int `gorm:"column:accept_proxy_protocol;not null;default:0"`
+	// RelayWhitelist drops traffic to the port unless it comes from a relay
+	// node, loopback, or an entry of WhitelistExtra.
+	RelayWhitelist int    `gorm:"column:relay_whitelist;not null;default:0"`
+	WhitelistExtra string `gorm:"column:whitelist_extra;type:text;not null;default:''"`
+	Enabled        int    `gorm:"not null;default:1"`
+	UploadBytes    int64  `gorm:"column:upload_bytes;not null;default:0"`
+	DownloadBytes  int64  `gorm:"column:download_bytes;not null;default:0"`
+	Inx            int    `gorm:"not null;default:0"`
+	CreatedTime    int64  `gorm:"column:created_time;not null"`
+	UpdatedTime    int64  `gorm:"column:updated_time;not null"`
 }
 
 func (NodeInbound) TableName() string { return "node_inbound" }

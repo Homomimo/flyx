@@ -58,31 +58,34 @@ type kernelView struct {
 }
 
 type inboundView struct {
-	ID            int64              `json:"id"`
-	KernelID      int64              `json:"kernelId"`
-	KernelType    string             `json:"kernelType"`
-	KernelStatus  string             `json:"kernelStatus"`
-	NodeID        int64              `json:"nodeId"`
-	NodeName      string             `json:"nodeName"`
-	NodeServerIP  string             `json:"nodeServerIp"`
-	Name          string             `json:"name"`
-	Protocol      string             `json:"protocol"`
-	Listen        string             `json:"listen"`
-	Port          int                `json:"port"`
-	Network       string             `json:"network"`
-	Settings      kernel.Settings    `json:"settings"`
-	Transport     kernel.Transport   `json:"transport"`
-	Security      kernelSecurityView `json:"security"`
-	Extra         string             `json:"extra"`
-	ShareHost     string             `json:"shareHost"`
-	Remark        string             `json:"remark"`
-	RelayOnly     bool               `json:"relayOnly"`
-	RelayCount    int                `json:"relayCount"`
-	Enabled       bool               `json:"enabled"`
-	UploadBytes   int64              `json:"uploadBytes"`
-	DownloadBytes int64              `json:"downloadBytes"`
-	CreatedTime   int64              `json:"createdTime"`
-	UpdatedTime   int64              `json:"updatedTime"`
+	ID             int64              `json:"id"`
+	KernelID       int64              `json:"kernelId"`
+	KernelType     string             `json:"kernelType"`
+	KernelStatus   string             `json:"kernelStatus"`
+	NodeID         int64              `json:"nodeId"`
+	NodeName       string             `json:"nodeName"`
+	NodeServerIP   string             `json:"nodeServerIp"`
+	Name           string             `json:"name"`
+	Protocol       string             `json:"protocol"`
+	Listen         string             `json:"listen"`
+	Port           int                `json:"port"`
+	Network        string             `json:"network"`
+	Settings       kernel.Settings    `json:"settings"`
+	Transport      kernel.Transport   `json:"transport"`
+	Security       kernelSecurityView `json:"security"`
+	Extra          string             `json:"extra"`
+	ShareHost      string             `json:"shareHost"`
+	Remark         string             `json:"remark"`
+	RelayOnly      bool               `json:"relayOnly"`
+	RelayCount     int                `json:"relayCount"`
+	AcceptProxy    bool               `json:"acceptProxyProtocol"`
+	Whitelist      bool               `json:"relayWhitelist"`
+	WhitelistExtra string             `json:"whitelistExtra"`
+	Enabled        bool               `json:"enabled"`
+	UploadBytes    int64              `json:"uploadBytes"`
+	DownloadBytes  int64              `json:"downloadBytes"`
+	CreatedTime    int64              `json:"createdTime"`
+	UpdatedTime    int64              `json:"updatedTime"`
 }
 
 // kernelSecurityView hides the self-signed private material from list output.
@@ -93,27 +96,31 @@ type kernelSecurityView struct {
 }
 
 type inboundRequest struct {
-	ID         int64            `json:"id"`
-	NodeID     int64            `json:"nodeId"`
-	KernelType string           `json:"kernelType"`
-	Name       string           `json:"name"`
-	Protocol   string           `json:"protocol"`
-	Listen     string           `json:"listen"`
-	Port       int              `json:"port"`
-	Settings   kernel.Settings  `json:"settings"`
-	Transport  kernel.Transport `json:"transport"`
-	Security   kernel.Security  `json:"security"`
-	Extra      string           `json:"extra"`
-	ShareHost  string           `json:"shareHost"`
-	Remark     string           `json:"remark"`
-	RelayOnly  bool             `json:"relayOnly"`
-	Enabled    *bool            `json:"enabled"`
+	ID                  int64            `json:"id"`
+	NodeID              int64            `json:"nodeId"`
+	KernelType          string           `json:"kernelType"`
+	Name                string           `json:"name"`
+	Protocol            string           `json:"protocol"`
+	Listen              string           `json:"listen"`
+	Port                int              `json:"port"`
+	Settings            kernel.Settings  `json:"settings"`
+	Transport           kernel.Transport `json:"transport"`
+	Security            kernel.Security  `json:"security"`
+	Extra               string           `json:"extra"`
+	ShareHost           string           `json:"shareHost"`
+	Remark              string           `json:"remark"`
+	RelayOnly           bool             `json:"relayOnly"`
+	AcceptProxyProtocol bool             `json:"acceptProxyProtocol"`
+	RelayWhitelist      bool             `json:"relayWhitelist"`
+	WhitelistExtra      string           `json:"whitelistExtra"`
+	Enabled             *bool            `json:"enabled"`
 }
 
 // ---- conversion ----
 
 func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
-	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port}
+	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port,
+		AcceptProxyProtocol: row.AcceptProxyProtocol == 1}
 	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
 		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
 	}
@@ -482,29 +489,32 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 		}
 		k := kernelByID[row.KernelID]
 		v := inboundView{
-			ID:            row.ID,
-			KernelID:      row.KernelID,
-			KernelType:    k.KernelType,
-			KernelStatus:  k.Status,
-			NodeID:        row.NodeID,
-			Name:          row.Name,
-			Protocol:      row.Protocol,
-			Listen:        row.Listen,
-			Port:          row.Port,
-			Network:       in.Network(),
-			Settings:      in.Settings,
-			Transport:     in.Transport,
-			Security:      kernelSecurityView{Security: in.Security},
-			Extra:         row.Extra,
-			ShareHost:     row.ShareHost,
-			Remark:        row.Remark,
-			RelayOnly:     row.RelayOnly == 1,
-			RelayCount:    relayCounts[row.ID],
-			Enabled:       row.Enabled == 1,
-			UploadBytes:   row.UploadBytes,
-			DownloadBytes: row.DownloadBytes,
-			CreatedTime:   row.CreatedTime,
-			UpdatedTime:   row.UpdatedTime,
+			ID:             row.ID,
+			KernelID:       row.KernelID,
+			KernelType:     k.KernelType,
+			KernelStatus:   k.Status,
+			NodeID:         row.NodeID,
+			Name:           row.Name,
+			Protocol:       row.Protocol,
+			Listen:         row.Listen,
+			Port:           row.Port,
+			Network:        in.Network(),
+			Settings:       in.Settings,
+			Transport:      in.Transport,
+			Security:       kernelSecurityView{Security: in.Security},
+			Extra:          row.Extra,
+			ShareHost:      row.ShareHost,
+			Remark:         row.Remark,
+			RelayOnly:      row.RelayOnly == 1,
+			RelayCount:     relayCounts[row.ID],
+			AcceptProxy:    row.AcceptProxyProtocol == 1,
+			Whitelist:      row.RelayWhitelist == 1,
+			WhitelistExtra: row.WhitelistExtra,
+			Enabled:        row.Enabled == 1,
+			UploadBytes:    row.UploadBytes,
+			DownloadBytes:  row.DownloadBytes,
+			CreatedTime:    row.CreatedTime,
+			UpdatedTime:    row.UpdatedTime,
 		}
 		if node != nil {
 			v.NodeName = node.Name
@@ -592,6 +602,13 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		Transport: req.Transport,
 		Security:  req.Security,
 		Extra:     json.RawMessage(strings.TrimSpace(req.Extra)),
+
+		AcceptProxyProtocol: req.AcceptProxyProtocol,
+	}
+	allowExtra, err := kernel.ParseAllowList(req.WhitelistExtra)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	if in.Port == 0 {
 		port, err := h.pickFreeInboundPort(row.NodeID, row.ID)
@@ -622,7 +639,15 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	row.Name = req.Name
 	row.ShareHost = req.ShareHost
 	row.Remark = strings.TrimSpace(req.Remark)
+	prevAcceptProxy := row.AcceptProxyProtocol
 	row.RelayOnly = boolToInt(req.RelayOnly)
+	row.AcceptProxyProtocol = boolToInt(req.AcceptProxyProtocol)
+	if row.AcceptProxyProtocol == 1 {
+		// Clients cannot speak PROXY protocol, so direct access stops working.
+		row.RelayOnly = 1
+	}
+	row.RelayWhitelist = boolToInt(req.RelayWhitelist)
+	row.WhitelistExtra = strings.Join(allowExtra, ", ")
 	if req.Enabled != nil {
 		row.Enabled = boolToInt(*req.Enabled)
 	}
@@ -638,8 +663,15 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		return
 	}
 
+	var warnings []string
+	if update && prevAcceptProxy != row.AcceptProxyProtocol {
+		warnings = h.syncRelayProxyProtocol(row)
+	}
 	if err := h.applyKernel(k.ID, false); err != nil {
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), TS: now, Data: map[string]interface{}{"id": row.ID}})
+		warnings = append([]string{"下发到节点失败: " + err.Error()}, warnings...)
+	}
+	if len(warnings) > 0 {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"id": row.ID}})
 		return
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{"id": row.ID}))
@@ -831,7 +863,11 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 			return nil, "", err
 		}
 		inbounds = append(inbounds, in)
-		ports = append(ports, map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()})
+		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
+		if row.RelayWhitelist == 1 {
+			port["allow"] = h.inboundAllowList(row)
+		}
+		ports = append(ports, port)
 	}
 	rendered, err := kernel.Render(k.KernelType, inbounds)
 	if err != nil {

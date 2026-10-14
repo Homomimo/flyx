@@ -267,3 +267,52 @@ func TestInboundRelayValidationContract(t *testing.T) {
 		t.Fatal("rejected relays must not leave forwards behind")
 	}
 }
+
+func TestInboundProxyProtocolAndWhitelistContract(t *testing.T) {
+	secret := "contract-jwt-secret"
+	router, r := setupContractRouter(t, secret)
+	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+	landing := seedKernelNode(t, r, "landing")
+	relayNode := seedKernelNode(t, r, "relay")
+	inboundID := seedInboundOnNode(t, router, r, admin, landing,
+		`{"nodeId":`+jsonInt64(landing)+`,"kernelType":"xray","name":"pp","protocol":"vless","port":443,"security":{"type":"reality"}}`)
+	_, forwardID := seedRelayForward(t, r, 1, relayNode, 0, 30007, inboundID)
+	security := mustQueryString(t, r, `SELECT security FROM node_inbound WHERE id = ?`, inboundID)
+	update := func(extra string) string {
+		return `{"id":` + jsonInt64(inboundID) + `,"name":"pp","protocol":"vless","port":443,"security":` + security + extra + `}`
+	}
+
+	bad := kernelContractPost(t, router, admin, "/api/v1/inbound/update", update(`,"relayWhitelist":true,"whitelistExtra":"example.com"`))
+	if bad.Code == 0 || !strings.Contains(bad.Msg, "白名单") {
+		t.Fatalf("hostname in whitelist must be rejected: %+v", bad)
+	}
+
+	out := kernelContractPost(t, router, admin, "/api/v1/inbound/update",
+		update(`,"acceptProxyProtocol":true,"relayWhitelist":true,"whitelistExtra":"203.0.113.9, 10.0.0.0/8"`))
+	if out.Code != 0 {
+		t.Fatalf("update: %+v", out)
+	}
+	if mustQueryInt(t, r, `SELECT relay_only FROM node_inbound WHERE id = ?`, inboundID) != 1 {
+		t.Fatal("accepting PROXY protocol must force relay-only")
+	}
+	if got := mustQueryString(t, r, `SELECT whitelist_extra FROM node_inbound WHERE id = ?`, inboundID); got != "203.0.113.9/32, 10.0.0.0/8" {
+		t.Fatalf("whitelist not normalized: %q", got)
+	}
+	if mustQueryInt(t, r, `SELECT proxy_protocol_send FROM forward WHERE id = ?`, forwardID) != 1 {
+		t.Fatal("relay forward must start sending PROXY protocol")
+	}
+
+	list := kernelContractPost(t, router, admin, "/api/v1/inbound/list", `{}`)
+	item := list.Data.([]interface{})[0].(map[string]interface{})
+	if item["acceptProxyProtocol"] != true || item["relayWhitelist"] != true || item["relayOnly"] != true {
+		t.Fatalf("list flags: %v", item)
+	}
+
+	out = kernelContractPost(t, router, admin, "/api/v1/inbound/update", update(`,"acceptProxyProtocol":false`))
+	if out.Code != 0 {
+		t.Fatalf("disable: %+v", out)
+	}
+	if mustQueryInt(t, r, `SELECT proxy_protocol_send FROM forward WHERE id = ?`, forwardID) != 0 {
+		t.Fatal("relay forward must stop sending PROXY protocol")
+	}
+}

@@ -6,6 +6,7 @@ package kernel
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -28,6 +29,9 @@ type Port struct {
 	InboundID int64  `json:"inboundId"`
 	Port      int    `json:"port"`
 	Network   string `json:"network"` // "tcp", "udp" or "tcp,udp"
+	// Allow, when present, restricts the port to these source CIDRs; every
+	// other packet to it is dropped. Absent means no restriction.
+	Allow []string `json:"allow,omitempty"`
 }
 
 // ApplyRequest is the KernelApply command body.
@@ -115,6 +119,14 @@ func (r *ApplyRequest) validate() error {
 	for _, p := range r.Ports {
 		if p.Port < 1 || p.Port > 65535 || p.InboundID <= 0 {
 			return fmt.Errorf("非法端口: %d", p.Port)
+		}
+		if len(p.Allow) > 512 {
+			return fmt.Errorf("白名单条目过多")
+		}
+		for _, c := range p.Allow {
+			if _, _, err := net.ParseCIDR(c); err != nil {
+				return fmt.Errorf("非法白名单条目: %q", c)
+			}
 		}
 	}
 	return nil

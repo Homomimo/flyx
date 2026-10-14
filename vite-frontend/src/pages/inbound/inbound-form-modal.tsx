@@ -619,18 +619,69 @@ export function InboundFormModal({
                         onChange={(e) => set("shareHost", e.target.value)}
                       />
                     </div>
-                    <div className="flex items-start gap-2">
-                      <Switch
-                        isSelected={form.relayOnly}
-                        size="sm"
-                        onValueChange={(v) => set("relayOnly", v)}
-                      />
-                      <div>
-                        <p className="text-sm">仅通过中转提供</p>
-                        <p className="text-xs text-default-500">
-                          订阅和分享中不再给出落地节点的直连地址
-                        </p>
+                    <div className="space-y-3 rounded-xl border border-divider p-3">
+                      <p className="text-sm font-medium">中转相关</p>
+                      <div className="flex items-start gap-2">
+                        <Switch
+                          isDisabled={form.acceptProxyProtocol}
+                          isSelected={
+                            form.relayOnly || form.acceptProxyProtocol
+                          }
+                          size="sm"
+                          onValueChange={(v) => set("relayOnly", v)}
+                        />
+                        <div>
+                          <p className="text-sm">仅通过中转提供</p>
+                          <p className="text-xs text-default-500">
+                            订阅和分享中不再给出落地节点的直连地址
+                          </p>
+                        </div>
                       </div>
+                      <div className="flex items-start gap-2">
+                        <Switch
+                          isSelected={form.acceptProxyProtocol}
+                          size="sm"
+                          onValueChange={(v) => set("acceptProxyProtocol", v)}
+                        />
+                        <div>
+                          <p className="text-sm">
+                            获取真实客户端 IP（PROXY protocol）
+                          </p>
+                          <p className="text-xs text-default-500">
+                            中转转发会附带客户端地址，落地内核日志可见真实
+                            IP。开启后直连将无法使用，自动变为仅中转
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <Switch
+                          isSelected={form.relayWhitelist}
+                          size="sm"
+                          onValueChange={(v) => set("relayWhitelist", v)}
+                        />
+                        <div>
+                          <p className="text-sm">
+                            仅允许中转机访问（防火墙白名单）
+                          </p>
+                          <p className="text-xs text-default-500">
+                            只放行已对接中转的入口节点 IP
+                            和本机，其他来源访问该端口一律丢弃；需要节点安装
+                            nftables
+                          </p>
+                        </div>
+                      </div>
+                      {form.relayWhitelist && (
+                        <Input
+                          description="中转机出口 IP 与节点地址不同时，在此补充；支持 IP 和网段，逗号分隔"
+                          label="额外放行"
+                          placeholder="203.0.113.9, 10.0.0.0/8"
+                          value={form.whitelistExtra}
+                          variant="bordered"
+                          onChange={(e) =>
+                            set("whitelistExtra", e.target.value)
+                          }
+                        />
+                      )}
                     </div>
                     <Input
                       label="备注"

@@ -45,6 +45,12 @@ func xrayInbound(in Inbound) (obj, error) {
 	}
 	if in.Protocol != ProtocolShadowsocks {
 		item["streamSettings"] = xrayStream(in)
+	} else if in.AcceptProxyProtocol {
+		item["streamSettings"] = obj{"network": TransportTCP}
+	}
+	if in.AcceptProxyProtocol {
+		stream := item["streamSettings"].(obj)
+		stream["sockopt"] = obj{"acceptProxyProtocol": true}
 	}
 	if err := mergeExtra(item, in.Extra); err != nil {
 		return nil, err

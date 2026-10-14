@@ -167,19 +167,22 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Model(&model.NodeInbound{}).Where("id = ?", in.ID).Updates(map[string]interface{}{
-		"name":         in.Name,
-		"protocol":     in.Protocol,
-		"listen":       in.Listen,
-		"port":         in.Port,
-		"transport":    in.Transport,
-		"security":     in.Security,
-		"settings":     in.Settings,
-		"extra":        in.Extra,
-		"share_host":   in.ShareHost,
-		"remark":       in.Remark,
-		"relay_only":   in.RelayOnly,
-		"enabled":      in.Enabled,
-		"updated_time": in.UpdatedTime,
+		"name":                  in.Name,
+		"protocol":              in.Protocol,
+		"listen":                in.Listen,
+		"port":                  in.Port,
+		"transport":             in.Transport,
+		"security":              in.Security,
+		"settings":              in.Settings,
+		"extra":                 in.Extra,
+		"share_host":            in.ShareHost,
+		"remark":                in.Remark,
+		"relay_only":            in.RelayOnly,
+		"accept_proxy_protocol": in.AcceptProxyProtocol,
+		"relay_whitelist":       in.RelayWhitelist,
+		"whitelist_extra":       in.WhitelistExtra,
+		"enabled":               in.Enabled,
+		"updated_time":          in.UpdatedTime,
 	}).Error
 }
 

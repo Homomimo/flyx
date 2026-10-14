@@ -247,3 +247,57 @@ func assertGolden(t *testing.T, name, got string) {
 		t.Fatalf("%s mismatch:\n--- got ---\n%s", name, got)
 	}
 }
+
+func TestRenderAcceptProxyProtocol(t *testing.T) {
+	ins := []Inbound{
+		{ID: 1, Protocol: ProtocolVLESS, Port: 443, Security: Security{Type: SecurityReality}, AcceptProxyProtocol: true},
+		{ID: 2, Protocol: ProtocolShadowsocks, Port: 8388, AcceptProxyProtocol: true},
+		{ID: 3, Protocol: ProtocolShadowsocks, Port: 8389},
+	}
+	for i := range ins {
+		if err := Normalize(TypeXray, &ins[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := Render(TypeXray, ins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Inbounds []struct {
+			Tag            string                 `json:"tag"`
+			StreamSettings map[string]interface{} `json:"streamSettings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal([]byte(out.Files[0].Content), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range cfg.Inbounds[:2] {
+		sockopt, _ := in.StreamSettings["sockopt"].(map[string]interface{})
+		if sockopt["acceptProxyProtocol"] != true {
+			t.Fatalf("%s: acceptProxyProtocol missing: %v", in.Tag, in.StreamSettings)
+		}
+	}
+	if cfg.Inbounds[2].StreamSettings != nil {
+		t.Fatalf("plain ss must not get streamSettings: %v", cfg.Inbounds[2].StreamSettings)
+	}
+}
+
+func TestParseAllowList(t *testing.T) {
+	got, err := ParseAllowList("1.2.3.4, 10.0.0.0/8\n2001:db8::1，1.2.3.4 10.1.2.3/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1.2.3.4/32", "10.0.0.0/8", "2001:db8::1/128"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	for _, bad := range []string{"example.com", "1.2.3.4/33", "1.2.3.4; drop"} {
+		if _, err := ParseAllowList(bad); err == nil {
+			t.Fatalf("%q must be rejected", bad)
+		}
+	}
+	if got, _ := ParseAllowList("  "); len(got) != 0 {
+		t.Fatal("empty list")
+	}
+}

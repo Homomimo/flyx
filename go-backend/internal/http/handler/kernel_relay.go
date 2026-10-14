@@ -219,7 +219,11 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	forwardID, err := h.createRelayForward(userID, name, tunnel, remoteAddr, req.InPort)
+	ppSend := 0
+	if row.AcceptProxyProtocol == 1 {
+		ppSend = relayProxyProtocolVersion
+	}
+	forwardID, err := h.createRelayForward(userID, name, tunnel, remoteAddr, req.InPort, ppSend)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -239,6 +243,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.refreshInboundWhitelist(row.ID)
 	response.WriteJSON(w, response.OK(map[string]interface{}{"id": rel.ID, "forwardId": forwardID}))
 }
 
@@ -253,7 +258,7 @@ func firstNonEmpty(values ...string) string {
 
 // createRelayForward mirrors the admin path of forwardCreate: same port
 // validation, persistence and runtime sync, without user-facing quota checks.
-func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRecord, remoteAddr string, inPort int) (int64, error) {
+func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRecord, remoteAddr string, inPort int, proxyProtocolSend int) (int64, error) {
 	entryNodes, err := h.tunnelEntryNodeIDs(tunnel.ID)
 	if err != nil {
 		return 0, err
@@ -299,7 +304,7 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 		userName = "admin"
 	}
 	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnel.ID, remoteAddr, "fifo", now,
-		h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, 0)
+		h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, proxyProtocolSend)
 	if err != nil {
 		return 0, err
 	}
@@ -366,6 +371,7 @@ func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	h.refreshInboundWhitelist(rel.InboundID)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
