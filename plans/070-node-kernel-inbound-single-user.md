@@ -466,13 +466,33 @@ API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 - 白名单实测：关闭时从 192.0.2.2 直连可用；开启后被丢弃，回环和两种中转仍可用；加入 192.0.2.0/24 后放行；关闭后集合移除。生成的规则在单元测试中经真实 `nft -c` 校验。
 - 已知：Xray 新版客户端不再接受 `allowInsecure`，自签证书链接对 v2rayN 等仍有效（其自行映射），Mihomo 用 `skip-cert-verify`，sing-box 用 `insecure`。
 
-### 第 3 阶段：更多内核
+### 第 3 阶段：更多内核（参考 mozisen/surge `vless-server.sh` v3.7.3）
 
-- [ ] B13 `render_singbox.go` + golden（含 Hysteria2、TUIC、AnyTLS、ACME）
-- [ ] A5 sing-box 适配器
-- [ ] B14 `render_snell.go`、Snell 每个入站一个进程的实例键
-- [ ] A6 snell 适配器
-- [ ] （可选）Hysteria2 官方版、shadowsocks-rust 适配器
+参考脚本的协议 / 内核划分与本方案一致：Xray 负责 VLESS / VMess / Trojan / SS，sing-box 负责 Hysteria2 / TUIC / AnyTLS，Snell 等闭源协议独立进程。借鉴其中经过实战的参数与安全做法，不照搬多用户、WARP 分流、链式代理、acme.sh、Telegram 等与单用户自用无关的部分。
+
+**sing-box 内核**
+- [ ] B13 `render_singbox.go` + golden：Hysteria2（`alpn: [h3]`、`ignore_client_bandwidth`、可选 masquerade）、TUIC v5（`congestion_control: bbr`、`alpn: [h3]`）、AnyTLS，以及 VLESS-Reality / Trojan / SS2022（与 Xray 共用协议模型，节点可任选内核）
+- [ ] B14 证书：沿用面板自签证书（链接带 insecure）/ 节点证书路径；新增 sing-box 内置 ACME（不引入 acme.sh）
+- [ ] A5 sing-box 适配器：下载 `sing-box-{ver}-linux-{arch}.tar.gz`，校验 SHA256
+- [ ] B15 可选：Hysteria2 / TUIC 端口跳跃——在 agent 的 `flvx_kernel` 表里加 UDP 端口段重定向，订阅中写入 `ports` / `mport`
+
+**Snell**
+- [ ] B16 `render_snell.go`：v4 / v5（`listen`、`psk`、`ipv6`、`obfs = off`，v5 带 `version`）；每个入站一个进程
+- [ ] A6 snell 适配器：只从官方 `dl.nssurge.com/snell/snell-server-v{ver}-linux-{arch}.zip` 下载。官方没有校验文件，按参考脚本的做法内置**已核对的 SHA256 表**（4.1.1、5.0.1 × amd64 / aarch64 / armv7l），未知版本拒绝安装
+- [ ] v6 暂不默认开放：参考脚本的 v6 来自第三方仓库（passeway/Snell），不是官方渠道
+
+**ShadowTLS v3（给 Snell / SS2022 套一层）**
+- [ ] B17 优先用 sing-box 原生 `shadowtls` 入站（v3，handshake 到伪装站），后端 detour 到本机 Snell / SS 端口；后端只监听 127.0.0.1
+- [ ] 若 sing-box 方式在 Snell 上验证不通过，退回参考脚本的方案：`ihciah/shadow-tls` 0.2.25（同样内置 SHA256）`--v3 server --listen … --server 127.0.0.1:后端 --tls sni:443 --password …`
+
+**订阅 / 分享**
+- [ ] B18 链接：`hysteria2://`、`tuic://`（`congestion_control=bbr&alpn=h3&udp_relay_mode=native`）、`anytls://`；Snell 无标准 URI，只出现在 Surge / Mihomo 订阅
+- [ ] B19 Clash(Mihomo)：hysteria2 / tuic / anytls / snell；sing-box：hysteria2 / tuic / anytls；Surge：hysteria2 / tuic / anytls / snell（**带 ShadowTLS 时输出 `shadow-tls-password` / `shadow-tls-sni` / `shadow-tls-version=3`，参考脚本这里漏了**）
+- [ ] 每种组合用真实 sing-box / Mihomo 客户端做连通性测试（同第 2 阶段）
+
+**暂不做**
+- NaïveProxy：需要带 forwardproxy 插件的 Caddy 和真实域名，后续按需
+- 多用户、WARP / 分流、链式代理、负载均衡（单用户场景不需要）
 
 ### 验证（每个阶段）
 
