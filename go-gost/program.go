@@ -20,6 +20,7 @@ import (
 	"github.com/go-gost/x/config/loader"
 	auth_parser "github.com/go-gost/x/config/parsing/auth"
 	"github.com/go-gost/x/config/parsing/parser"
+	"github.com/go-gost/x/kernel"
 	xmetrics "github.com/go-gost/x/metrics"
 	metrics "github.com/go-gost/x/metrics/service"
 	"github.com/go-gost/x/registry"
@@ -101,6 +102,7 @@ func (p *program) Start() (err error) {
 	if p.startReporter != nil {
 		p.reporter = p.startReporter()
 	}
+	go kernel.Default().Restore()
 
 	go func() {
 		select {
@@ -226,6 +228,7 @@ func (p *program) Stop() error {
 	if p.reporter != nil {
 		p.reporter.Stop()
 	}
+	kernel.Default().Shutdown()
 	unlock := config.LockMutation()
 	defer unlock()
 	p.stopped = true

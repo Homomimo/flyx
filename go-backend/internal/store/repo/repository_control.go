@@ -170,7 +170,17 @@ func (r *Repository) HasOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port
 	if err != nil {
 		return false, err
 	}
+	if count > 0 {
+		return true, nil
+	}
 
+	// Ports served by a proxy kernel on the node are just as occupied.
+	err = tx.Model(&model.NodeInbound{}).
+		Where("node_id = ? AND port = ?", nodeID, port).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
 	return count > 0, nil
 }
 

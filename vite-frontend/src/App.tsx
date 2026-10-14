@@ -19,6 +19,7 @@ import UserPage from "@/pages/user";
 import GroupPage from "@/pages/group";
 import ProfilePage from "@/pages/profile";
 import LimitPage from "@/pages/limit";
+import InboundPage from "@/pages/inbound";
 import ConfigPage from "@/pages/config";
 import PanelSharingPage from "@/pages/panel-sharing";
 import AdminLayout from "@/layouts/admin";
@@ -256,6 +257,14 @@ function App() {
             </ProtectedRoute>
           }
           path="/limit"
+        />
+        <Route
+          element={
+            <ProtectedRoute useSimpleLayout={true}>
+              <InboundPage />
+            </ProtectedRoute>
+          }
+          path="/inbound"
         />
         <Route
           element={

@@ -625,3 +625,188 @@ export interface TunnelQualityApiItem {
   timestamp: number;
   chainDetails?: string;
 }
+
+// ---- 代理内核 / 入站 ----
+
+export interface KernelTransportCap {
+  type: string;
+  securities: string[];
+}
+
+export interface KernelProtocolCap {
+  protocol: string;
+  transports: KernelTransportCap[];
+}
+
+export interface KernelInfo {
+  type: string;
+  name: string;
+  implemented: boolean;
+  protocols: KernelProtocolCap[] | null;
+  versions?: string[];
+  certModes?: string[];
+}
+
+export interface KernelCapabilitiesApiData {
+  kernels: KernelInfo[];
+  ssMethods: string[];
+  defaults: {
+    realitySni: string;
+    fingerprint: string;
+    ssMethod: string;
+    flow: string;
+  };
+}
+
+export interface KernelApiItem {
+  id: number;
+  nodeId: number;
+  nodeName: string;
+  nodeOnline: boolean;
+  kernelType: string;
+  version: string;
+  installedVersion: string;
+  status: "pending" | "running" | "stopped" | "error" | string;
+  lastError: string;
+  synced: boolean;
+  enabled: boolean;
+  inboundCount: number;
+  updatedTime: number;
+}
+
+export interface KernelStateApiData {
+  type: string;
+  running: boolean;
+  enabled: boolean;
+  pid: number;
+  version: string;
+  error: string;
+  restarts: number;
+  startedAt: number;
+  logs?: string[];
+}
+
+export interface InboundSettings {
+  uuid?: string;
+  flow?: string;
+  password?: string;
+  method?: string;
+  snellVersion?: number;
+  masquerade?: string;
+  backendPort?: number;
+  portHopping?: string;
+  username?: string;
+}
+
+export interface InboundTransport {
+  type: string;
+  path?: string;
+  host?: string;
+  serviceName?: string;
+  mode?: string;
+}
+
+export interface InboundSecurity {
+  type: string;
+  sni?: string;
+  alpn?: string[];
+  fingerprint?: string;
+  certMode?: string;
+  certFile?: string;
+  keyFile?: string;
+  realityDest?: string;
+  realityPrivateKey?: string;
+  realityPublicKey?: string;
+  realityShortIds?: string[];
+  shadowTlsPassword?: string;
+  acmeEmail?: string;
+  acmeDns?: string;
+  acmeDnsKey?: string;
+  acmeDnsSecret?: string;
+  /** List output only: DNS credentials are stored but not returned. */
+  acmeDnsSet?: boolean;
+}
+
+export interface InboundApiItem {
+  id: number;
+  kernelId: number;
+  kernelType: string;
+  kernelStatus: string;
+  nodeId: number;
+  nodeName: string;
+  nodeServerIp: string;
+  name: string;
+  protocol: string;
+  listen: string;
+  port: number;
+  network: string;
+  settings: InboundSettings;
+  transport: InboundTransport;
+  security: InboundSecurity;
+  extra: string;
+  shareHost: string;
+  remark: string;
+  relayOnly: boolean;
+  relayCount: number;
+  acceptProxyProtocol: boolean;
+  relayWhitelist: boolean;
+  whitelistExtra: string;
+  enabled: boolean;
+  uploadBytes: number;
+  downloadBytes: number;
+  createdTime: number;
+  updatedTime: number;
+}
+
+export interface InboundMutationPayload {
+  id?: number;
+  nodeId?: number;
+  kernelType?: string;
+  name: string;
+  protocol: string;
+  listen: string;
+  port: number;
+  settings: InboundSettings;
+  transport: InboundTransport;
+  security: InboundSecurity;
+  extra: string;
+  shareHost: string;
+  remark: string;
+  relayOnly: boolean;
+  acceptProxyProtocol: boolean;
+  relayWhitelist: boolean;
+  whitelistExtra: string;
+  enabled?: boolean;
+}
+
+export interface InboundShareEntry {
+  name: string;
+  kind: "direct" | "relay";
+  host: string;
+  port: number;
+  uri: string;
+  surge: string;
+}
+
+export interface InboundRelayApiItem {
+  id: number;
+  inboundId: number;
+  forwardId: number;
+  name: string;
+  shareHost: string;
+  managed: boolean;
+  mode: "port" | "tunnel";
+  forwardName: string;
+  forwardStatus: number;
+  forwardExists: boolean;
+  tunnelId: number;
+  tunnelName: string;
+  remoteAddr: string;
+  entries: { Host: string; Port: number }[];
+  createdTime: number;
+}
+
+export interface SubInfoApiData {
+  token: string;
+  path: string;
+}

@@ -393,6 +393,9 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
 			return err
 		}
+		if err := deleteNodeKernelsTx(tx, nodeID); err != nil {
+			return err
+		}
 		return tx.Where("id = ?", nodeID).Delete(&model.Node{}).Error
 	})
 }
@@ -575,6 +578,14 @@ func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int
 		if p > 0 {
 			used[p] = struct{}{}
 		}
+	}
+
+	inboundPorts, err := listNodeInboundPortsTx(tx, nodeID, 0)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range inboundPorts {
+		used[p] = struct{}{}
 	}
 
 	var available []int
@@ -806,6 +817,9 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 			return err
 		}
 		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("id = ?", forwardID).Delete(&model.Forward{}).Error
