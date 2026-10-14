@@ -8,7 +8,9 @@ COPY . .
 ARG TARGETOS
 ARG TARGETARCH
 ARG KEYGEN_ACCOUNT_ID
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} env ${TARGETARCH:+GOARCH=${TARGETARCH}} go build -ldflags="-X 'go-backend/internal/license.AccountID=${KEYGEN_ACCOUNT_ID}'" -o /out/paneld ./cmd/paneld
+# owner/repo whose releases the panel installs nodes and upgrades from.
+ARG GITHUB_REPO
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} env ${TARGETARCH:+GOARCH=${TARGETARCH}} go build -ldflags="-X 'go-backend/internal/license.AccountID=${KEYGEN_ACCOUNT_ID}' ${GITHUB_REPO:+-X 'go-backend/internal/http/handler.githubRepo=${GITHUB_REPO}'}" -o /out/paneld ./cmd/paneld
 
 FROM docker:27-cli AS dockercli
 
