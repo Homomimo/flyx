@@ -129,3 +129,12 @@ func certMatchesName(certPEM, name string) bool {
 	}
 	return cert.VerifyHostname(name) == nil && time.Now().Before(cert.NotAfter)
 }
+
+// randomPort returns a port in [lo, hi).
+func randomPort(lo, hi int) int {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(hi-lo)))
+	if err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
+	return lo + int(n.Int64())
+}

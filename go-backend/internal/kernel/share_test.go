@@ -135,3 +135,51 @@ func TestYAMLQuotesHostileNames(t *testing.T) {
 		t.Fatalf("names must stay a single quoted scalar:\n%s", out)
 	}
 }
+
+func TestSharePhase3(t *testing.T) {
+	var eps []Endpoint
+	for _, in := range phase3Inbounds(t)[:4] {
+		eps = append(eps, Endpoint{Name: in.Protocol, Host: "203.0.113.10", Port: in.Port, Inbound: in})
+	}
+	snell := Inbound{ID: 9, Protocol: ProtocolSnell, Port: 6160, Settings: Settings{Password: "psk-cccccccc", SnellVersion: 5, BackendPort: 36160},
+		Security: Security{Type: SecurityShadowTLS, SNI: "www.microsoft.com", ShadowTLSPassword: "stls-pass-2"}}
+	if err := Normalize(TypeSnell, &snell); err != nil {
+		t.Fatal(err)
+	}
+	eps = append(eps, Endpoint{Name: "snell", Host: "203.0.113.10", Port: 6160, Inbound: snell})
+
+	var uris []string
+	for _, e := range eps {
+		if uri, ok := ShareURI(e); ok {
+			uris = append(uris, uri)
+		}
+	}
+	if len(uris) != 4 {
+		t.Fatalf("snell has no share link, others do: %v", uris)
+	}
+	var all strings.Builder
+	all.WriteString(strings.Join(uris, "\n") + "\n")
+	for _, f := range []string{FormatClash, FormatSingbox, FormatSurge} {
+		body, _, err := Subscription(f, eps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.WriteString("### " + f + "\n" + body)
+	}
+	assertGolden(t, "share-phase3.golden.txt", all.String())
+	out := all.String()
+	for _, want := range []string{
+		"hysteria2://hy2-secret@203.0.113.10:443/?insecure=1&sni=www.bing.com#hysteria2",
+		"plugin=shadow-tls%3Bhost%3Dwww.microsoft.com%3Bpassword%3Dstls-secret-123%3Bversion%3D3",
+		"snell = snell, 203.0.113.10, 6160, psk=psk-cccccccc, version=5, reuse=true, tfo=true, shadow-tls-password=stls-pass-2, shadow-tls-sni=www.microsoft.com, shadow-tls-version=3",
+		"tuic-v5, 203.0.113.10, 8443",
+		`"detour": "shadowsocks (shadowtls)"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q", want)
+		}
+	}
+	if strings.Contains(out[strings.Index(out, "### clash"):strings.Index(out, "### singbox")], "snell") {
+		t.Fatal("snell v5 must not be offered to Mihomo")
+	}
+}

@@ -18,10 +18,11 @@ const defaultBaseDir = "/etc/flux_agent/kernels"
 
 type instance struct {
 	req     ApplyRequest
-	binPath string
+	binDir  string            // main binary directory
+	bins    map[string]string // "" = main binary, else extra name -> path
 	version string
 	logs    *logRing
-	proc    *process
+	procs   []*process
 	err     string
 }
 
@@ -125,8 +126,22 @@ func (m *Manager) allPorts() []Port {
 	return ports
 }
 
-// Apply installs (if needed), writes the configuration and makes the process
-// match req.Enabled. Unchanged running kernels are left alone.
+// ensureBinary installs a binary into dir unless it is already there.
+func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir string) (string, error) {
+	path := filepath.Join(dir, d.BinName)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	inst.logs.add(fmt.Sprintf("[flvx] 安装 %s", label))
+	if err := install(d, dir); err != nil {
+		return "", fmt.Errorf("安装 %s 失败: %v", label, err)
+	}
+	inst.logs.add(fmt.Sprintf("[flvx] %s 安装完成", label))
+	return path, nil
+}
+
+// Apply installs (if needed), writes the configuration and makes the
+// processes match req.Enabled. Unchanged running kernels are left alone.
 func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	if err := req.validate(); err != nil {
 		return State{}, err
@@ -143,14 +158,21 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	m.mu.Unlock()
 
 	binDir := m.binDir(req.Type, req.Version)
-	binPath := filepath.Join(binDir, req.Download.BinName)
-	if _, err := os.Stat(binPath); err != nil {
-		inst.logs.add(fmt.Sprintf("[flvx] 安装 %s %s", req.Type, req.Version))
-		if err := install(req.Download, binDir); err != nil {
+	bins := map[string]string{}
+	mainBin, err := m.ensureBinary(inst, req.Type+" "+req.Version, req.Download, binDir)
+	if err != nil {
+		m.setErr(inst, err)
+		return m.state(req.Type, false), err
+	}
+	bins[""] = mainBin
+	for _, e := range req.Extras {
+		dir := filepath.Join(m.baseDir, req.Type, "bin", "extra-"+e.Name+"-"+e.Version)
+		path, err := m.ensureBinary(inst, e.Name+" "+e.Version, e.Download, dir)
+		if err != nil {
 			m.setErr(inst, err)
 			return m.state(req.Type, false), err
 		}
-		inst.logs.add("[flvx] 安装完成")
+		bins[e.Name] = path
 	}
 
 	runDir := m.runDir(req.Type)
@@ -166,32 +188,32 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	}
 
 	m.mu.Lock()
-	changed := inst.req.Hash != req.Hash || inst.binPath != binPath
-	proc := inst.proc
+	changed := inst.req.Hash != req.Hash || inst.bins[""] != mainBin || len(inst.bins) != len(bins)
+	running := len(inst.procs) > 0
+	for _, p := range inst.procs {
+		if r, _, _, _, _ := p.snapshot(); !r {
+			running = false
+		}
+	}
 	inst.req = req
-	inst.binPath = binPath
+	inst.binDir = binDir
+	inst.bins = bins
 	inst.err = ""
-	m.mu.Unlock()
-	m.mu.Lock()
 	needVersion := inst.version == "" || changed
 	m.mu.Unlock()
 	if needVersion {
-		v := detectVersion(binPath, adapters[req.Type].versionArgs)
+		v := detectVersion(mainBin, adapters[req.Type].versionArgs)
 		m.mu.Lock()
 		inst.version = v
 		m.mu.Unlock()
 	}
 
-	running := false
-	if proc != nil {
-		running, _, _, _, _ = proc.snapshot()
-	}
 	switch {
 	case !req.Enabled:
-		m.stopProcess(inst)
-	case changed || proc == nil || !running:
-		m.stopProcess(inst)
-		m.startProcess(inst, binPath, expandArgs(req.Args, runDir, binDir), runDir)
+		m.stopProcesses(inst)
+	case changed || !running:
+		m.stopProcesses(inst)
+		m.startProcesses(inst)
 		time.Sleep(startupProbeIn)
 	}
 
@@ -230,22 +252,47 @@ func (m *Manager) setErr(inst *instance, err error) {
 	inst.logs.add("[flvx] " + err.Error())
 }
 
-func (m *Manager) startProcess(inst *instance, bin string, args []string, dir string) {
-	p := newProcess(bin, args, dir, inst.logs)
+// startProcesses launches every process of the instance's current request.
+func (m *Manager) startProcesses(inst *instance) {
 	m.mu.Lock()
-	inst.proc = p
+	specs := inst.req.processSpecs()
+	runDir := m.runDir(inst.req.Type)
+	bins := inst.bins
 	m.mu.Unlock()
-	p.start()
+
+	procs := make([]*process, 0, len(specs))
+	for _, spec := range specs {
+		bin := bins[spec.Bin]
+		prefix := ""
+		if len(specs) > 1 {
+			prefix = "[" + spec.Name + "] "
+		}
+		p := newProcess(bin, expandArgs(spec.Args, runDir, filepath.Dir(bin)), runDir, inst.logs)
+		p.prefix = prefix
+		procs = append(procs, p)
+	}
+	m.mu.Lock()
+	inst.procs = procs
+	m.mu.Unlock()
+	for _, p := range procs {
+		p.start()
+	}
 }
 
-func (m *Manager) stopProcess(inst *instance) {
+func (m *Manager) stopProcesses(inst *instance) {
 	m.mu.Lock()
-	p := inst.proc
-	inst.proc = nil
+	procs := inst.procs
+	inst.procs = nil
 	m.mu.Unlock()
-	if p != nil {
-		p.stop()
+	var wg sync.WaitGroup
+	for _, p := range procs {
+		wg.Add(1)
+		go func(p *process) {
+			defer wg.Done()
+			p.stop()
+		}(p)
 	}
+	wg.Wait()
 }
 
 // Control handles start / stop / restart / remove for an applied kernel.
@@ -259,7 +306,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 
 	if action == "remove" {
 		if inst != nil {
-			m.stopProcess(inst)
+			m.stopProcesses(inst)
 			m.mu.Lock()
 			delete(m.instances, kernelType)
 			m.mu.Unlock()
@@ -279,18 +326,16 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 
 	switch action {
 	case "stop":
-		m.stopProcess(inst)
+		m.stopProcesses(inst)
 		m.mu.Lock()
 		inst.req.Enabled = false
 		m.mu.Unlock()
 	case "start", "restart":
-		m.stopProcess(inst)
+		m.stopProcesses(inst)
 		m.mu.Lock()
 		inst.req.Enabled = true
-		bin, args := inst.binPath, inst.req.Args
 		m.mu.Unlock()
-		runDir := m.runDir(kernelType)
-		m.startProcess(inst, bin, expandArgs(args, runDir, filepath.Dir(bin)), runDir)
+		m.startProcesses(inst)
 		time.Sleep(startupProbeIn)
 	default:
 		return State{}, fmt.Errorf("未知操作: %s", action)
@@ -311,11 +356,20 @@ func (m *Manager) state(kernelType string, withLogs bool) State {
 	st.ConfigHash = inst.req.Hash
 	st.Version = inst.version
 	st.Error = inst.err
-	if inst.proc != nil {
-		var lastErr string
-		st.Running, st.Pid, st.Restarts, lastErr, st.StartedAt = inst.proc.snapshot()
-		if st.Error == "" && !st.Running && lastErr != "" {
-			st.Error = lastErr + ": " + lastLines(inst.logs, 3)
+	if len(inst.procs) > 0 {
+		st.Running = true
+		for i, p := range inst.procs {
+			running, pid, restarts, lastErr, startedAt := p.snapshot()
+			if i == 0 {
+				st.Pid, st.StartedAt = pid, startedAt
+			}
+			st.Restarts += restarts
+			if !running {
+				st.Running = false
+				if st.Error == "" && lastErr != "" {
+					st.Error = p.prefix + lastErr + ": " + lastLines(inst.logs, 3)
+				}
+			}
 		}
 	}
 	if withLogs {
@@ -368,7 +422,7 @@ func (m *Manager) Shutdown() {
 		wg.Add(1)
 		go func(inst *instance) {
 			defer wg.Done()
-			m.stopProcess(inst)
+			m.stopProcesses(inst)
 		}(inst)
 	}
 	wg.Wait()

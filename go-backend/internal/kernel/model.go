@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +17,13 @@ type Settings struct {
 	Flow     string `json:"flow,omitempty"`
 	Password string `json:"password,omitempty"`
 	Method   string `json:"method,omitempty"`
+
+	// SnellVersion is the protocol version clients use (4 or 5).
+	SnellVersion int `json:"snellVersion,omitempty"`
+	// Masquerade is the site Hysteria2 serves to non-clients (optional URL).
+	Masquerade string `json:"masquerade,omitempty"`
+	// BackendPort is the loopback port a ShadowTLS-fronted Snell listens on.
+	BackendPort int `json:"backendPort,omitempty"`
 }
 
 type Transport struct {
@@ -44,6 +52,9 @@ type Security struct {
 	RealityPrivateKey string   `json:"realityPrivateKey,omitempty"`
 	RealityPublicKey  string   `json:"realityPublicKey,omitempty"`
 	RealityShortIDs   []string `json:"realityShortIds,omitempty"`
+
+	// ShadowTLS v3: SNI is the handshake site, this is the shared secret.
+	ShadowTLSPassword string `json:"shadowTlsPassword,omitempty"`
 }
 
 // Inbound is the kernel-independent description of one listening service.
@@ -68,7 +79,19 @@ func (in Inbound) Tag() string {
 // Network reports which L4 protocols the inbound listens on, used for nft
 // traffic counters.
 func (in Inbound) Network() string {
-	if in.Protocol == ProtocolShadowsocks {
+	switch in.Protocol {
+	case ProtocolHysteria2, ProtocolTUIC:
+		return "udp"
+	case ProtocolShadowsocks:
+		if in.Security.Type == SecurityShadowTLS {
+			return "tcp"
+		}
+		return "tcp,udp"
+	case ProtocolSnell:
+		// v5 adds UDP (QUIC proxy mode); behind ShadowTLS only TCP is exposed.
+		if in.Security.Type == SecurityShadowTLS || in.Settings.SnellVersion == 4 {
+			return "tcp"
+		}
 		return "tcp,udp"
 	}
 	return "tcp"
@@ -80,6 +103,8 @@ const (
 	DefaultSSMethod     = "2022-blake3-aes-128-gcm"
 	DefaultFingerprint  = "chrome"
 	DefaultTLSCertMode  = "self"
+	DefaultQUICSNI      = "www.bing.com"
+	DefaultSnellVersion = 5
 	defaultGRPCService  = "grpc"
 	defaultXHTTPMode    = "auto"
 	maxExtraConfigBytes = 64 * 1024
@@ -151,6 +176,9 @@ func Normalize(kernelType string, in *Inbound) error {
 	if net.ParseIP(in.Listen) == nil {
 		return errors.New("监听地址必须是 IP")
 	}
+	if in.AcceptProxyProtocol && kernelType != TypeXray {
+		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
+	}
 
 	if err := normalizeExtra(in); err != nil {
 		return err
@@ -161,7 +189,7 @@ func Normalize(kernelType string, in *Inbound) error {
 	if err := normalizeSettings(in); err != nil {
 		return err
 	}
-	return normalizeSecurity(&in.Security)
+	return normalizeSecurity(in)
 }
 
 func normalizeExtra(in *Inbound) error {
@@ -190,7 +218,7 @@ func normalizeTransport(t *Transport) error {
 		return errors.New("Host 格式错误")
 	}
 	switch t.Type {
-	case TransportTCP:
+	case TransportTCP, TransportQUIC:
 		t.Path, t.Host, t.ServiceName, t.Mode = "", "", "", ""
 	case TransportWS, TransportXHTTP:
 		if t.Path == "" {
@@ -256,13 +284,66 @@ func normalizeSettings(in *Inbound) error {
 			}
 		}
 		s.UUID, s.Flow = "", ""
+	case ProtocolHysteria2, ProtocolAnyTLS:
+		if s.Password == "" {
+			s.Password = RandomPassword()
+		}
+		s.UUID, s.Method, s.Flow = "", "", ""
+		s.Masquerade = strings.TrimSpace(s.Masquerade)
+		if in.Protocol != ProtocolHysteria2 {
+			s.Masquerade = ""
+		}
+		if s.Masquerade != "" {
+			u, err := url.Parse(s.Masquerade)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return errors.New("伪装地址必须是 http(s):// 开头的网址")
+			}
+		}
+	case ProtocolTUIC:
+		if s.UUID == "" {
+			s.UUID = NewUUID()
+		}
+		if !uuidPattern.MatchString(strings.ToLower(s.UUID)) {
+			return errors.New("UUID 格式错误")
+		}
+		if s.Password == "" {
+			s.Password = RandomPassword()
+		}
+		s.Method, s.Flow = "", ""
+	case ProtocolSnell:
+		if s.Password == "" {
+			s.Password = RandomPassword()
+		}
+		if !snellPSKPattern.MatchString(s.Password) {
+			return errors.New("Snell PSK 只能包含字母、数字和 -_，长度 8-64")
+		}
+		if s.SnellVersion == 0 {
+			s.SnellVersion = DefaultSnellVersion
+		}
+		if s.SnellVersion != 4 && s.SnellVersion != 5 {
+			return errors.New("Snell 版本只支持 4 或 5")
+		}
+		s.UUID, s.Method, s.Flow = "", "", ""
+	}
+	if in.Protocol == ProtocolSnell && in.Security.Type == SecurityShadowTLS {
+		if s.BackendPort == 0 {
+			s.BackendPort = randomPort(20000, 60000)
+		}
+		if s.BackendPort < 1024 || s.BackendPort > 65535 || s.BackendPort == in.Port {
+			return errors.New("ShadowTLS 后端端口无效")
+		}
+	} else {
+		s.BackendPort = 0
 	}
 	return nil
 }
 
+var snellPSKPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-func normalizeSecurity(sec *Security) error {
+func normalizeSecurity(in *Inbound) error {
+	sec := &in.Security
 	sec.SNI = strings.TrimSpace(sec.SNI)
 	sec.Fingerprint = strings.TrimSpace(sec.Fingerprint)
 	if sec.SNI != "" && !hostPattern.MatchString(sec.SNI) {
@@ -273,8 +354,31 @@ func normalizeSecurity(sec *Security) error {
 	case SecurityNone:
 		*sec = Security{Type: SecurityNone}
 		return nil
+	case SecurityShadowTLS:
+		*sec = Security{Type: SecurityShadowTLS, SNI: sec.SNI, Fingerprint: sec.Fingerprint, ShadowTLSPassword: strings.TrimSpace(sec.ShadowTLSPassword)}
+		if sec.SNI == "" {
+			sec.SNI = DefaultRealitySNI
+		}
+		if sec.Fingerprint == "" {
+			sec.Fingerprint = DefaultFingerprint
+		}
+		if sec.ShadowTLSPassword == "" {
+			sec.ShadowTLSPassword = RandomPassword()
+		}
+		if !snellPSKPattern.MatchString(sec.ShadowTLSPassword) {
+			return errors.New("ShadowTLS 密码只能包含字母、数字和 -_，长度 8-64")
+		}
+		return nil
 	case SecurityTLS:
 		sec.RealityDest, sec.RealityPrivateKey, sec.RealityPublicKey, sec.RealityShortIDs = "", "", "", nil
+		sec.ShadowTLSPassword = ""
+		quic := in.Protocol == ProtocolHysteria2 || in.Protocol == ProtocolTUIC
+		if quic {
+			sec.ALPN = []string{"h3"}
+		}
+		if sec.SNI == "" && (quic || in.Protocol == ProtocolAnyTLS) {
+			sec.SNI = DefaultQUICSNI
+		}
 		if sec.Fingerprint == "" {
 			sec.Fingerprint = DefaultFingerprint
 		}
@@ -307,6 +411,7 @@ func normalizeSecurity(sec *Security) error {
 		return nil
 	case SecurityReality:
 		sec.CertMode, sec.CertPEM, sec.KeyPEM, sec.CertFile, sec.KeyFile = "", "", "", "", ""
+		sec.ShadowTLSPassword = ""
 		if sec.SNI == "" {
 			sec.SNI = DefaultRealitySNI
 		}
@@ -362,6 +467,7 @@ func Regenerate(kernelType string, in *Inbound) error {
 	in.Security.RealityShortIDs = nil
 	in.Security.CertPEM = ""
 	in.Security.KeyPEM = ""
+	in.Security.ShadowTLSPassword = ""
 	return Normalize(kernelType, in)
 }
 

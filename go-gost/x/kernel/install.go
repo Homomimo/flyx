@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,7 +76,54 @@ func fetch(ctx context.Context, url string, limit int64, w io.Writer) error {
 	return nil
 }
 
-// install downloads, verifies and unpacks a kernel into binDir.
+// githubAPIBase is a variable so tests can point it at a local server.
+var githubAPIBase = "https://api.github.com"
+
+type githubReleaseJSON struct {
+	TagName string `json:"tag_name"`
+	Assets  []struct {
+		Name               string `json:"name"`
+		Digest             string `json:"digest"`
+		BrowserDownloadURL string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// resolveGitHub fills in the download URL and digest of a release asset from
+// the GitHub API (the asset "digest" field is "sha256:<hex>").
+func resolveGitHub(ctx context.Context, g *GitHubRelease, arch string) (url, digest string, err error) {
+	path := "latest"
+	if g.Tag != "" {
+		path = "tags/" + g.Tag
+	}
+	var body strings.Builder
+	if err := fetch(ctx, fmt.Sprintf("%s/repos/%s/releases/%s", githubAPIBase, g.Repo, path), 4<<20, &body); err != nil {
+		return "", "", fmt.Errorf("查询 GitHub 发布信息失败: %v", err)
+	}
+	var rel githubReleaseJSON
+	if err := json.Unmarshal([]byte(body.String()), &rel); err != nil {
+		return "", "", fmt.Errorf("解析 GitHub 发布信息失败: %v", err)
+	}
+	version := strings.TrimPrefix(rel.TagName, "v")
+	name := strings.NewReplacer("{VERSION}", version, "{ARCH}", arch).Replace(g.Asset)
+	for _, a := range rel.Assets {
+		if a.Name != name {
+			continue
+		}
+		digest = strings.ToLower(strings.TrimPrefix(a.Digest, "sha256:"))
+		if !sha256HexPattern.MatchString(digest) || len(digest) != 64 {
+			return "", "", fmt.Errorf("GitHub 未提供 %s 的校验值", name)
+		}
+		url = a.BrowserDownloadURL
+		if p := strings.TrimSuffix(strings.TrimSpace(g.Proxy), "/"); p != "" {
+			url = p + "/" + url
+		}
+		return url, digest, nil
+	}
+	return "", "", fmt.Errorf("发布 %s 中没有文件 %s", rel.TagName, name)
+}
+
+// install downloads, verifies and unpacks a binary into binDir. It refuses to
+// install anything whose SHA-256 it cannot establish.
 func install(d *Download, binDir string) error {
 	arch, err := resolveArch(d)
 	if err != nil {
@@ -83,9 +131,24 @@ func install(d *Download, binDir string) error {
 	}
 	url := strings.ReplaceAll(d.URL, "{ARCH}", arch)
 	sumURL := strings.ReplaceAll(d.ChecksumURL, "{ARCH}", arch)
+	want := strings.ToLower(d.SHA256[arch])
 
 	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
 	defer cancel()
+
+	if d.GitHub != nil && (strings.Contains(url, "{VERSION}") || url == "" || (want == "" && sumURL == "")) {
+		ghURL, digest, err := resolveGitHub(ctx, d.GitHub, arch)
+		if err != nil {
+			return err
+		}
+		url, want = ghURL, digest
+	}
+	if strings.Contains(url, "{VERSION}") || url == "" {
+		return fmt.Errorf("下载地址不完整")
+	}
+	if want == "" && sumURL == "" {
+		return fmt.Errorf("没有可用的 SHA256 校验值，拒绝安装")
+	}
 
 	if err := os.MkdirAll(filepath.Dir(binDir), 0o755); err != nil {
 		return err
@@ -101,18 +164,18 @@ func install(d *Download, binDir string) error {
 	if err := fetch(ctx, url, maxDownloadBytes, io.MultiWriter(tmp, hasher)); err != nil {
 		return err
 	}
-	if sumURL != "" {
+	if want == "" {
 		var sb strings.Builder
 		if err := fetch(ctx, sumURL, 64<<10, &sb); err != nil {
 			return fmt.Errorf("获取校验文件失败: %v", err)
 		}
-		want, ok := parseChecksum(sb.String())
-		if !ok {
+		var ok bool
+		if want, ok = parseChecksum(sb.String()); !ok {
 			return fmt.Errorf("校验文件中没有 SHA256")
 		}
-		if got := hex.EncodeToString(hasher.Sum(nil)); got != want {
-			return fmt.Errorf("SHA256 校验失败: %s != %s", got, want)
-		}
+	}
+	if got := hex.EncodeToString(hasher.Sum(nil)); got != want {
+		return fmt.Errorf("SHA256 校验失败: %s != %s", got, want)
 	}
 
 	staging := binDir + ".staging"

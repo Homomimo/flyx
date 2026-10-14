@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // File is one configuration file the agent writes before (re)starting a
@@ -15,11 +16,25 @@ type File struct {
 	Content string `json:"content"`
 }
 
+// Process is one supervised process; Bin is "" for the kernel's own binary
+// or the name of an extra binary.
+type Process struct {
+	Name string   `json:"name"`
+	Bin  string   `json:"bin"`
+	Args []string `json:"args"`
+}
+
 // Rendered is everything the agent needs to run one kernel.
 type Rendered struct {
-	Files []File   `json:"files"`
-	Args  []string `json:"args"`
-	Hash  string   `json:"hash"`
+	Files     []File    `json:"files"`
+	Args      []string  `json:"args"`
+	Processes []Process `json:"processes,omitempty"`
+	// Extras names helper binaries the processes need (e.g. shadow-tls).
+	Extras []string `json:"extras,omitempty"`
+	// Idle means there is nothing to run (a per-inbound kernel without
+	// inbounds); the kernel is applied disabled.
+	Idle bool   `json:"idle,omitempty"`
+	Hash string `json:"hash"`
 }
 
 // Render produces the kernel configuration for the given enabled inbounds.
@@ -38,6 +53,19 @@ func Render(kernelType string, inbounds []Inbound) (Rendered, error) {
 		}
 		out.Files = []File{{Name: "config.json", Content: content}}
 		out.Args = []string{"run", "-c", "{RUN_DIR}/config.json"}
+	case TypeSingbox:
+		content, err := renderSingbox(sorted)
+		if err != nil {
+			return Rendered{}, err
+		}
+		out.Files = []File{{Name: "config.json", Content: content}}
+		out.Args = []string{"run", "-c", "{RUN_DIR}/config.json"}
+	case TypeSnell:
+		r, err := renderSnell(sorted)
+		if err != nil {
+			return Rendered{}, err
+		}
+		out = r
 	default:
 		return Rendered{}, fmt.Errorf("暂不支持内核 %s", kernelType)
 	}
@@ -56,6 +84,14 @@ func hashRendered(r Rendered) string {
 	for _, a := range r.Args {
 		h.Write([]byte(a))
 		h.Write([]byte{0})
+	}
+	for _, p := range r.Processes {
+		h.Write([]byte(p.Name + "\x00" + p.Bin + "\x00" + strings.Join(p.Args, "\x00")))
+		h.Write([]byte{1})
+	}
+	for _, e := range r.Extras {
+		h.Write([]byte(e))
+		h.Write([]byte{2})
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

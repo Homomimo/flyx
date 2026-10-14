@@ -49,10 +49,11 @@ func (r *logRing) tail(n int) []string {
 // process supervises one kernel binary, restarting it with exponential
 // backoff until stop is called.
 type process struct {
-	bin  string
-	args []string
-	dir  string
-	logs *logRing
+	bin    string
+	args   []string
+	dir    string
+	logs   *logRing
+	prefix string // prepended to output lines when a kernel runs several processes
 
 	mu        sync.Mutex
 	cmd       *exec.Cmd
@@ -101,7 +102,7 @@ func (p *process) supervise() {
 		p.lastErr = msg
 		p.restarts++
 		p.mu.Unlock()
-		p.logs.add("[flvx] " + msg)
+		p.logs.add(p.prefix + "[flvx] " + msg)
 
 		if time.Since(began) > stableAfter {
 			backoff = time.Second
@@ -144,7 +145,7 @@ func (p *process) runOnce() error {
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {
 			if line := strings.TrimRight(sc.Text(), "\r"); line != "" {
-				p.logs.add(line)
+				p.logs.add(p.prefix + line)
 			}
 		}
 		_, _ = io.Copy(io.Discard, pr)

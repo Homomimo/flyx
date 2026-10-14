@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -367,5 +368,139 @@ func TestApplyRejectsBadAllow(t *testing.T) {
 		Ports: []Port{{InboundID: 1, Port: 443, Network: "tcp", Allow: []string{"1.2.3.4/32; drop"}}}}
 	if _, err := m.Apply(r); err == nil || !strings.Contains(err.Error(), "白名单") {
 		t.Fatalf("expected whitelist validation error, got %v", err)
+	}
+}
+
+func sha(b []byte) string {
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:])
+}
+
+func TestInstallIntegrityRules(t *testing.T) {
+	payload := []byte("#!/bin/sh\nexec sleep 300\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/bin-test":
+			_, _ = w.Write(payload)
+		case "/repos/o/r/releases/latest":
+			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":"tool-1.2.3-test","digest":"sha256:%s","browser_download_url":"%s/bin-test"},{"name":"nodigest-1.2.3-test","browser_download_url":"x"}]}`, sha(payload), "http://"+r.Host)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	old := githubAPIBase
+	githubAPIBase = srv.URL
+	defer func() { githubAPIBase = old }()
+	arch := map[string]string{runtime.GOARCH: "test"}
+
+	cases := []struct {
+		name    string
+		d       Download
+		wantErr string
+	}{
+		{"pinned ok", Download{URL: srv.URL + "/bin-{ARCH}", Archive: "raw", BinName: "tool", ArchMap: arch, SHA256: map[string]string{"test": sha(payload)}}, ""},
+		{"pinned mismatch", Download{URL: srv.URL + "/bin-{ARCH}", Archive: "raw", BinName: "tool", ArchMap: arch, SHA256: map[string]string{"test": strings.Repeat("0", 64)}}, "校验失败"},
+		{"no checksum refused", Download{URL: srv.URL + "/bin-{ARCH}", Archive: "raw", BinName: "tool", ArchMap: arch}, "拒绝安装"},
+		{"github digest", Download{URL: "{VERSION}", Archive: "raw", BinName: "tool", ArchMap: arch, GitHub: &GitHubRelease{Repo: "o/r", Asset: "tool-{VERSION}-{ARCH}"}}, ""},
+		{"github without digest", Download{Archive: "raw", BinName: "tool", ArchMap: arch, GitHub: &GitHubRelease{Repo: "o/r", Asset: "nodigest-{VERSION}-{ARCH}"}}, "校验值"},
+		{"github missing asset", Download{Archive: "raw", BinName: "tool", ArchMap: arch, GitHub: &GitHubRelease{Repo: "o/r", Asset: "missing-{ARCH}"}}, "没有文件"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "bin")
+			err := install(&tc.d, dir)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("install: %v", err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "tool")); err != nil {
+					t.Fatal("binary not installed")
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error %q, got %v", tc.wantErr, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "tool")); err == nil {
+				t.Fatal("failed install must not leave a binary")
+			}
+		})
+	}
+}
+
+func TestManagerMultiProcessWithExtra(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts")
+	}
+	stubNft(t)
+	main := []byte("#!/bin/sh\nif [ \"$1\" = \"-v\" ]; then echo 'snell-server v5.0.1'; exit 0; fi\necho \"main $2\"\nexec sleep 300\n")
+	extra := []byte("#!/bin/sh\necho \"front $*\"\nexec sleep 300\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/main.zip":
+			_, _ = w.Write(zipWith(t, map[string]string{"snell-server": string(main)}))
+		case "/front":
+			_, _ = w.Write(extra)
+		}
+	}))
+	defer srv.Close()
+	// Pin the hash of exactly what the server sends.
+	resp, err := http.Get(srv.URL + "/main.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	arch := map[string]string{runtime.GOARCH: "test"}
+
+	mk := func(withFront bool, hash string) ApplyRequest {
+		req := ApplyRequest{
+			Type: "snell", Version: "5.0.1",
+			Download: &Download{URL: srv.URL + "/main.zip", Archive: "zip", BinName: "snell-server", ArchMap: arch, SHA256: map[string]string{"test": sha(body)}},
+			Files:    []File{{Name: "snell-1.conf", Content: "a"}, {Name: "snell-2.conf", Content: "b"}},
+			Processes: []ProcessSpec{
+				{Name: "snell-1", Args: []string{"-c", "{RUN_DIR}/snell-1.conf"}},
+				{Name: "snell-2", Args: []string{"-c", "{RUN_DIR}/snell-2.conf"}},
+			},
+			Hash: hash, Enabled: true,
+		}
+		if withFront {
+			req.Extras = []ExtraBinary{{Name: "shadow-tls", Version: "0.2.25", Download: &Download{URL: srv.URL + "/front", Archive: "raw", BinName: "shadow-tls", ArchMap: arch, SHA256: map[string]string{"test": sha(extra)}}}}
+			req.Processes = append(req.Processes, ProcessSpec{Name: "stls-2", Bin: "shadow-tls", Args: []string{"--v3", "server"}})
+		}
+		return req
+	}
+
+	m := NewManager(t.TempDir())
+	defer m.Shutdown()
+	st, err := m.Apply(mk(true, "h1"))
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !st.Running || !strings.Contains(st.Version, "5.0.1") {
+		t.Fatalf("state: %+v", st)
+	}
+	logs := strings.Join(m.Status("snell").Kernels[0].Logs, "\n")
+	for _, want := range []string{"[snell-1] main ", "[snell-2] main ", "[stls-2] front --v3 server"} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("missing %q in logs:\n%s", want, logs)
+		}
+	}
+	// Dropping the front process restarts with two processes only.
+	st, err = m.Apply(mk(false, "h2"))
+	if err != nil || !st.Running {
+		t.Fatalf("reapply: %+v %v", st, err)
+	}
+	m.mu.Lock()
+	n := len(m.instances["snell"].procs)
+	m.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("want 2 processes, got %d", n)
+	}
+	bad := mk(false, "h3")
+	bad.Processes[0].Bin = "nope"
+	if _, err := m.Apply(bad); err == nil {
+		t.Fatal("process referencing an undeclared binary must be rejected")
 	}
 }

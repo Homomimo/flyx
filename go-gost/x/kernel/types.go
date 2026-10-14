@@ -12,12 +12,42 @@ import (
 	"strings"
 )
 
+// Download describes how to fetch one binary. Integrity is mandatory: the
+// digest comes from SHA256 (pinned, keyed by the mapped arch), a checksum file,
+// or the GitHub release asset digest; without one the install is refused.
 type Download struct {
 	URL         string            `json:"url"`
 	ChecksumURL string            `json:"checksumUrl"`
 	Archive     string            `json:"archive"` // zip | tar.gz | raw
 	BinName     string            `json:"binName"`
 	ArchMap     map[string]string `json:"archMap"`
+	SHA256      map[string]string `json:"sha256,omitempty"`
+	GitHub      *GitHubRelease    `json:"github,omitempty"`
+}
+
+// GitHubRelease lets the agent resolve a release itself when the panel could
+// not (URL still holds {VERSION}, or no digest for this arch).
+type GitHubRelease struct {
+	Repo  string `json:"repo"`  // owner/name
+	Tag   string `json:"tag"`   // "" = latest
+	Asset string `json:"asset"` // file name template with {VERSION} and {ARCH}
+	Proxy string `json:"proxy"` // optional mirror prefix for the download URL
+}
+
+// ExtraBinary is a helper program a kernel needs next to its main binary
+// (e.g. shadow-tls in front of Snell).
+type ExtraBinary struct {
+	Name     string    `json:"name"`
+	Version  string    `json:"version"`
+	Download *Download `json:"download"`
+}
+
+// ProcessSpec is one supervised process of a kernel. Bin is "" for the main
+// binary or the Name of an extra binary.
+type ProcessSpec struct {
+	Name string   `json:"name"`
+	Bin  string   `json:"bin"`
+	Args []string `json:"args"`
 }
 
 type File struct {
@@ -41,9 +71,13 @@ type ApplyRequest struct {
 	Download *Download `json:"download"`
 	Files    []File    `json:"files"`
 	Args     []string  `json:"args"`
-	Hash     string    `json:"hash"`
-	Enabled  bool      `json:"enabled"`
-	Ports    []Port    `json:"ports"`
+	// Processes, when set, replaces Args with several processes (Snell runs
+	// one per inbound, plus shadow-tls fronts).
+	Processes []ProcessSpec `json:"processes,omitempty"`
+	Extras    []ExtraBinary `json:"extras,omitempty"`
+	Hash      string        `json:"hash"`
+	Enabled   bool          `json:"enabled"`
+	Ports     []Port        `json:"ports"`
 }
 
 type State struct {
@@ -103,13 +137,28 @@ func (r *ApplyRequest) validate() error {
 	if !safeVersionPattern.MatchString(r.Version) || strings.Contains(r.Version, "..") {
 		return fmt.Errorf("版本号格式错误: %s", r.Version)
 	}
-	if r.Download == nil || !safeName(r.Download.BinName) {
-		return fmt.Errorf("缺少下载信息")
+	if err := r.Download.validate(); err != nil {
+		return err
 	}
-	switch r.Download.Archive {
-	case "zip", "tar.gz", "raw":
-	default:
-		return fmt.Errorf("不支持的压缩格式: %s", r.Download.Archive)
+	extras := make(map[string]bool, len(r.Extras))
+	for _, e := range r.Extras {
+		if !safeName(e.Name) || !safeVersionPattern.MatchString(e.Version) || strings.Contains(e.Version, "..") {
+			return fmt.Errorf("非法附加程序: %s", e.Name)
+		}
+		if err := e.Download.validate(); err != nil {
+			return err
+		}
+		extras[e.Name] = true
+	}
+	seen := make(map[string]bool, len(r.Processes))
+	for _, p := range r.Processes {
+		if !safeName(p.Name) || seen[p.Name] {
+			return fmt.Errorf("非法进程名: %s", p.Name)
+		}
+		seen[p.Name] = true
+		if p.Bin != "" && !extras[p.Bin] {
+			return fmt.Errorf("进程 %s 引用了未声明的程序 %s", p.Name, p.Bin)
+		}
 	}
 	for _, f := range r.Files {
 		if !safeName(f.Name) || filepath.Base(f.Name) != f.Name {
@@ -130,4 +179,37 @@ func (r *ApplyRequest) validate() error {
 		}
 	}
 	return nil
+}
+
+func (d *Download) validate() error {
+	if d == nil || !safeName(d.BinName) {
+		return fmt.Errorf("缺少下载信息")
+	}
+	switch d.Archive {
+	case "zip", "tar.gz", "raw":
+	default:
+		return fmt.Errorf("不支持的压缩格式: %s", d.Archive)
+	}
+	for arch, sum := range d.SHA256 {
+		if !sha256HexPattern.MatchString(sum) || len(sum) != 64 || !safeName(arch) {
+			return fmt.Errorf("非法校验值")
+		}
+	}
+	if g := d.GitHub; g != nil {
+		if !githubRepoPattern.MatchString(g.Repo) || (g.Tag != "" && !safeVersionPattern.MatchString(strings.TrimPrefix(g.Tag, "v"))) {
+			return fmt.Errorf("非法 GitHub 发布信息")
+		}
+	}
+	return nil
+}
+
+var githubRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// processSpecs returns the processes to run, falling back to the single
+// main-binary process described by Args.
+func (r ApplyRequest) processSpecs() []ProcessSpec {
+	if len(r.Processes) > 0 {
+		return r.Processes
+	}
+	return []ProcessSpec{{Name: r.Type, Args: r.Args}}
 }

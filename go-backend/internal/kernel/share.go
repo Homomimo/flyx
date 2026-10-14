@@ -86,8 +86,43 @@ func ShareURI(e Endpoint) (string, bool) {
 			// SIP022: 2022 ciphers use percent-encoded plain userinfo.
 			userinfo = url.QueryEscape(in.Settings.Method) + ":" + url.QueryEscape(in.Settings.Password)
 		}
-		return fmt.Sprintf("ss://%s@%s#%s", userinfo, hostPort(e.Host, e.Port), url.PathEscape(e.Name)), true
+		query := ""
+		if in.Security.Type == SecurityShadowTLS {
+			// SIP002 plugin parameter, as understood by Shadowrocket / NekoBox.
+			query = "?plugin=" + url.QueryEscape(fmt.Sprintf("shadow-tls;host=%s;password=%s;version=3",
+				in.Security.SNI, in.Security.ShadowTLSPassword))
+		}
+		return fmt.Sprintf("ss://%s@%s%s#%s", userinfo, hostPort(e.Host, e.Port), query, url.PathEscape(e.Name)), true
+	case ProtocolHysteria2:
+		q := url.Values{}
+		q.Set("sni", in.Security.SNI)
+		if e.selfSigned() {
+			q.Set("insecure", "1")
+		}
+		return fmt.Sprintf("hysteria2://%s@%s/?%s#%s", url.PathEscape(in.Settings.Password), hostPort(e.Host, e.Port),
+			q.Encode(), url.PathEscape(e.Name)), true
+	case ProtocolTUIC:
+		q := url.Values{}
+		q.Set("congestion_control", "bbr")
+		q.Set("alpn", "h3")
+		q.Set("sni", in.Security.SNI)
+		q.Set("udp_relay_mode", "native")
+		if e.selfSigned() {
+			q.Set("allow_insecure", "1")
+		}
+		return fmt.Sprintf("tuic://%s:%s@%s?%s#%s", in.Settings.UUID, url.PathEscape(in.Settings.Password),
+			hostPort(e.Host, e.Port), q.Encode(), url.PathEscape(e.Name)), true
+	case ProtocolAnyTLS:
+		q := url.Values{}
+		q.Set("sni", in.Security.SNI)
+		if e.selfSigned() {
+			q.Set("insecure", "1")
+			q.Set("allowInsecure", "1")
+		}
+		return fmt.Sprintf("anytls://%s@%s/?%s#%s", url.PathEscape(in.Settings.Password), hostPort(e.Host, e.Port),
+			q.Encode(), url.PathEscape(e.Name)), true
 	}
+	// Snell has no standard share link; it is only exported to Surge.
 	return "", false
 }
 
@@ -136,8 +171,13 @@ func addSecurityQuery(q url.Values, e Endpoint) {
 // because Mihomo support for it is not stable across client versions.
 func ClashProxy(e Endpoint) (yamlNode, bool) {
 	in := e.Inbound
-	if in.Transport.Type == TransportXHTTP {
+	if in.Transport.Type == TransportXHTTP || in.Protocol == ProtocolSnell {
+		// Mihomo only speaks Snell v1-v3.
 		return nil, false
+	}
+	switch in.Protocol {
+	case ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS:
+		return clashQUICFamily(e), true
 	}
 	p := yamlNode{
 		{"name", e.Name},
@@ -160,7 +200,19 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 	case ProtocolTrojan:
 		p = append(p, yamlField{"password", in.Settings.Password})
 	case ProtocolShadowsocks:
-		return append(p, yamlField{"cipher", in.Settings.Method}, yamlField{"password", in.Settings.Password}), true
+		p = append(p, yamlField{"cipher", in.Settings.Method}, yamlField{"password", in.Settings.Password})
+		if in.Security.Type == SecurityShadowTLS {
+			p[4].Value = false // UDP is not carried through ShadowTLS
+			p = append(p,
+				yamlField{"client-fingerprint", in.Security.Fingerprint},
+				yamlField{"plugin", "shadow-tls"},
+				yamlField{"plugin-opts", yamlNode{
+					{"host", in.Security.SNI},
+					{"password", in.Security.ShadowTLSPassword},
+					{"version", 3},
+				}})
+		}
+		return p, true
 	default:
 		return nil, false
 	}
@@ -204,8 +256,39 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 	return p, true
 }
 
-// SingboxOutbound renders a sing-box outbound (1.11+ schema).
-func SingboxOutbound(e Endpoint) (map[string]interface{}, bool) {
+// SingboxOutbounds renders the sing-box client outbounds (1.11+ schema) for
+// an endpoint. The first one carries the endpoint's tag; ShadowTLS adds a
+// second outbound the first detours through.
+func SingboxOutbounds(e Endpoint) ([]map[string]interface{}, bool) {
+	in := e.Inbound
+	if in.Protocol == ProtocolSnell {
+		return nil, false
+	}
+	o, ok := singboxOutbound(e)
+	if !ok {
+		return nil, false
+	}
+	if in.Protocol == ProtocolShadowsocks && in.Security.Type == SecurityShadowTLS {
+		stlsTag := e.Name + " (shadowtls)"
+		o["detour"] = stlsTag
+		return []map[string]interface{}{o, {
+			"type":        "shadowtls",
+			"tag":         stlsTag,
+			"server":      strings.Trim(e.Host, "[]"),
+			"server_port": e.Port,
+			"version":     3,
+			"password":    in.Security.ShadowTLSPassword,
+			"tls": map[string]interface{}{
+				"enabled":     true,
+				"server_name": in.Security.SNI,
+				"utls":        map[string]interface{}{"enabled": true, "fingerprint": in.Security.Fingerprint},
+			},
+		}}, true
+	}
+	return []map[string]interface{}{o}, true
+}
+
+func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 	in := e.Inbound
 	if in.Transport.Type == TransportXHTTP {
 		return nil, false
@@ -233,7 +316,24 @@ func SingboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 		o["type"] = "shadowsocks"
 		o["method"] = in.Settings.Method
 		o["password"] = in.Settings.Password
+		if in.Security.Type == SecurityShadowTLS {
+			// The shadowtls outbound dials the server; this one has no address.
+			delete(o, "server")
+			delete(o, "server_port")
+		}
 		return o, true
+	case ProtocolHysteria2:
+		o["type"] = "hysteria2"
+		o["password"] = in.Settings.Password
+	case ProtocolTUIC:
+		o["type"] = "tuic"
+		o["uuid"] = in.Settings.UUID
+		o["password"] = in.Settings.Password
+		o["congestion_control"] = "bbr"
+		o["udp_relay_mode"] = "native"
+	case ProtocolAnyTLS:
+		o["type"] = "anytls"
+		o["password"] = in.Settings.Password
 	default:
 		return nil, false
 	}
@@ -284,11 +384,45 @@ func SurgeLine(e Endpoint) (string, bool) {
 	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(e.Name)
 	host := strings.Trim(e.Host, "[]")
 	parts := []string{}
+	shadowTLS := func() []string {
+		if in.Security.Type != SecurityShadowTLS {
+			return nil
+		}
+		return []string{"shadow-tls-password=" + in.Security.ShadowTLSPassword,
+			"shadow-tls-sni=" + in.Security.SNI, "shadow-tls-version=3"}
+	}
+	tlsTail := func() []string {
+		t := []string{"sni=" + in.Security.SNI}
+		if e.selfSigned() {
+			t = append(t, "skip-cert-verify=true")
+		}
+		return t
+	}
 	switch in.Protocol {
 	case ProtocolShadowsocks:
 		parts = append(parts, "ss", host, strconv.Itoa(e.Port),
-			"encrypt-method="+in.Settings.Method, "password="+in.Settings.Password, "udp-relay=true")
+			"encrypt-method="+in.Settings.Method, "password="+in.Settings.Password)
+		if in.Security.Type == SecurityShadowTLS {
+			parts = append(parts, shadowTLS()...)
+		} else {
+			parts = append(parts, "udp-relay=true")
+		}
 		return name + " = " + strings.Join(parts, ", "), true
+	case ProtocolSnell:
+		parts = append(parts, "snell", host, strconv.Itoa(e.Port), "psk="+in.Settings.Password,
+			fmt.Sprintf("version=%d", in.Settings.SnellVersion), "reuse=true", "tfo=true")
+		parts = append(parts, shadowTLS()...)
+		return name + " = " + strings.Join(parts, ", "), true
+	case ProtocolHysteria2:
+		parts = append(parts, "hysteria2", host, strconv.Itoa(e.Port), "password="+in.Settings.Password)
+		return name + " = " + strings.Join(append(parts, tlsTail()...), ", "), true
+	case ProtocolTUIC:
+		parts = append(parts, "tuic-v5", host, strconv.Itoa(e.Port), "password="+in.Settings.Password,
+			"uuid="+in.Settings.UUID, "alpn=h3")
+		return name + " = " + strings.Join(append(parts, tlsTail()...), ", "), true
+	case ProtocolAnyTLS:
+		parts = append(parts, "anytls", host, strconv.Itoa(e.Port), "password="+in.Settings.Password)
+		return name + " = " + strings.Join(append(parts, tlsTail()...), ", "), true
 	case ProtocolVMess:
 		parts = append(parts, "vmess", host, strconv.Itoa(e.Port), "username="+in.Settings.UUID, "vmess-aead=true")
 	case ProtocolTrojan:
@@ -402,8 +536,10 @@ func singboxProfile(endpoints []Endpoint) (string, error) {
 	outbounds := []interface{}{}
 	names := []interface{}{}
 	for _, e := range endpoints {
-		if o, ok := SingboxOutbound(e); ok {
-			outbounds = append(outbounds, o)
+		if obs, ok := SingboxOutbounds(e); ok {
+			for _, o := range obs {
+				outbounds = append(outbounds, o)
+			}
 			names = append(names, e.Name)
 		}
 	}
@@ -462,4 +598,33 @@ func uniqueNames(endpoints []Endpoint) []Endpoint {
 		out[i] = e
 	}
 	return out
+}
+
+func clashQUICFamily(e Endpoint) yamlNode {
+	in := e.Inbound
+	p := yamlNode{
+		{"name", e.Name},
+		{"type", in.Protocol},
+		{"server", strings.Trim(e.Host, "[]")},
+		{"port", e.Port},
+		{"udp", true},
+	}
+	switch in.Protocol {
+	case ProtocolHysteria2:
+		p = append(p, yamlField{"password", in.Settings.Password}, yamlField{"alpn", []string{"h3"}})
+	case ProtocolTUIC:
+		p = append(p,
+			yamlField{"uuid", in.Settings.UUID},
+			yamlField{"password", in.Settings.Password},
+			yamlField{"alpn", []string{"h3"}},
+			yamlField{"congestion-controller", "bbr"},
+			yamlField{"udp-relay-mode", "native"})
+	case ProtocolAnyTLS:
+		p = append(p, yamlField{"password", in.Settings.Password}, yamlField{"client-fingerprint", in.Security.Fingerprint})
+	}
+	p = append(p, yamlField{"sni", in.Security.SNI})
+	if e.selfSigned() {
+		p = append(p, yamlField{"skip-cert-verify", true})
+	}
+	return p
 }

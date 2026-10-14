@@ -214,17 +214,47 @@ func TestRenderEmptyXray(t *testing.T) {
 }
 
 func TestResolveDownload(t *testing.T) {
-	info, _ := Lookup(TypeXray)
-	d, ok := ResolveDownload(info, "v25.1.1", "https://mirror.example/")
-	if !ok {
-		t.Fatal("xray must be downloadable")
+	xray, _ := Lookup(TypeXray)
+	d, err := ResolveDownload(xray, "v25.1.1", "https://mirror.example/")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if d["url"] != "https://mirror.example/https://github.com/XTLS/Xray-core/releases/download/v25.1.1/Xray-linux-{ARCH}.zip" {
 		t.Fatalf("url: %v", d["url"])
 	}
-	latest, _ := ResolveDownload(info, "latest", "")
-	if !strings.Contains(latest["url"].(string), "/releases/latest/download/") {
-		t.Fatalf("latest url: %v", latest["url"])
+	latest, _ := ResolveDownload(xray, "latest", "")
+	if !strings.Contains(latest["url"].(string), "/releases/latest/download/") || latest["checksumUrl"] == "" {
+		t.Fatalf("latest: %v", latest)
+	}
+
+	snell, _ := Lookup(TypeSnell)
+	sd, err := ResolveDownload(snell, "latest", "https://mirror.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sd["url"] != "https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-{ARCH}.zip" {
+		t.Fatalf("snell must default to 5.0.1 and never use the github mirror: %v", sd["url"])
+	}
+	if sd["sha256"].(map[string]string)["amd64"] != "9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539" {
+		t.Fatalf("snell pin: %v", sd["sha256"])
+	}
+	if _, err := ResolveDownload(snell, "6.0.0rc", ""); err == nil {
+		t.Fatal("unpinned snell version must be rejected")
+	}
+
+	sb, _ := Lookup(TypeSingbox)
+	sl, err := ResolveDownload(sb, "latest", "")
+	if err != nil || !strings.Contains(sl["url"].(string), "{VERSION}") || sl["github"].(map[string]interface{})["repo"] != "SagerNet/sing-box" {
+		t.Fatalf("sing-box latest must defer to the agent: %v %v", sl, err)
+	}
+	sv, _ := ResolveDownload(sb, "1.12.8", "")
+	if sv["url"] != "https://github.com/SagerNet/sing-box/releases/download/v1.12.8/sing-box-1.12.8-linux-{ARCH}.tar.gz" || sv["github"].(map[string]interface{})["tag"] != "v1.12.8" {
+		t.Fatalf("sing-box pinned version: %v", sv)
+	}
+
+	st, err := ExtraDownload(ShadowTLSDownload(), ShadowTLSVersion, "")
+	if err != nil || st["sha256"].(map[string]string)["x86_64-unknown-linux-musl"] == "" {
+		t.Fatalf("shadow-tls: %v %v", st, err)
 	}
 }
 
@@ -299,5 +329,116 @@ func TestParseAllowList(t *testing.T) {
 	}
 	if got, _ := ParseAllowList("  "); len(got) != 0 {
 		t.Fatal("empty list")
+	}
+}
+
+func phase3Inbounds(t *testing.T) []Inbound {
+	t.Helper()
+	certPEM := "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+	keyPEM := "-----BEGIN EC PRIVATE KEY-----\nMHcC\n-----END EC PRIVATE KEY-----\n"
+	tls := Security{Type: SecurityTLS, SNI: "www.bing.com", CertMode: "self", CertPEM: certPEM, KeyPEM: keyPEM, Fingerprint: DefaultFingerprint}
+	list := []Inbound{
+		{ID: 1, Protocol: ProtocolHysteria2, Listen: "::", Port: 443, Transport: Transport{Type: TransportQUIC}, Security: tls,
+			Settings: Settings{Password: "hy2-secret", Masquerade: "https://www.bing.com"}},
+		{ID: 2, Protocol: ProtocolTUIC, Listen: "::", Port: 8443, Transport: Transport{Type: TransportQUIC}, Security: tls,
+			Settings: Settings{UUID: testUUID, Password: "tuic-secret"}},
+		{ID: 3, Protocol: ProtocolAnyTLS, Listen: "::", Port: 9443, Security: tls, Settings: Settings{Password: "anytls-secret"}},
+		{ID: 4, Protocol: ProtocolShadowsocks, Listen: "::", Port: 10443,
+			Settings: Settings{Method: DefaultSSMethod, Password: "AAAAAAAAAAAAAAAAAAAAAA=="},
+			Security: Security{Type: SecurityShadowTLS, SNI: "www.microsoft.com", ShadowTLSPassword: "stls-secret-123"}},
+		{ID: 5, Protocol: ProtocolVLESS, Listen: "::", Port: 11443, Settings: Settings{UUID: testUUID, Flow: FlowVision},
+			Security: Security{Type: SecurityReality, SNI: "www.example.com", RealityPrivateKey: testRealityKey, RealityShortIDs: []string{"0123456789abcdef"}}},
+	}
+	for i := range list {
+		saved := list[i].Security
+		if err := Normalize(TypeSingbox, &list[i]); err != nil {
+			t.Fatalf("normalize %d: %v", list[i].ID, err)
+		}
+		if saved.CertPEM != "" {
+			list[i].Security.CertPEM, list[i].Security.KeyPEM = saved.CertPEM, saved.KeyPEM
+		}
+	}
+	return list
+}
+
+func TestRenderSingboxGolden(t *testing.T) {
+	out, err := Render(TypeSingbox, phase3Inbounds(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(out.Files[0].Content), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "singbox-server.golden.json", out.Files[0].Content)
+	if len(parsed["inbounds"].([]interface{})) != 6 {
+		t.Fatal("shadowtls must add a loopback shadowsocks backend")
+	}
+}
+
+func TestRenderSnell(t *testing.T) {
+	ins := []Inbound{
+		{ID: 7, Protocol: ProtocolSnell, Listen: "::", Port: 6160, Settings: Settings{Password: "psk-aaaaaaaa", SnellVersion: 4}},
+		{ID: 8, Protocol: ProtocolSnell, Listen: "0.0.0.0", Port: 6161, Settings: Settings{Password: "psk-bbbbbbbb", BackendPort: 36161},
+			Security: Security{Type: SecurityShadowTLS, SNI: "www.microsoft.com", ShadowTLSPassword: "stls-pass-1"}},
+	}
+	for i := range ins {
+		if err := Normalize(TypeSnell, &ins[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := Render(TypeSnell, ins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, f := range out.Files {
+		b.WriteString("# " + f.Name + "\n" + f.Content)
+	}
+	for _, p := range out.Processes {
+		b.WriteString(p.Name + " [" + p.Bin + "] " + strings.Join(p.Args, " ") + "\n")
+	}
+	b.WriteString("extras: " + strings.Join(out.Extras, ",") + "\n")
+	assertGolden(t, "snell.golden.txt", b.String())
+	if ins[0].Network() != "tcp" || ins[1].Network() != "tcp" {
+		t.Fatal("snell v4 and shadowtls-fronted snell are tcp only")
+	}
+	idle, _ := Render(TypeSnell, nil)
+	if !idle.Idle || len(idle.Processes) != 0 {
+		t.Fatal("snell without inbounds must be idle")
+	}
+}
+
+func TestNormalizePhase3Rules(t *testing.T) {
+	hy := Inbound{Protocol: ProtocolHysteria2, Port: 443, Transport: Transport{Type: TransportQUIC}, Security: Security{Type: SecurityTLS}}
+	if err := Normalize(TypeSingbox, &hy); err != nil {
+		t.Fatal(err)
+	}
+	if hy.Security.SNI != DefaultQUICSNI || strings.Join(hy.Security.ALPN, ",") != "h3" || hy.Settings.Password == "" || hy.Network() != "udp" {
+		t.Fatalf("hy2 defaults: %+v", hy)
+	}
+	sn := Inbound{Protocol: ProtocolSnell, Port: 6160, Security: Security{Type: SecurityShadowTLS}}
+	if err := Normalize(TypeSnell, &sn); err != nil {
+		t.Fatal(err)
+	}
+	if sn.Settings.SnellVersion != 5 || sn.Settings.BackendPort < 20000 || sn.Security.ShadowTLSPassword == "" || sn.Security.SNI != DefaultRealitySNI {
+		t.Fatalf("snell defaults: %+v", sn)
+	}
+	bad := []struct {
+		kernel string
+		in     Inbound
+	}{
+		{TypeSnell, Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{SnellVersion: 6}}},
+		{TypeSnell, Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{Password: "has space"}}},
+		{TypeSingbox, Inbound{Protocol: ProtocolHysteria2, Port: 1, Transport: Transport{Type: TransportQUIC}, Settings: Settings{Masquerade: "ftp://x"}}},
+		{TypeSingbox, Inbound{Protocol: ProtocolVLESS, Port: 1, AcceptProxyProtocol: true}},
+		{TypeXray, Inbound{Protocol: ProtocolHysteria2, Port: 1}},
+		{TypeSingbox, Inbound{Protocol: ProtocolTrojan, Port: 1, Security: Security{Type: SecurityShadowTLS}}},
+	}
+	for i, tc := range bad {
+		in := tc.in
+		if err := Normalize(tc.kernel, &in); err == nil {
+			t.Fatalf("case %d must fail: %+v", i, tc.in)
+		}
 	}
 }
