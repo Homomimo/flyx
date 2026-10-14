@@ -625,3 +625,133 @@ export interface TunnelQualityApiItem {
   timestamp: number;
   chainDetails?: string;
 }
+
+// ---- 代理内核 / 入站 ----
+
+export interface KernelTransportCap {
+  type: string;
+  securities: string[];
+}
+
+export interface KernelProtocolCap {
+  protocol: string;
+  transports: KernelTransportCap[];
+}
+
+export interface KernelInfo {
+  type: string;
+  name: string;
+  implemented: boolean;
+  protocols: KernelProtocolCap[] | null;
+}
+
+export interface KernelCapabilitiesApiData {
+  kernels: KernelInfo[];
+  ssMethods: string[];
+  defaults: {
+    realitySni: string;
+    fingerprint: string;
+    ssMethod: string;
+    flow: string;
+  };
+}
+
+export interface KernelApiItem {
+  id: number;
+  nodeId: number;
+  nodeName: string;
+  nodeOnline: boolean;
+  kernelType: string;
+  version: string;
+  installedVersion: string;
+  status: "pending" | "running" | "stopped" | "error" | string;
+  lastError: string;
+  synced: boolean;
+  enabled: boolean;
+  inboundCount: number;
+  updatedTime: number;
+}
+
+export interface KernelStateApiData {
+  type: string;
+  running: boolean;
+  enabled: boolean;
+  pid: number;
+  version: string;
+  error: string;
+  restarts: number;
+  startedAt: number;
+  logs?: string[];
+}
+
+export interface InboundSettings {
+  uuid?: string;
+  flow?: string;
+  password?: string;
+  method?: string;
+}
+
+export interface InboundTransport {
+  type: string;
+  path?: string;
+  host?: string;
+  serviceName?: string;
+  mode?: string;
+}
+
+export interface InboundSecurity {
+  type: string;
+  sni?: string;
+  alpn?: string[];
+  fingerprint?: string;
+  certMode?: string;
+  certFile?: string;
+  keyFile?: string;
+  realityDest?: string;
+  realityPrivateKey?: string;
+  realityPublicKey?: string;
+  realityShortIds?: string[];
+}
+
+export interface InboundApiItem {
+  id: number;
+  kernelId: number;
+  kernelType: string;
+  kernelStatus: string;
+  nodeId: number;
+  nodeName: string;
+  nodeServerIp: string;
+  name: string;
+  protocol: string;
+  listen: string;
+  port: number;
+  network: string;
+  settings: InboundSettings;
+  transport: InboundTransport;
+  security: InboundSecurity;
+  extra: string;
+  shareHost: string;
+  remark: string;
+  enabled: boolean;
+  uploadBytes: number;
+  downloadBytes: number;
+  createdTime: number;
+  updatedTime: number;
+}
+
+export interface InboundMutationPayload {
+  id?: number;
+  nodeId?: number;
+  kernelType?: string;
+  name: string;
+  protocol: string;
+  listen: string;
+  port: number;
+  settings: InboundSettings;
+  transport: InboundTransport;
+  security: InboundSecurity;
+  extra: string;
+  shareHost: string;
+  remark: string;
+  enabled?: boolean;
+}

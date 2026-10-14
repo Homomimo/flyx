@@ -45,6 +45,11 @@ import type {
   SystemUpgradeCheckApiData,
   SystemUpgradeRunApiData,
   SystemUpgradeVersionApiData,
+  KernelCapabilitiesApiData,
+  KernelApiItem,
+  KernelStateApiData,
+  InboundApiItem,
+  InboundMutationPayload,
 } from "./types";
 
 import axios from "axios";
@@ -611,3 +616,35 @@ export const assignMonitorPermission = (userId: number) =>
 
 export const removeMonitorPermission = (userId: number) =>
   Network.post("/monitor/permission/remove", { userId });
+
+// 代理内核 / 入站（节点服务）
+export const getKernelCapabilities = () =>
+  Network.post<KernelCapabilitiesApiData>("/kernel/capabilities");
+export const getKernelList = (nodeId?: number) =>
+  Network.post<KernelApiItem[]>("/kernel/list", nodeId ? { nodeId } : {});
+export const installKernel = (data: {
+  nodeId: number;
+  kernelType: string;
+  version: string;
+}) => Network.post("/kernel/install", data);
+export const controlKernel = (
+  id: number,
+  action: "start" | "stop" | "restart" | "remove",
+  force = false,
+) => Network.post("/kernel/control", { id, action, force });
+export const getKernelLogs = (id: number) =>
+  Network.post<KernelStateApiData>("/kernel/logs", { id });
+export const getInboundList = () =>
+  Network.post<InboundApiItem[]>("/inbound/list");
+export const createInbound = (data: InboundMutationPayload) =>
+  Network.post<{ id: number }>("/inbound/create", data);
+export const updateInbound = (data: InboundMutationPayload) =>
+  Network.post<{ id: number }>("/inbound/update", data);
+export const deleteInbound = (id: number) =>
+  Network.post("/inbound/delete", { id });
+export const toggleInbound = (id: number, enabled: boolean) =>
+  Network.post("/inbound/toggle", { id, enabled });
+export const resetInboundTraffic = (id: number) =>
+  Network.post("/inbound/reset-traffic", { id });
+export const regenerateInbound = (id: number) =>
+  Network.post("/inbound/regenerate", { id });

@@ -414,18 +414,34 @@ API 封装放在 `src/api/` 中，与现有文件风格保持一致。
 
 ## 阶段与任务清单
 
-### 第 1 阶段：框架 + Xray（目标：可用）
+### 第 1 阶段：框架 + Xray（目标：可用）✅
 
-- [ ] B1 新增模型 `NodeKernel`、`NodeInbound`、`NodeInboundCounter` 并加入 AutoMigrate
-- [ ] B2 `internal/kernel`：能力矩阵、协议模型与校验、凭据生成
-- [ ] B3 `render_xray.go` + golden 测试（VLESS-Reality-Vision、SS2022、VMess-WS-TLS、Trojan）
-- [ ] B4 kernel / inbound API（含端口冲突校验）+ contract 测试
-- [ ] B5 `node_online` 钩子：根据 config_hash 补发配置
-- [ ] A1 `x/kernel`：Manager、进程守护、安装、state.json 自启
-- [ ] A2 xray 适配器 + `KernelInstall/Apply/Control/Status` 命令接入
-- [ ] A3 nft 计数表同步与 `kernel_traffic` 上报；面板侧增量累加
-- [ ] F1 `/inbound` 页面：列表、新建/编辑（模板化）、启停删除
-- [ ] F2 节点详情页"内核"标签页（安装、状态、日志）
+- [x] B1 新增模型 `NodeKernel`、`NodeInbound`、`NodeInboundCounter` 并加入 AutoMigrate
+- [x] B2 `internal/kernel`：能力矩阵、协议模型与校验、凭据生成
+- [x] B3 `render_xray.go` + golden 测试（VLESS-Reality-Vision、SS2022、VMess-WS-TLS、Trojan-gRPC、VLESS-XHTTP）
+- [x] B4 kernel / inbound API（含端口冲突校验）+ contract 测试
+- [x] B5 节点上线钩子：重新下发全部内核配置，并清理面板已删除的内核
+- [x] A1 `x/kernel`：Manager、进程守护、安装（SHA256 校验）、state.json 自启
+- [x] A2 xray 适配器 + `KernelApply/KernelControl/KernelStatus` 命令接入
+- [x] A3 nft 计数表同步；面板每 60 秒拉取 `KernelStatus` 并按增量累加
+- [x] F1 `/inbound` 页面：列表、新建/编辑（模板化）、启停删除、参数查看
+- [x] F2 内核管理（安装、启停、重启、日志、卸载）
+
+#### 实施记录（与上文设计的差异）
+
+- **命令合并**：`KernelInstall` 并入 `KernelApply`（请求带下载信息，二进制缺失时自动安装），只保留 Apply / Control / Status 三个命令；内核命令不进入 agent 的变更队列，避免下载期间阻塞转发配置。
+- **流量与状态改为面板拉取**：不新增 `kernel_status` / `kernel_traffic` 推送消息，面板每 60 秒发送 `KernelStatus`，WebSocket 服务端无需改动。计数快照带 epoch（nft 表重建时变化），面板据此判断计数器是否重置。
+- **内核管理放在 `/inbound` 页面顶部**，没有改 `node.tsx`（3500+ 行，改动会增加与上游合并的冲突）。
+- **进程生命周期**：内核以独立进程组运行，并设置 `Pdeathsig`，agent 异常退出时内核随之退出；agent 重启后从 `state.json` 恢复。
+- **Xray 客户端兼容性（第 2 阶段注意）**：新版 Xray 客户端已移除 `allowInsecure`，自签证书的分享链接 / 订阅需要提供 `pinnedPeerCertSha256`（证书 DER 的 SHA256 十六进制）。
+
+#### 验证记录
+
+- 单元 / contract 测试：`go-backend` 全量 3 次通过；`go-gost/x/kernel` 在 `-race` 下通过。
+- 用真实 Xray 26.3.27 校验渲染结果：全部 29 种 协议×传输×安全 组合 `xray run -test` 通过。
+- 真实流量：VLESS-Reality-Vision、SS2022、Trojan-WS-TLS（自签）经 Xray 客户端访问成功；未授权探测 Reality 端口返回伪装站证书。
+- 面板 + agent 端到端：经 API 安装 Xray（真实下载 + 校验）、创建入站、产生流量、面板记账、停用、agent `kill -9` 后内核随之退出并在重启后恢复、卸载后进程 / 文件 / nft 表全部清理。
+- 浏览器（Playwright）走查：登录、安装内核、模板创建、编辑保留凭据、启停、删除、日志、移动端布局。
 
 ### 第 2 阶段：分享、订阅、对接中转（目标：完整可用）
 
