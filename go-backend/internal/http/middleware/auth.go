@@ -160,6 +160,10 @@ func requiresAdmin(path string) bool {
 		return true
 	}
 
+	if strings.HasPrefix(path, "/api/v1/kernel/") || strings.HasPrefix(path, "/api/v1/inbound/") {
+		return true
+	}
+
 	if strings.HasPrefix(path, "/api/v1/speed-limit/") {
 		return true
 	}

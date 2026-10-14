@@ -1,0 +1,1038 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"math/rand"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"go-backend/internal/http/response"
+	"go-backend/internal/kernel"
+	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
+)
+
+const (
+	kernelApplyTimeout   = 5 * time.Minute
+	kernelCommandTimeout = 20 * time.Second
+
+	kernelStatusPending = "pending"
+	kernelStatusRunning = "running"
+	kernelStatusStopped = "stopped"
+	kernelStatusError   = "error"
+)
+
+var kernelStatusInterval = 60 * time.Second
+
+// kernelApplyLocks serializes renders and dispatches per kernel so two edits
+// in quick succession cannot reach the agent out of order.
+var kernelApplyLocks sync.Map
+
+func lockKernelApply(kernelID int64) func() {
+	v, _ := kernelApplyLocks.LoadOrStore(kernelID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+type kernelView struct {
+	ID               int64  `json:"id"`
+	NodeID           int64  `json:"nodeId"`
+	NodeName         string `json:"nodeName"`
+	NodeOnline       bool   `json:"nodeOnline"`
+	KernelType       string `json:"kernelType"`
+	Version          string `json:"version"`
+	InstalledVersion string `json:"installedVersion"`
+	Status           string `json:"status"`
+	LastError        string `json:"lastError"`
+	Synced           bool   `json:"synced"`
+	Enabled          bool   `json:"enabled"`
+	InboundCount     int    `json:"inboundCount"`
+	UpdatedTime      int64  `json:"updatedTime"`
+}
+
+type inboundView struct {
+	ID            int64              `json:"id"`
+	KernelID      int64              `json:"kernelId"`
+	KernelType    string             `json:"kernelType"`
+	KernelStatus  string             `json:"kernelStatus"`
+	NodeID        int64              `json:"nodeId"`
+	NodeName      string             `json:"nodeName"`
+	NodeServerIP  string             `json:"nodeServerIp"`
+	Name          string             `json:"name"`
+	Protocol      string             `json:"protocol"`
+	Listen        string             `json:"listen"`
+	Port          int                `json:"port"`
+	Network       string             `json:"network"`
+	Settings      kernel.Settings    `json:"settings"`
+	Transport     kernel.Transport   `json:"transport"`
+	Security      kernelSecurityView `json:"security"`
+	Extra         string             `json:"extra"`
+	ShareHost     string             `json:"shareHost"`
+	Remark        string             `json:"remark"`
+	Enabled       bool               `json:"enabled"`
+	UploadBytes   int64              `json:"uploadBytes"`
+	DownloadBytes int64              `json:"downloadBytes"`
+	CreatedTime   int64              `json:"createdTime"`
+	UpdatedTime   int64              `json:"updatedTime"`
+}
+
+// kernelSecurityView hides the self-signed private material from list output.
+type kernelSecurityView struct {
+	kernel.Security
+	CertPEM string `json:"certPem,omitempty"`
+	KeyPEM  string `json:"keyPem,omitempty"`
+}
+
+type inboundRequest struct {
+	ID         int64            `json:"id"`
+	NodeID     int64            `json:"nodeId"`
+	KernelType string           `json:"kernelType"`
+	Name       string           `json:"name"`
+	Protocol   string           `json:"protocol"`
+	Listen     string           `json:"listen"`
+	Port       int              `json:"port"`
+	Settings   kernel.Settings  `json:"settings"`
+	Transport  kernel.Transport `json:"transport"`
+	Security   kernel.Security  `json:"security"`
+	Extra      string           `json:"extra"`
+	ShareHost  string           `json:"shareHost"`
+	Remark     string           `json:"remark"`
+	Enabled    *bool            `json:"enabled"`
+}
+
+// ---- conversion ----
+
+func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
+	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port}
+	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
+		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
+	}
+	if err := unmarshalOptional(row.Transport, &in.Transport); err != nil {
+		return in, fmt.Errorf("入站 %d transport 损坏: %v", row.ID, err)
+	}
+	if err := unmarshalOptional(row.Security, &in.Security); err != nil {
+		return in, fmt.Errorf("入站 %d security 损坏: %v", row.ID, err)
+	}
+	if strings.TrimSpace(row.Extra) != "" {
+		in.Extra = json.RawMessage(row.Extra)
+	}
+	return in, nil
+}
+
+func unmarshalOptional(raw string, out interface{}) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	return json.Unmarshal([]byte(raw), out)
+}
+
+func applyInboundToModel(in kernel.Inbound, row *model.NodeInbound) error {
+	settings, err := json.Marshal(in.Settings)
+	if err != nil {
+		return err
+	}
+	transport, err := json.Marshal(in.Transport)
+	if err != nil {
+		return err
+	}
+	security, err := json.Marshal(in.Security)
+	if err != nil {
+		return err
+	}
+	row.Protocol = in.Protocol
+	row.Listen = in.Listen
+	row.Port = in.Port
+	row.Settings = string(settings)
+	row.Transport = string(transport)
+	row.Security = string(security)
+	row.Extra = string(in.Extra)
+	return nil
+}
+
+// ---- kernel endpoints ----
+
+func (h *Handler) kernelCapabilities(w http.ResponseWriter, r *http.Request) {
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"kernels":   kernel.Catalog(),
+		"ssMethods": kernel.SSMethods(),
+		"defaults": map[string]interface{}{
+			"realitySni":  kernel.DefaultRealitySNI,
+			"fingerprint": kernel.DefaultFingerprint,
+			"ssMethod":    kernel.DefaultSSMethod,
+			"flow":        kernel.FlowVision,
+		},
+	}))
+}
+
+func (h *Handler) kernelList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		NodeID int64 `json:"nodeId"`
+	}
+	_ = decodeJSON(r.Body, &req)
+
+	views, err := h.kernelViews(req.NodeID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	response.WriteJSON(w, response.OK(views))
+}
+
+func (h *Handler) kernelViews(nodeID int64) ([]kernelView, error) {
+	kernels, err := h.repo.ListNodeKernels(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	inbounds, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[int64]int)
+	for _, in := range inbounds {
+		counts[in.KernelID]++
+	}
+	nodes := make(map[int64]*model.Node)
+	views := make([]kernelView, 0, len(kernels))
+	for _, k := range kernels {
+		node, ok := nodes[k.NodeID]
+		if !ok {
+			node, _ = h.repo.GetNodeByID(k.NodeID)
+			nodes[k.NodeID] = node
+		}
+		v := kernelView{
+			ID:               k.ID,
+			NodeID:           k.NodeID,
+			KernelType:       k.KernelType,
+			Version:          k.Version,
+			InstalledVersion: k.InstalledVersion,
+			Status:           k.Status,
+			LastError:        k.LastError,
+			Synced:           k.ConfigHash != "" && k.ConfigHash == k.AppliedHash,
+			Enabled:          k.Enabled == 1,
+			InboundCount:     counts[k.ID],
+			UpdatedTime:      k.UpdatedTime,
+		}
+		if node != nil {
+			v.NodeName = node.Name
+			v.NodeOnline = node.Status == 1
+		}
+		views = append(views, v)
+	}
+	return views, nil
+}
+
+func (h *Handler) kernelNodeEligible(nodeID int64) (*model.Node, error) {
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return nil, errors.New("节点不存在")
+	}
+	if node.IsRemote == 1 {
+		return nil, errors.New("远程节点不支持部署内核")
+	}
+	if isNftablesForwardMode(node.ForwardMode) {
+		return nil, errors.New("nftables 模式节点不支持部署内核")
+	}
+	return node, nil
+}
+
+func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		NodeID     int64  `json:"nodeId"`
+		KernelType string `json:"kernelType"`
+		Version    string `json:"version"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	if _, err := h.kernelNodeEligible(req.NodeID); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	info, ok := kernel.Lookup(req.KernelType)
+	if !ok || !info.Implemented {
+		response.WriteJSON(w, response.ErrDefault("暂不支持该内核"))
+		return
+	}
+	version := normalizeKernelVersion(req.Version)
+	if version == "" {
+		response.WriteJSON(w, response.ErrDefault("版本号格式错误"))
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	k, err := h.repo.GetNodeKernelByType(req.NodeID, info.Type)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if k == nil {
+		k = &model.NodeKernel{
+			NodeID:      req.NodeID,
+			KernelType:  info.Type,
+			Version:     version,
+			Status:      kernelStatusPending,
+			Enabled:     1,
+			CreatedTime: now,
+			UpdatedTime: now,
+		}
+		if err := h.repo.CreateNodeKernel(k); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+	} else if err := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+		"version": version, "enabled": 1, "updated_time": now,
+	}); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+
+	if err := h.applyKernel(k.ID, true); err != nil {
+		response.WriteJSON(w, response.ErrDefault("内核已登记，但下发失败: "+err.Error()))
+		return
+	}
+	response.WriteJSON(w, response.OKEmpty())
+}
+
+// normalizeKernelVersion accepts "latest" or a dotted version, returning ""
+// for anything that could inject into a download URL.
+func normalizeKernelVersion(v string) string {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if v == "" || strings.EqualFold(v, "latest") {
+		return "latest"
+	}
+	for _, c := range v {
+		if !(c >= '0' && c <= '9') && c != '.' && c != '-' && !(c >= 'a' && c <= 'z') {
+			return ""
+		}
+	}
+	if len(v) > 40 {
+		return ""
+	}
+	return v
+}
+
+func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		ID     int64  `json:"id"`
+		Action string `json:"action"`
+		Force  bool   `json:"force"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	k, err := h.repo.GetNodeKernel(req.ID)
+	if err != nil || k == nil {
+		response.WriteJSON(w, response.ErrDefault("内核不存在"))
+		return
+	}
+	now := time.Now().UnixMilli()
+
+	switch req.Action {
+	case "start", "stop":
+		enabled := 0
+		if req.Action == "start" {
+			enabled = 1
+		}
+		if err := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{"enabled": enabled, "updated_time": now}); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if err := h.applyKernel(k.ID, false); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	case "restart":
+		unlock := lockKernelApply(k.ID)
+		_, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
+			"type": k.KernelType, "action": "restart",
+		}, kernelCommandTimeout, false, false)
+		unlock()
+		if err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		h.refreshNodeKernelStatus(k.NodeID)
+	case "remove":
+		unlock := lockKernelApply(k.ID)
+		_, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
+			"type": k.KernelType, "action": "remove",
+		}, kernelCommandTimeout, false, true)
+		if err != nil && !req.Force {
+			unlock()
+			response.WriteJSON(w, response.ErrDefault("节点卸载失败: "+err.Error()+"（可强制删除面板记录）"))
+			return
+		}
+		err = h.repo.DeleteNodeKernel(k.ID)
+		unlock()
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+	default:
+		response.WriteJSON(w, response.ErrDefault("未知操作"))
+		return
+	}
+	response.WriteJSON(w, response.OKEmpty())
+}
+
+func (h *Handler) kernelLogs(w http.ResponseWriter, r *http.Request) {
+	id := idFromBody(r, w)
+	if id <= 0 {
+		return
+	}
+	k, err := h.repo.GetNodeKernel(id)
+	if err != nil || k == nil {
+		response.WriteJSON(w, response.ErrDefault("内核不存在"))
+		return
+	}
+	res, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelStatus", map[string]interface{}{
+		"logs": k.KernelType,
+	}, kernelCommandTimeout, false, false)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	var status agentKernelStatus
+	if err := remarshal(res.Data, &status); err != nil {
+		response.WriteJSON(w, response.ErrDefault("节点返回数据格式错误"))
+		return
+	}
+	for _, ks := range status.Kernels {
+		if ks.Type == k.KernelType {
+			response.WriteJSON(w, response.OK(ks))
+			return
+		}
+	}
+	response.WriteJSON(w, response.OK(agentKernelState{Type: k.KernelType}))
+}
+
+// ---- inbound endpoints ----
+
+func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	kernels, err := h.repo.ListNodeKernels(0)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	kernelByID := make(map[int64]model.NodeKernel, len(kernels))
+	for _, k := range kernels {
+		kernelByID[k.ID] = k
+	}
+	nodes := make(map[int64]*model.Node)
+	views := make([]inboundView, 0, len(rows))
+	for _, row := range rows {
+		in, err := inboundFromModel(row)
+		if err != nil {
+			log.Printf("kernel: %v", err)
+		}
+		node, ok := nodes[row.NodeID]
+		if !ok {
+			node, _ = h.repo.GetNodeByID(row.NodeID)
+			nodes[row.NodeID] = node
+		}
+		k := kernelByID[row.KernelID]
+		v := inboundView{
+			ID:            row.ID,
+			KernelID:      row.KernelID,
+			KernelType:    k.KernelType,
+			KernelStatus:  k.Status,
+			NodeID:        row.NodeID,
+			Name:          row.Name,
+			Protocol:      row.Protocol,
+			Listen:        row.Listen,
+			Port:          row.Port,
+			Network:       in.Network(),
+			Settings:      in.Settings,
+			Transport:     in.Transport,
+			Security:      kernelSecurityView{Security: in.Security},
+			Extra:         row.Extra,
+			ShareHost:     row.ShareHost,
+			Remark:        row.Remark,
+			Enabled:       row.Enabled == 1,
+			UploadBytes:   row.UploadBytes,
+			DownloadBytes: row.DownloadBytes,
+			CreatedTime:   row.CreatedTime,
+			UpdatedTime:   row.UpdatedTime,
+		}
+		if node != nil {
+			v.NodeName = node.Name
+			v.NodeServerIP = node.ServerIP
+		}
+		views = append(views, v)
+	}
+	response.WriteJSON(w, response.OK(views))
+}
+
+func (h *Handler) inboundCreate(w http.ResponseWriter, r *http.Request) {
+	h.inboundSave(w, r, false)
+}
+
+func (h *Handler) inboundUpdate(w http.ResponseWriter, r *http.Request) {
+	h.inboundSave(w, r, true)
+}
+
+func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update bool) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req inboundRequest
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || len([]rune(req.Name)) > 100 {
+		response.WriteJSON(w, response.ErrDefault("名称不能为空且不超过 100 字"))
+		return
+	}
+	req.ShareHost = strings.TrimSpace(req.ShareHost)
+	if len(req.ShareHost) > 255 {
+		response.WriteJSON(w, response.ErrDefault("分享地址过长"))
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	var row model.NodeInbound
+	var k *model.NodeKernel
+	if update {
+		existing, err := h.repo.GetNodeInbound(req.ID)
+		if err != nil || existing == nil {
+			response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+			return
+		}
+		row = *existing
+		k, err = h.repo.GetNodeKernel(row.KernelID)
+		if err != nil || k == nil {
+			response.WriteJSON(w, response.ErrDefault("内核不存在"))
+			return
+		}
+		// Keep secrets the client did not resend (the list hides PEM).
+		old, _ := inboundFromModel(row)
+		if req.Security.Type == old.Security.Type && req.Security.CertMode == old.Security.CertMode &&
+			req.Security.CertPEM == "" && req.Security.KeyPEM == "" {
+			req.Security.CertPEM, req.Security.KeyPEM = old.Security.CertPEM, old.Security.KeyPEM
+		}
+	} else {
+		if _, err := h.kernelNodeEligible(req.NodeID); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		var err error
+		k, err = h.repo.GetNodeKernelByType(req.NodeID, strings.ToLower(strings.TrimSpace(req.KernelType)))
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if k == nil {
+			response.WriteJSON(w, response.ErrDefault("请先在该节点安装内核"))
+			return
+		}
+		row = model.NodeInbound{KernelID: k.ID, NodeID: k.NodeID, CreatedTime: now, Enabled: 1}
+	}
+
+	in := kernel.Inbound{
+		ID:        row.ID,
+		Protocol:  req.Protocol,
+		Listen:    req.Listen,
+		Port:      req.Port,
+		Settings:  req.Settings,
+		Transport: req.Transport,
+		Security:  req.Security,
+		Extra:     json.RawMessage(strings.TrimSpace(req.Extra)),
+	}
+	if in.Port == 0 {
+		port, err := h.pickFreeInboundPort(row.NodeID, row.ID)
+		if err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		in.Port = port
+	}
+	if err := kernel.Normalize(k.KernelType, &in); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	occupant, err := h.repo.NodePortOccupant(row.NodeID, in.Port, row.ID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if occupant != "" {
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("端口 %d 已被%s占用", in.Port, occupant)))
+		return
+	}
+
+	if err := applyInboundToModel(in, &row); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	row.Name = req.Name
+	row.ShareHost = req.ShareHost
+	row.Remark = strings.TrimSpace(req.Remark)
+	if req.Enabled != nil {
+		row.Enabled = boolToInt(*req.Enabled)
+	}
+	row.UpdatedTime = now
+
+	if update {
+		err = h.repo.SaveNodeInbound(&row)
+	} else {
+		err = h.repo.CreateNodeInbound(&row)
+	}
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+
+	if err := h.applyKernel(k.ID, false); err != nil {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), TS: now, Data: map[string]interface{}{"id": row.ID}})
+		return
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{"id": row.ID}))
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (h *Handler) pickFreeInboundPort(nodeID, excludeInboundID int64) (int, error) {
+	for i := 0; i < 64; i++ {
+		port := 20000 + rand.Intn(40000)
+		occupant, err := h.repo.NodePortOccupant(nodeID, port, excludeInboundID)
+		if err != nil {
+			return 0, err
+		}
+		if occupant == "" {
+			return port, nil
+		}
+	}
+	return 0, errors.New("未找到可用端口，请手动指定")
+}
+
+func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
+	id := idFromBody(r, w)
+	if id <= 0 {
+		return
+	}
+	row, err := h.repo.GetNodeInbound(id)
+	if err != nil || row == nil {
+		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+		return
+	}
+	if err := h.repo.DeleteNodeInbound(id); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if err := h.applyKernel(row.KernelID, false); err != nil {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已删除，但下发到节点失败: " + err.Error(), TS: time.Now().UnixMilli()})
+		return
+	}
+	response.WriteJSON(w, response.OKEmpty())
+}
+
+func (h *Handler) inboundToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		ID      int64 `json:"id"`
+		Enabled bool  `json:"enabled"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	row, err := h.repo.GetNodeInbound(req.ID)
+	if err != nil || row == nil {
+		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+		return
+	}
+	row.Enabled = boolToInt(req.Enabled)
+	row.UpdatedTime = time.Now().UnixMilli()
+	if err := h.repo.SaveNodeInbound(row); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if err := h.applyKernel(row.KernelID, false); err != nil {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), TS: row.UpdatedTime})
+		return
+	}
+	response.WriteJSON(w, response.OKEmpty())
+}
+
+func (h *Handler) inboundResetTraffic(w http.ResponseWriter, r *http.Request) {
+	id := idFromBody(r, w)
+	if id <= 0 {
+		return
+	}
+	if err := h.repo.ResetNodeInboundTraffic(id, time.Now().UnixMilli()); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	response.WriteJSON(w, response.OKEmpty())
+}
+
+func (h *Handler) inboundRegenerate(w http.ResponseWriter, r *http.Request) {
+	id := idFromBody(r, w)
+	if id <= 0 {
+		return
+	}
+	row, err := h.repo.GetNodeInbound(id)
+	if err != nil || row == nil {
+		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+		return
+	}
+	k, err := h.repo.GetNodeKernel(row.KernelID)
+	if err != nil || k == nil {
+		response.WriteJSON(w, response.ErrDefault("内核不存在"))
+		return
+	}
+	in, err := inboundFromModel(*row)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := kernel.Regenerate(k.KernelType, &in); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := applyInboundToModel(in, row); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	row.UpdatedTime = time.Now().UnixMilli()
+	if err := h.repo.SaveNodeInbound(row); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if err := h.applyKernel(k.ID, false); err != nil {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已重新生成，但下发到节点失败: " + err.Error(), TS: row.UpdatedTime})
+		return
+	}
+	response.WriteJSON(w, response.OKEmpty())
+}
+
+// ---- dispatch ----
+
+type agentKernelState struct {
+	Type       string   `json:"type"`
+	Running    bool     `json:"running"`
+	Enabled    bool     `json:"enabled"`
+	Pid        int      `json:"pid"`
+	Version    string   `json:"version"`
+	ConfigHash string   `json:"configHash"`
+	Error      string   `json:"error"`
+	Restarts   int      `json:"restarts"`
+	StartedAt  int64    `json:"startedAt"`
+	Logs       []string `json:"logs,omitempty"`
+}
+
+type agentKernelCounter struct {
+	InboundID int64  `json:"inboundId"`
+	Proto     string `json:"proto"`
+	Dir       string `json:"dir"`
+	Bytes     int64  `json:"bytes"`
+}
+
+type agentKernelStatus struct {
+	Kernels      []agentKernelState   `json:"kernels"`
+	Counters     []agentKernelCounter `json:"counters"`
+	Epoch        string               `json:"epoch"`
+	NftAvailable bool                 `json:"nftAvailable"`
+	NftError     string               `json:"nftError"`
+}
+
+func remarshal(in interface{}, out interface{}) error {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
+}
+
+// buildKernelApplyPayload renders the kernel's enabled inbounds into the
+// KernelApply command body.
+func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]interface{}, string, error) {
+	info, ok := kernel.Lookup(k.KernelType)
+	if !ok || !info.Implemented {
+		return nil, "", fmt.Errorf("暂不支持内核 %s", k.KernelType)
+	}
+	rows, err := h.repo.ListNodeInboundsByKernel(k.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	inbounds := make([]kernel.Inbound, 0, len(rows))
+	ports := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		if row.Enabled != 1 {
+			continue
+		}
+		in, err := inboundFromModel(row)
+		if err != nil {
+			return nil, "", err
+		}
+		inbounds = append(inbounds, in)
+		ports = append(ports, map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()})
+	}
+	rendered, err := kernel.Render(k.KernelType, inbounds)
+	if err != nil {
+		return nil, "", err
+	}
+	proxy := ""
+	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
+		proxy = proxyURL
+	}
+	download, _ := kernel.ResolveDownload(info, k.Version, proxy)
+	return map[string]interface{}{
+		"type":     k.KernelType,
+		"version":  k.Version,
+		"download": download,
+		"files":    rendered.Files,
+		"args":     rendered.Args,
+		"hash":     rendered.Hash,
+		"enabled":  k.Enabled == 1,
+		"ports":    ports,
+	}, rendered.Hash, nil
+}
+
+// applyKernel pushes the current configuration of a kernel to its node. An
+// offline node is not an error for persistence: the kernel stays pending and
+// is reconciled when the agent reconnects.
+func (h *Handler) applyKernel(kernelID int64, install bool) error {
+	unlock := lockKernelApply(kernelID)
+	defer unlock()
+
+	k, err := h.repo.GetNodeKernel(kernelID)
+	if err != nil {
+		return err
+	}
+	if k == nil {
+		return errors.New("内核不存在")
+	}
+	payload, hash, err := h.buildKernelApplyPayload(k)
+	now := time.Now().UnixMilli()
+	if err != nil {
+		_ = h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+			"status": kernelStatusError, "last_error": err.Error(), "updated_time": now,
+		})
+		return err
+	}
+	_ = h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{"config_hash": hash, "updated_time": now})
+
+	timeout := kernelCommandTimeout
+	if install || k.InstalledVersion == "" || k.Version != "latest" && !strings.Contains(k.InstalledVersion, k.Version) {
+		timeout = kernelApplyTimeout
+	}
+	res, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelApply", payload, timeout, false, false)
+	now = time.Now().UnixMilli()
+	if err != nil {
+		status := kernelStatusError
+		if strings.Contains(err.Error(), "不在线") {
+			status = kernelStatusPending
+		}
+		_ = h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+			"status": status, "last_error": err.Error(), "updated_time": now,
+		})
+		return err
+	}
+
+	var state agentKernelState
+	_ = remarshal(res.Data, &state)
+	fields := map[string]interface{}{
+		"applied_hash": hash,
+		"status":       kernelStateStatus(state, k.Enabled == 1),
+		"last_error":   state.Error,
+		"updated_time": now,
+	}
+	if state.Version != "" {
+		fields["installed_version"] = truncate(state.Version, 100)
+	}
+	return h.repo.UpdateNodeKernelFields(k.ID, fields)
+}
+
+func kernelStateStatus(state agentKernelState, enabled bool) string {
+	switch {
+	case state.Running:
+		return kernelStatusRunning
+	case !enabled:
+		return kernelStatusStopped
+	case state.Error != "":
+		return kernelStatusError
+	default:
+		return kernelStatusStopped
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// reconcileNodeKernels re-applies every kernel of a node, e.g. after the agent
+// reconnects. The agent skips work when the config hash is unchanged.
+func (h *Handler) reconcileNodeKernels(nodeID int64) {
+	kernels, err := h.repo.ListNodeKernels(nodeID)
+	if err != nil {
+		return
+	}
+	for _, k := range kernels {
+		if err := h.applyKernel(k.ID, false); err != nil {
+			log.Printf("kernel reconcile failed node_id=%d kernel=%s err=%v", nodeID, k.KernelType, err)
+		}
+	}
+	// Also runs when the panel has no kernel left on the node, so kernels
+	// deleted while it was offline get removed.
+	h.pollNodeKernels(nodeID, true)
+}
+
+// refreshNodeKernelStatus polls one node for kernel state and traffic.
+func (h *Handler) refreshNodeKernelStatus(nodeID int64) {
+	h.pollNodeKernels(nodeID, false)
+}
+
+func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
+	kernels, err := h.repo.ListNodeKernels(nodeID)
+	if err != nil || (len(kernels) == 0 && !evenIfNone) {
+		return
+	}
+	res, err := h.sendNodeCommandWithTimeout(nodeID, "KernelStatus", map[string]interface{}{}, kernelCommandTimeout, false, false)
+	if err != nil {
+		return // offline, or an agent without kernel support
+	}
+	var status agentKernelStatus
+	if err := remarshal(res.Data, &status); err != nil {
+		log.Printf("kernel status decode failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	byType := make(map[string]agentKernelState, len(status.Kernels))
+	for _, s := range status.Kernels {
+		byType[s.Type] = s
+	}
+	known := make(map[string]struct{}, len(kernels))
+	for _, k := range kernels {
+		known[k.KernelType] = struct{}{}
+	}
+	for t := range byType {
+		if _, ok := known[t]; ok {
+			continue
+		}
+		// Deleted from the panel while the node was offline: the agent
+		// restored it from its local state, so remove it now.
+		if _, err := h.sendNodeCommandWithTimeout(nodeID, "KernelControl", map[string]interface{}{
+			"type": t, "action": "remove",
+		}, kernelCommandTimeout, false, true); err != nil {
+			log.Printf("kernel orphan removal failed node_id=%d kernel=%s err=%v", nodeID, t, err)
+		}
+	}
+	for _, k := range kernels {
+		s, ok := byType[k.KernelType]
+		if !ok || s.ConfigHash != k.ConfigHash {
+			// The agent lost a config it had acknowledged (reinstall, state
+			// wipe): push it again. A failed apply is left for the user or
+			// the next reconnect instead of retrying a download every poll.
+			if k.AppliedHash != k.ConfigHash || k.ConfigHash == "" {
+				continue
+			}
+			go func(id int64) {
+				if err := h.applyKernel(id, false); err != nil {
+					log.Printf("kernel drift re-apply failed kernel_id=%d err=%v", id, err)
+				}
+			}(k.ID)
+			continue
+		}
+		fields := map[string]interface{}{
+			"status":       kernelStateStatus(s, k.Enabled == 1),
+			"last_error":   s.Error,
+			"applied_hash": s.ConfigHash,
+			"updated_time": now,
+		}
+		if s.Version != "" {
+			fields["installed_version"] = truncate(s.Version, 100)
+		}
+		_ = h.repo.UpdateNodeKernelFields(k.ID, fields)
+	}
+
+	if !status.NftAvailable || len(status.Counters) == 0 {
+		return
+	}
+	samples := make([]repo.InboundCounterSample, 0, len(status.Counters))
+	for _, c := range status.Counters {
+		samples = append(samples, repo.InboundCounterSample{
+			InboundID: c.InboundID,
+			Protocol:  c.Proto,
+			Direction: c.Dir,
+			Epoch:     status.Epoch,
+			Bytes:     c.Bytes,
+		})
+	}
+	if err := h.repo.ApplyInboundCounterSamples(samples, now); err != nil {
+		log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
+	}
+}
+
+func (h *Handler) runKernelStatusLoop(ctx context.Context) {
+	defer h.jobsWG.Done()
+	ticker := time.NewTicker(kernelStatusInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		nodeIDs, err := h.repo.ListKernelNodeIDs()
+		if err != nil {
+			log.Printf("kernel status node lookup failed: %v", err)
+			continue
+		}
+		for _, nodeID := range nodeIDs {
+			node, err := h.repo.GetNodeByID(nodeID)
+			if err != nil || node == nil || node.Status != 1 {
+				continue
+			}
+			h.refreshNodeKernelStatus(nodeID)
+		}
+	}
+}

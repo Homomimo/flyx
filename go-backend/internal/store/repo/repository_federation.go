@@ -202,6 +202,14 @@ func (r *Repository) ListUsedPortsOnNode(nodeID int64) ([]int, error) {
 		}
 	}
 
+	inboundPorts, err := listNodeInboundPortsTx(r.db, nodeID, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range inboundPorts {
+		used[p] = struct{}{}
+	}
+
 	result := make([]int, 0, len(used))
 	for p := range used {
 		result = append(result, p)

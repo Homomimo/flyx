@@ -1,0 +1,406 @@
+package kernel
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+const defaultBaseDir = "/etc/flux_agent/kernels"
+
+type instance struct {
+	req     ApplyRequest
+	binPath string
+	version string
+	logs    *logRing
+	proc    *process
+	err     string
+}
+
+// Manager owns every kernel instance on this agent. Apply/Control are
+// serialized by applyMu (downloads can take minutes); mu guards the maps so
+// Status stays responsive meanwhile.
+type Manager struct {
+	baseDir string
+
+	applyMu     sync.Mutex
+	mu          sync.Mutex
+	restoreOnce sync.Once
+	instances   map[string]*instance
+	nft         *nftCounters
+}
+
+var (
+	defaultManager     *Manager
+	defaultManagerOnce sync.Once
+)
+
+// Default returns the process-wide manager rooted at FLVX_KERNEL_DIR or
+// /etc/flux_agent/kernels.
+func Default() *Manager {
+	defaultManagerOnce.Do(func() {
+		dir := strings.TrimSpace(os.Getenv("FLVX_KERNEL_DIR"))
+		if dir == "" {
+			dir = defaultBaseDir
+		}
+		defaultManager = NewManager(dir)
+	})
+	return defaultManager
+}
+
+func NewManager(baseDir string) *Manager {
+	return &Manager{
+		baseDir:   baseDir,
+		instances: make(map[string]*instance),
+		nft:       newNftCounters(baseDir),
+	}
+}
+
+func (m *Manager) statePath() string { return filepath.Join(m.baseDir, "state.json") }
+func (m *Manager) runDir(t string) string {
+	return filepath.Join(m.baseDir, t, "run")
+}
+func (m *Manager) binDir(t, version string) string {
+	return filepath.Join(m.baseDir, t, "bin", version)
+}
+
+// Restore relaunches the kernels recorded by the last Apply so they come back
+// after an agent restart even while the panel is unreachable.
+func (m *Manager) Restore() {
+	m.restoreOnce.Do(m.restore)
+}
+
+func (m *Manager) restore() {
+	b, err := os.ReadFile(m.statePath())
+	if err != nil {
+		return
+	}
+	var reqs []ApplyRequest
+	if err := json.Unmarshal(b, &reqs); err != nil {
+		fmt.Printf("⚠️ 内核状态文件损坏: %v\n", err)
+		return
+	}
+	for _, req := range reqs {
+		if _, err := m.Apply(req); err != nil {
+			fmt.Printf("⚠️ 恢复内核 %s 失败: %v\n", req.Type, err)
+		}
+	}
+}
+
+func (m *Manager) persist() {
+	m.mu.Lock()
+	reqs := make([]ApplyRequest, 0, len(m.instances))
+	for _, inst := range m.instances {
+		if inst.req.Type != "" {
+			reqs = append(reqs, inst.req)
+		}
+	}
+	m.mu.Unlock()
+	sort.Slice(reqs, func(i, j int) bool { return reqs[i].Type < reqs[j].Type })
+	b, err := json.Marshal(reqs)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(m.baseDir, 0o700); err != nil {
+		return
+	}
+	_ = writeFileAtomic(m.statePath(), b, 0o600)
+}
+
+func (m *Manager) allPorts() []Port {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ports []Port
+	for _, inst := range m.instances {
+		ports = append(ports, inst.req.Ports...)
+	}
+	return ports
+}
+
+// Apply installs (if needed), writes the configuration and makes the process
+// match req.Enabled. Unchanged running kernels are left alone.
+func (m *Manager) Apply(req ApplyRequest) (State, error) {
+	if err := req.validate(); err != nil {
+		return State{}, err
+	}
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+
+	m.mu.Lock()
+	inst := m.instances[req.Type]
+	if inst == nil {
+		inst = &instance{logs: &logRing{}}
+		m.instances[req.Type] = inst
+	}
+	m.mu.Unlock()
+
+	binDir := m.binDir(req.Type, req.Version)
+	binPath := filepath.Join(binDir, req.Download.BinName)
+	if _, err := os.Stat(binPath); err != nil {
+		inst.logs.add(fmt.Sprintf("[flvx] 安装 %s %s", req.Type, req.Version))
+		if err := install(req.Download, binDir); err != nil {
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+		inst.logs.add("[flvx] 安装完成")
+	}
+
+	runDir := m.runDir(req.Type)
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		m.setErr(inst, err)
+		return m.state(req.Type, false), err
+	}
+	for _, f := range req.Files {
+		if err := writeFileAtomic(filepath.Join(runDir, f.Name), []byte(f.Content), 0o600); err != nil {
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+	}
+
+	m.mu.Lock()
+	changed := inst.req.Hash != req.Hash || inst.binPath != binPath
+	proc := inst.proc
+	inst.req = req
+	inst.binPath = binPath
+	inst.err = ""
+	m.mu.Unlock()
+	m.mu.Lock()
+	needVersion := inst.version == "" || changed
+	m.mu.Unlock()
+	if needVersion {
+		v := detectVersion(binPath, adapters[req.Type].versionArgs)
+		m.mu.Lock()
+		inst.version = v
+		m.mu.Unlock()
+	}
+
+	running := false
+	if proc != nil {
+		running, _, _, _, _ = proc.snapshot()
+	}
+	switch {
+	case !req.Enabled:
+		m.stopProcess(inst)
+	case changed || proc == nil || !running:
+		m.stopProcess(inst)
+		m.startProcess(inst, binPath, expandArgs(req.Args, runDir, binDir), runDir)
+		time.Sleep(startupProbeIn)
+	}
+
+	m.persist()
+	if err := m.nft.sync(m.allPorts()); err != nil {
+		inst.logs.add("[flvx] 流量计数规则同步失败: " + err.Error())
+	}
+	st := m.state(req.Type, false)
+	if req.Enabled && !st.Running {
+		return st, fmt.Errorf("内核启动失败: %s", lastLines(inst.logs, 5))
+	}
+	return st, nil
+}
+
+func expandArgs(args []string, runDir, binDir string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		a = strings.ReplaceAll(a, "{RUN_DIR}", runDir)
+		out[i] = strings.ReplaceAll(a, "{BIN_DIR}", binDir)
+	}
+	return out
+}
+
+func lastLines(r *logRing, n int) string {
+	lines := r.tail(n)
+	if len(lines) == 0 {
+		return "无输出"
+	}
+	return strings.Join(lines, " | ")
+}
+
+func (m *Manager) setErr(inst *instance, err error) {
+	m.mu.Lock()
+	inst.err = err.Error()
+	m.mu.Unlock()
+	inst.logs.add("[flvx] " + err.Error())
+}
+
+func (m *Manager) startProcess(inst *instance, bin string, args []string, dir string) {
+	p := newProcess(bin, args, dir, inst.logs)
+	m.mu.Lock()
+	inst.proc = p
+	m.mu.Unlock()
+	p.start()
+}
+
+func (m *Manager) stopProcess(inst *instance) {
+	m.mu.Lock()
+	p := inst.proc
+	inst.proc = nil
+	m.mu.Unlock()
+	if p != nil {
+		p.stop()
+	}
+}
+
+// Control handles start / stop / restart / remove for an applied kernel.
+func (m *Manager) Control(kernelType, action string) (State, error) {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+
+	m.mu.Lock()
+	inst := m.instances[kernelType]
+	m.mu.Unlock()
+
+	if action == "remove" {
+		if inst != nil {
+			m.stopProcess(inst)
+			m.mu.Lock()
+			delete(m.instances, kernelType)
+			m.mu.Unlock()
+		}
+		if _, ok := adapters[kernelType]; ok {
+			_ = os.RemoveAll(filepath.Join(m.baseDir, kernelType))
+		}
+		m.persist()
+		if err := m.nft.sync(m.allPorts()); err != nil {
+			return State{Type: kernelType}, err
+		}
+		return State{Type: kernelType}, nil
+	}
+	if inst == nil {
+		return State{Type: kernelType}, fmt.Errorf("内核 %s 未部署", kernelType)
+	}
+
+	switch action {
+	case "stop":
+		m.stopProcess(inst)
+		m.mu.Lock()
+		inst.req.Enabled = false
+		m.mu.Unlock()
+	case "start", "restart":
+		m.stopProcess(inst)
+		m.mu.Lock()
+		inst.req.Enabled = true
+		bin, args := inst.binPath, inst.req.Args
+		m.mu.Unlock()
+		runDir := m.runDir(kernelType)
+		m.startProcess(inst, bin, expandArgs(args, runDir, filepath.Dir(bin)), runDir)
+		time.Sleep(startupProbeIn)
+	default:
+		return State{}, fmt.Errorf("未知操作: %s", action)
+	}
+	m.persist()
+	return m.state(kernelType, false), nil
+}
+
+func (m *Manager) state(kernelType string, withLogs bool) State {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst := m.instances[kernelType]
+	st := State{Type: kernelType}
+	if inst == nil {
+		return st
+	}
+	st.Enabled = inst.req.Enabled
+	st.ConfigHash = inst.req.Hash
+	st.Version = inst.version
+	st.Error = inst.err
+	if inst.proc != nil {
+		var lastErr string
+		st.Running, st.Pid, st.Restarts, lastErr, st.StartedAt = inst.proc.snapshot()
+		if st.Error == "" && !st.Running && lastErr != "" {
+			st.Error = lastErr + ": " + lastLines(inst.logs, 3)
+		}
+	}
+	if withLogs {
+		st.Logs = inst.logs.tail(logRingSize)
+	}
+	return st
+}
+
+// Status reports every kernel plus the nft traffic counters. logsFor selects
+// one kernel whose recent output is included.
+func (m *Manager) Status(logsFor string) Status {
+	m.mu.Lock()
+	types := make([]string, 0, len(m.instances))
+	for t := range m.instances {
+		types = append(types, t)
+	}
+	m.mu.Unlock()
+	sort.Strings(types)
+
+	out := Status{Kernels: make([]State, 0, len(types))}
+	for _, t := range types {
+		out.Kernels = append(out.Kernels, m.state(t, t == logsFor))
+	}
+	if len(m.allPorts()) == 0 {
+		out.NftAvailable = nftAvailable() == nil
+		return out
+	}
+	counters, epoch, err := m.nft.read()
+	if err != nil {
+		out.NftError = err.Error()
+		return out
+	}
+	out.NftAvailable = true
+	out.Counters = counters
+	out.Epoch = epoch
+	return out
+}
+
+// Shutdown stops every kernel process; the persisted state is kept so the
+// next agent start restores them.
+func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	insts := make([]*instance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		insts = append(insts, inst)
+	}
+	m.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, inst := range insts {
+		wg.Add(1)
+		go func(inst *instance) {
+			defer wg.Done()
+			m.stopProcess(inst)
+		}(inst)
+	}
+	wg.Wait()
+}
+
+func detectVersion(bin string, args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	cmd := exec.Command(bin, args...)
+	done := make(chan struct{})
+	var out []byte
+	go func() {
+		out, _ = cmd.CombinedOutput()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-done
+	}
+	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	if len(line) > 100 {
+		line = line[:100]
+	}
+	return line
+}
+
+func hashString(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
