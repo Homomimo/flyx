@@ -339,6 +339,14 @@ resolve_panel_deployment() {
   label_dir=$(get_container_compose_label "$backend_container" "com.docker.compose.project.working_dir")
   label_project=$(get_container_compose_label "$backend_container" "com.docker.compose.project")
 
+  # Older in-panel upgrades ran Compose inside a helper container, which left
+  # the label pointing at the container path (/opt/flvx-panel) instead of the
+  # real deployment. Prefer the current directory when only it has the files.
+  if [[ -n "$label_dir" && ! -f "$label_dir/docker-compose.yml" && -f ".env" && -f "docker-compose.yml" ]]; then
+    echo "⚠️ 容器标签记录的部署目录 $label_dir 中没有 docker-compose.yml，改用当前目录 $(pwd -P)"
+    label_dir=""
+  fi
+
   if [[ -n "$requested_dir" ]]; then
     deploy_dir="$requested_dir"
   elif [[ -n "$label_dir" ]]; then

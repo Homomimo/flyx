@@ -452,3 +452,32 @@ func TestHelperRunArgsCarryComposeProject(t *testing.T) {
 		t.Fatalf("invalid project names must be dropped: %v", args)
 	}
 }
+
+func TestHelperRunsInHostDeployDir(t *testing.T) {
+	exec := &systemUpgradeExecutor{deployDir: "/opt/flvx-panel", backendContainer: "flux-panel-backend", hostDeployDir: "/root"}
+	args, err := exec.buildHelperRunArgs("sha256:abc", "helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	// Compose resolves ./ against the directory it runs in as a host path,
+	// so the helper must work in the host directory itself.
+	if !strings.Contains(joined, "-v /root:/root") || !strings.Contains(joined, "-e PANEL_DEPLOY_DIR=/root") ||
+		strings.Contains(joined, "PANEL_DEPLOY_DIR=/opt/flvx-panel") {
+		t.Fatalf("helper must run in the host deploy dir: %v", args)
+	}
+	exec.hostDeployDir = "/bad dir;x"
+	joined = strings.Join(mustArgs(t, exec), " ")
+	if !strings.Contains(joined, "-e PANEL_DEPLOY_DIR=/opt/flvx-panel") || strings.Contains(joined, "bad dir") {
+		t.Fatalf("unsafe host dirs must be ignored: %v", joined)
+	}
+}
+
+func mustArgs(t *testing.T, e *systemUpgradeExecutor) []string {
+	t.Helper()
+	args, err := e.buildHelperRunArgs("sha256:abc", "helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return args
+}

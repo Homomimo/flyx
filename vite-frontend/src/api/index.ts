@@ -663,8 +663,10 @@ export const updateExternalInbound = (data: {
   name: string;
   host: string;
   port: number;
-  method: string;
-  password: string;
+  method?: string;
+  password?: string;
+  /** Replaces the node's parameters with this share link. */
+  link?: string;
   remark: string;
   relayOnly: boolean;
 }) => Network.post("/inbound/external/update", data);

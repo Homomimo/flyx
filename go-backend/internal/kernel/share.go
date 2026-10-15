@@ -20,6 +20,8 @@ type Endpoint struct {
 	// Direct marks the landing node's own address; only direct endpoints
 	// carry the Hysteria2 port-hopping range (relays forward one port).
 	Direct bool
+	// Proxy is set for imported nodes; it replaces Inbound when rendering.
+	Proxy Proxy
 }
 
 // hopRange is the port-hopping range clients may use for this endpoint.
@@ -48,6 +50,9 @@ func hostPort(host string, port int) string {
 // ShareURI renders the de-facto standard share link (v2rayN / Shadowrocket /
 // NekoBox style) for an endpoint.
 func ShareURI(e Endpoint) (string, bool) {
+	if e.Proxy != nil {
+		return proxyURI(e)
+	}
 	in := e.Inbound
 	switch in.Protocol {
 	case ProtocolVLESS, ProtocolTrojan:
@@ -193,6 +198,9 @@ func addSecurityQuery(q url.Values, e Endpoint) {
 // ClashProxy renders a Mihomo (Clash Meta) proxy entry. XHTTP is skipped
 // because Mihomo support for it is not stable across client versions.
 func ClashProxy(e Endpoint) (yamlNode, bool) {
+	if e.Proxy != nil {
+		return proxyClash(e)
+	}
 	in := e.Inbound
 	if in.Transport.Type == TransportXHTTP || in.Protocol == ProtocolSnell || in.Protocol == ProtocolNaive {
 		// Mihomo only speaks Snell v1-v3 and has no NaïveProxy client.
@@ -283,6 +291,9 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 // an endpoint. The first one carries the endpoint's tag; ShadowTLS adds a
 // second outbound the first detours through.
 func SingboxOutbounds(e Endpoint) ([]map[string]interface{}, bool) {
+	if e.Proxy != nil {
+		return proxySingbox(e)
+	}
 	in := e.Inbound
 	if in.Protocol == ProtocolSnell {
 		return nil, false
@@ -415,6 +426,9 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 // SurgeLine renders a Surge [Proxy] line. Surge has no VLESS, Reality,
 // gRPC or XHTTP support, so those endpoints are skipped.
 func SurgeLine(e Endpoint) (string, bool) {
+	if e.Proxy != nil {
+		return proxySurge(e)
+	}
 	in := e.Inbound
 	if in.Security.Type == SecurityReality || in.Transport.Type == TransportGRPC || in.Transport.Type == TransportXHTTP {
 		return "", false

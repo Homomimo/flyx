@@ -38,11 +38,13 @@ export function Checkbox({
     ? "indeterminate"
     : Boolean(isSelected);
 
+  // A label so tapping the text toggles the box too (the box alone is a
+  // small target on phones).
   return (
-    <div
+    <label
       className={cn(
         "inline-flex items-center gap-2",
-        isDisabled ? "opacity-50" : "",
+        isDisabled ? "opacity-50" : "cursor-pointer",
         className,
       )}
     >
@@ -53,6 +55,6 @@ export function Checkbox({
         {...props}
       />
       {children ? <span className="text-sm">{children}</span> : null}
-    </div>
+    </label>
   );
 }

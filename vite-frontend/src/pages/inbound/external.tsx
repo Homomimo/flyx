@@ -84,15 +84,15 @@ export function ImportModal({
         <ModalHeader className="flex flex-col gap-1">
           <h2 className="text-lg font-bold">导入节点</h2>
           <p className="text-small font-normal text-default-500">
-            导入别处搭好的节点，用来对接中转和加入订阅。面板不会部署或修改这些节点。
+            导入别处搭好的节点或机场订阅，用来对接中转和加入订阅。面板不会部署或修改这些节点。
           </p>
         </ModalHeader>
         <ModalBody>
           <Textarea
-            description="每行一个链接，目前支持 ss://（不带插件）"
-            label="分享链接"
+            description="支持：分享链接（ss / vmess / vless / trojan / hysteria2 / tuic / anytls / socks5，每行一个）、base64 订阅、Clash / Mihomo 配置、sing-box 配置、Surge / Loon 节点行，或直接填订阅地址（https://...）"
+            label="节点或订阅"
             minRows={5}
-            placeholder="ss://..."
+            placeholder={"vless://...\nss://...\n或 https://订阅地址"}
             value={links}
             variant="bordered"
             onChange={(e) => setLinks(e.target.value)}
@@ -134,6 +134,7 @@ interface EditForm {
   port: string;
   method: string;
   password: string;
+  link: string;
   remark: string;
   relayOnly: boolean;
 }
@@ -161,12 +162,17 @@ export function ExternalEditModal({
             port: String(item.port),
             method: item.settings.method ?? "",
             password: item.settings.password ?? "",
+            link: "",
             remark: item.remark,
             relayOnly: item.relayOnly,
           }
         : null,
     );
   }, [item]);
+
+  // Nodes imported before other protocols were supported keep plain ss
+  // fields; newer ones store the full proxy and are replaced by a link.
+  const legacy = Boolean(item && !item.importedSummary);
 
   const set = (patch: Partial<EditForm>) =>
     setForm((p) => (p ? { ...p, ...patch } : p));
@@ -180,8 +186,9 @@ export function ExternalEditModal({
         name: form.name,
         host: form.host.trim(),
         port: Number(form.port),
-        method: form.method,
-        password: form.password,
+        ...(legacy
+          ? { method: form.method, password: form.password }
+          : { link: form.link.trim() }),
         remark: form.remark,
         relayOnly: form.relayOnly,
       });
@@ -251,25 +258,39 @@ export function ExternalEditModal({
                   onChange={(e) => set({ port: e.target.value })}
                 />
               </div>
-              <Select
-                label="加密方式"
-                selectedKeys={form.method ? [form.method] : []}
-                onSelectionChange={(keys) =>
-                  set({ method: String(Array.from(keys)[0] ?? "") })
-                }
-              >
-                {methods.map((m) => (
-                  <SelectItem key={m} textValue={m}>
-                    {m}
-                  </SelectItem>
-                ))}
-              </Select>
-              <Input
-                label="密码"
-                value={form.password}
-                variant="bordered"
-                onChange={(e) => set({ password: e.target.value })}
-              />
+              {legacy ? (
+                <>
+                  <Select
+                    label="加密方式"
+                    selectedKeys={form.method ? [form.method] : []}
+                    onSelectionChange={(keys) =>
+                      set({ method: String(Array.from(keys)[0] ?? "") })
+                    }
+                  >
+                    {methods.map((m) => (
+                      <SelectItem key={m} textValue={m}>
+                        {m}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                  <Input
+                    label="密码"
+                    value={form.password}
+                    variant="bordered"
+                    onChange={(e) => set({ password: e.target.value })}
+                  />
+                </>
+              ) : (
+                <Textarea
+                  description={`当前：${item?.importedSummary ?? ""}。原节点的密码、密钥等参数变了时，粘贴新的分享链接或节点行替换；留空保持不变`}
+                  label="用新链接替换参数（可选）"
+                  minRows={2}
+                  placeholder="vless://... / ss://..."
+                  value={form.link}
+                  variant="bordered"
+                  onChange={(e) => set({ link: e.target.value })}
+                />
+              )}
               <Input
                 label="备注"
                 value={form.remark}

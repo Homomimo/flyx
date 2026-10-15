@@ -1,9 +1,14 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -18,10 +23,27 @@ import (
 // without a kernel or node; Listen holds the node's public address so relays
 // and subscriptions treat them like any other inbound.
 
-const maxImportLinks = 100
+// maxImportNodes bounds one import; subscriptions rarely carry more.
+const maxImportNodes = 500
+
+// maxSubscriptionBytes bounds a fetched subscription body.
+const maxSubscriptionBytes = 5 << 20
 
 func isExternalInbound(row *model.NodeInbound) bool {
 	return row != nil && row.KernelID == 0
+}
+
+// importedProxy returns the stored Mihomo-schema proxy of an imported node,
+// or nil for nodes imported before the proxy format (plain ss inbounds).
+func importedProxy(row *model.NodeInbound) kernel.Proxy {
+	if !isExternalInbound(row) || strings.TrimSpace(row.Extra) == "" {
+		return nil
+	}
+	var p kernel.Proxy
+	if err := json.Unmarshal([]byte(row.Extra), &p); err != nil || len(p) == 0 {
+		return nil
+	}
+	return p
 }
 
 type externalImportResult struct {
@@ -29,7 +51,8 @@ type externalImportResult struct {
 	Errors  []string `json:"errors"`
 }
 
-// inboundImport creates external inbounds from share links, one per line.
+// inboundImport creates imported nodes from share links, a base64 / Clash /
+// sing-box / Surge subscription body, or a subscription URL to fetch.
 func (h *Handler) inboundImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -43,18 +66,22 @@ func (h *Handler) inboundImport(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
-	var lines []string
-	for _, line := range strings.Split(req.Links, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			lines = append(lines, line)
-		}
-	}
-	if len(lines) == 0 {
-		response.WriteJSON(w, response.ErrDefault("请粘贴分享链接，每行一个"))
+	text := strings.TrimSpace(req.Links)
+	if text == "" {
+		response.WriteJSON(w, response.ErrDefault("请粘贴分享链接、订阅内容或订阅地址"))
 		return
 	}
-	if len(lines) > maxImportLinks {
-		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("一次最多导入 %d 条", maxImportLinks)))
+	if isSubscriptionURL(text) {
+		body, err := fetchSubscription(r.Context(), text)
+		if err != nil {
+			response.WriteJSON(w, response.ErrDefault("获取订阅失败："+err.Error()))
+			return
+		}
+		text = body
+	}
+	nodes, parseErrs := kernel.ParseImport(text)
+	if len(nodes) > maxImportNodes {
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("一次最多导入 %d 个节点", maxImportNodes)))
 		return
 	}
 
@@ -70,46 +97,93 @@ func (h *Handler) inboundImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	res := externalImportResult{Created: []int64{}, Errors: []string{}}
+	res := externalImportResult{Created: []int64{}, Errors: append([]string{}, parseErrs...)}
 	now := time.Now().UnixMilli()
-	for i, line := range lines {
-		node, err := kernel.ParseShareLink(line)
-		if err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("第 %d 行：%v", i+1, err))
-			continue
-		}
+	for _, node := range nodes {
 		key := externalKey(node.Host, node.Port)
 		if seen[key] {
-			res.Errors = append(res.Errors, fmt.Sprintf("第 %d 行：%s 已经导入过", i+1, key))
+			res.Errors = append(res.Errors, fmt.Sprintf("%s：%s 已经导入过", node.Name, key))
 			continue
 		}
 		seen[key] = true
-		row := model.NodeInbound{
-			Name:        truncateRunes(node.Name, 100),
-			ShareHost:   node.Host,
-			RelayOnly:   boolToInt(req.RelayOnly),
-			Enabled:     1,
-			CreatedTime: now,
-			UpdatedTime: now,
+		row, err := externalRow(node, req.RelayOnly, now)
+		if err == nil {
+			err = h.repo.CreateNodeInbound(&row)
 		}
-		if err := applyInboundToModel(node.Inbound, &row); err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("第 %d 行：%v", i+1, err))
-			continue
-		}
-		if err := h.repo.CreateNodeInbound(&row); err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("第 %d 行：%v", i+1, err))
+		if err != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("%s：%v", node.Name, err))
 			continue
 		}
 		res.Created = append(res.Created, row.ID)
 	}
 	if len(res.Created) == 0 {
-		response.WriteJSON(w, response.R{Code: -1, Msg: "没有导入任何节点：" + strings.Join(res.Errors, "；"), Data: res, TS: now})
+		msg := "没有导入任何节点"
+		if len(res.Errors) > 0 {
+			msg += "：" + res.Errors[0]
+		}
+		response.WriteJSON(w, response.R{Code: -1, Msg: msg, Data: res, TS: now})
 		return
 	}
 	response.WriteJSON(w, response.OK(res))
 }
 
-// inboundExternalUpdate edits an imported node's address and credentials.
+func externalRow(node kernel.ImportedNode, relayOnly bool, now int64) (model.NodeInbound, error) {
+	raw, err := json.Marshal(node.Proxy)
+	if err != nil {
+		return model.NodeInbound{}, err
+	}
+	return model.NodeInbound{
+		Name:        truncateRunes(node.Name, 100),
+		Protocol:    kernel.ProxyProtocol(node.Proxy),
+		Listen:      node.Host,
+		Port:        node.Port,
+		ShareHost:   node.Host,
+		Extra:       string(raw),
+		RelayOnly:   boolToInt(relayOnly),
+		Enabled:     1,
+		CreatedTime: now,
+		UpdatedTime: now,
+	}, nil
+}
+
+func isSubscriptionURL(text string) bool {
+	if strings.ContainsAny(text, " \n\t") {
+		return false
+	}
+	u, err := url.Parse(text)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+// fetchSubscription downloads a subscription. The Mihomo user agent makes
+// most providers return a Clash profile, which carries every parameter.
+func fetchSubscription(ctx context.Context, rawURL string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "clash.meta/1.19.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) > maxSubscriptionBytes {
+		return "", errors.New("订阅内容超过 5MB")
+	}
+	return string(body), nil
+}
+
+// inboundExternalUpdate edits an imported node: its name, address and
+// options, and optionally replaces its parameters with a new share link.
 func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -122,6 +196,7 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 		Port      int    `json:"port"`
 		Method    string `json:"method"`
 		Password  string `json:"password"`
+		Link      string `json:"link"`
 		Remark    string `json:"remark"`
 		RelayOnly bool   `json:"relayOnly"`
 	}
@@ -148,26 +223,56 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("端口不正确"))
 		return
 	}
-	method := strings.ToLower(strings.TrimSpace(req.Method))
-	if !containsMethod(method) {
-		response.WriteJSON(w, response.ErrDefault("不支持的加密方式 "+method))
-		return
-	}
-	if req.Password == "" {
-		response.WriteJSON(w, response.ErrDefault("密码不能为空"))
-		return
-	}
 
-	in, err := inboundFromModel(*row)
-	if err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
+	proxy := importedProxy(row)
+	if link := strings.TrimSpace(req.Link); link != "" {
+		nodes, errs := kernel.ParseImport(link)
+		if len(nodes) != 1 {
+			msg := "请只粘贴一个节点"
+			if len(nodes) == 0 && len(errs) > 0 {
+				msg = errs[0]
+			}
+			response.WriteJSON(w, response.ErrDefault(msg))
+			return
+		}
+		proxy = nodes[0].Proxy
+		// The address fields follow the new link unless the user changed them.
+		if host == row.Listen && req.Port == row.Port {
+			host, req.Port = nodes[0].Host, nodes[0].Port
+		}
 	}
-	in.Listen, in.Port = host, req.Port
-	in.Settings.Method, in.Settings.Password = method, req.Password
-	if err := applyInboundToModel(in, row); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
+	if proxy != nil {
+		proxy["server"], proxy["port"] = host, req.Port
+		raw, err := json.Marshal(proxy)
+		if err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		row.Extra = string(raw)
+		row.Protocol = kernel.ProxyProtocol(proxy)
+		row.Listen, row.Port = host, req.Port
+	} else {
+		// Nodes imported before the proxy format: plain Shadowsocks.
+		method := strings.ToLower(strings.TrimSpace(req.Method))
+		if !containsMethod(method) {
+			response.WriteJSON(w, response.ErrDefault("不支持的加密方式 "+method))
+			return
+		}
+		if req.Password == "" {
+			response.WriteJSON(w, response.ErrDefault("密码不能为空"))
+			return
+		}
+		in, err := inboundFromModel(*row)
+		if err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		in.Listen, in.Port = host, req.Port
+		in.Settings.Method, in.Settings.Password = method, req.Password
+		if err := applyInboundToModel(in, row); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	}
 	row.Name = name
 	row.ShareHost = host

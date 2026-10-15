@@ -735,6 +735,9 @@ export interface InboundApiItem {
   kernelStatus: string;
   /** Imported node: not deployed by the panel, only relayed and shared. */
   external: boolean;
+  /** Imported nodes: protocol summary and flattened parameters. */
+  importedSummary?: string;
+  importedParams?: [string, string][];
   nodeId: number;
   nodeName: string;
   nodeServerIp: string;

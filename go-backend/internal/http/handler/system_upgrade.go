@@ -44,6 +44,31 @@ type systemUpgradeExecutor struct {
 	// from /root, deployed in /opt/flvx-panel); without it Compose would
 	// try to create a second flux-panel-backend and hit a name conflict.
 	composeProject string
+	// hostDeployDir is the host directory mounted at deployDir. Compose
+	// resolves relative bind mounts (./) against the directory it runs in
+	// as a host path, so the helper must run in the host path itself;
+	// running in deployDir would remount an empty /opt/flvx-panel.
+	hostDeployDir string
+}
+
+var hostPathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/@+-]*$`)
+
+// detectHostDeployDir returns the host source of the backend container's
+// deploy directory mount, or "" when it cannot be determined.
+func (e *systemUpgradeExecutor) detectHostDeployDir(ctx context.Context) string {
+	if validateBackendContainerName(e.backendContainer) != nil || !hostPathPattern.MatchString(e.deployDir) {
+		return ""
+	}
+	tmpl := fmt.Sprintf(`{{range .Mounts}}{{if eq .Destination %q}}{{.Source}}{{end}}{{end}}`, e.deployDir)
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", tmpl, e.backendContainer).Output()
+	if err != nil {
+		return ""
+	}
+	src := strings.TrimSpace(string(out))
+	if !hostPathPattern.MatchString(src) {
+		return ""
+	}
+	return src
 }
 
 var composeProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -178,6 +203,11 @@ func (e *systemUpgradeExecutor) capability(ctx context.Context) systemUpgradeCap
 	}
 	if info, err := os.Stat(e.composePath()); err != nil {
 		reasons = append(reasons, "部署docker-compose.yml不可用: "+err.Error())
+		hint := "后端容器挂载的部署目录里没有 docker-compose.yml（通常是旧版面板内升级把挂载弄丢了）。请在服务器上进入存放 docker-compose.yml 和 .env 的目录（常见为 /root 或安装脚本所在目录），执行 docker compose up -d --force-recreate backend frontend，或在该目录重新运行安装脚本选择“更新面板”"
+		if src := e.detectHostDeployDir(ctx); src != "" {
+			hint += "。当前挂载的宿主机目录：" + src
+		}
+		reasons = append(reasons, hint)
 	} else if info.IsDir() {
 		reasons = append(reasons, "部署docker-compose.yml不是文件")
 	}
@@ -255,7 +285,13 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 		"run", "-d", "--rm", "--name", helperName,
 		"--volumes-from", e.backendContainer,
 		"-v", dockerSocketPath + ":" + dockerSocketPath,
-		"-e", panelDeployDirEnv + "=" + e.deployDir,
+	}
+	if hostPathPattern.MatchString(e.hostDeployDir) && e.hostDeployDir != e.deployDir {
+		args = append(args,
+			"-v", e.hostDeployDir+":"+e.hostDeployDir,
+			"-e", panelDeployDirEnv+"="+e.hostDeployDir)
+	} else {
+		args = append(args, "-e", panelDeployDirEnv+"="+e.deployDir)
 	}
 	if composeProjectPattern.MatchString(e.composeProject) {
 		args = append(args, "-e", "COMPOSE_PROJECT_NAME="+e.composeProject)
@@ -669,6 +705,7 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exec.composeProject = exec.detectComposeProject(r.Context())
+	exec.hostDeployDir = exec.detectHostDeployDir(r.Context())
 	helperName := fmt.Sprintf("flvx-upgrade-helper-%d", time.Now().Unix())
 	helperContainer, err := exec.startHelper(r.Context(), imageID, helperName)
 	if err != nil {

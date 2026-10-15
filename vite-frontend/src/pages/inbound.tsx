@@ -123,6 +123,15 @@ const CONFIRM_TEXT: Record<
 
 function detailRows(item: InboundApiItem): Array<[string, string]> {
   const host = item.shareHost || item.nodeServerIp;
+
+  if (item.importedParams) {
+    return [
+      ["地址", host],
+      ["端口", String(item.port)],
+      ["协议", describeInbound(item)],
+      ...item.importedParams,
+    ];
+  }
   const rows: Array<[string, string]> = [
     ["地址", host],
     ["端口", String(item.port)],
@@ -417,8 +426,22 @@ export default function InboundPage() {
           <div className="flex items-center gap-1.5">
             <span className="truncate font-medium">{item.name}</span>
             {item.relayCount > 0 && (
-              <Chip color="secondary" size="sm" variant="flat">
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color="secondary"
+                size="sm"
+                variant="flat"
+              >
                 {item.relayCount} 中转
+              </Chip>
+            )}
+            {item.relayOnly && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                size="sm"
+                variant="flat"
+              >
+                仅中转
               </Chip>
             )}
             {kernelBad && (
