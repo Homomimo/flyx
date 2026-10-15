@@ -48,7 +48,7 @@ export function GroupToggle({
     <div className="inline-grid grid-cols-2 gap-1 rounded-xl bg-default-100 p-1 text-xs">
       {(
         [
-          ["node", "按服务器"],
+          ["node", "按节点"],
           ["kernel", "按内核"],
         ] as const
       ).map(([key, label]) => (
