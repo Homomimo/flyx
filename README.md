@@ -30,8 +30,6 @@ curl -L https://github.com/kure29/flvx/releases/latest/download/panel_install.sh
 curl -L https://github.com/kure29/flvx/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && ./install.sh
 ```
 
-> 请使用 Release 里的脚本。仓库 `main` 分支中的 `panel_install.sh` / `install.sh` 仍指向上游仓库，只有发版时才会改写为本仓库，直接运行会装成上游版本。
-
 #### 安装特定版本
 从 [Releases](https://github.com/kure29/flvx/releases) 页面复制对应版本的安装命令，脚本会自动安装该版本而非最新版。
 
