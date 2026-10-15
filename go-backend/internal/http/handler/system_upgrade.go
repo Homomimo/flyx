@@ -88,10 +88,6 @@ type systemUpgradeVersionData struct {
 	Channel        string                      `json:"channel"`
 	Reason         string                      `json:"reason,omitempty"`
 	Capability     systemUpgradeCapabilityData `json:"capability"`
-	// LastLog is the tail of the last upgrade run's upgrade.log, so a failed
-	// pull or restart is visible in the panel.
-	LastLog     string `json:"lastLog,omitempty"`
-	LastLogTime int64  `json:"lastLogTime,omitempty"`
 }
 
 type systemUpgradeCheckData struct {
@@ -560,37 +556,7 @@ func (h *Handler) systemVersion(w http.ResponseWriter, r *http.Request) {
 	capability := exec.capability(r.Context())
 	latest, err := h.resolveSystemUpgradeLatestReleaseByChannel(channel)
 	data := systemUpgradeVersionResponse(current, channel, latest, err, capability)
-	data.LastLog, data.LastLogTime = exec.lastUpgradeLog(40)
 	response.WriteJSON(w, response.OK(data))
-}
-
-// lastUpgradeLog returns the final lines of upgrade.log in the deploy
-// directory and its modification time (ms), or "" when there is none.
-func (e *systemUpgradeExecutor) lastUpgradeLog(lines int) (string, int64) {
-	path := filepath.Join(e.deployDir, "upgrade.log")
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", 0
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return "", 0
-	}
-	defer f.Close()
-	const maxRead = 64 * 1024
-	if info.Size() > maxRead {
-		_, _ = f.Seek(info.Size()-maxRead, io.SeekStart)
-	}
-	data, _ := io.ReadAll(io.LimitReader(f, maxRead))
-	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	if len(all) > lines {
-		all = all[len(all)-lines:]
-	}
-	text := strings.TrimSpace(strings.Join(all, "\n"))
-	if text == "" {
-		return "", 0
-	}
-	return text, info.ModTime().UnixMilli()
 }
 
 func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {

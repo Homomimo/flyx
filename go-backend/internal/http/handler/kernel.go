@@ -64,6 +64,7 @@ type inboundView struct {
 	KernelID       int64              `json:"kernelId"`
 	KernelType     string             `json:"kernelType"`
 	KernelStatus   string             `json:"kernelStatus"`
+	External       bool               `json:"external"`
 	NodeID         int64              `json:"nodeId"`
 	NodeName       string             `json:"nodeName"`
 	NodeServerIP   string             `json:"nodeServerIp"`
@@ -515,6 +516,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			KernelID:       row.KernelID,
 			KernelType:     k.KernelType,
 			KernelStatus:   k.Status,
+			External:       isExternalInbound(&row),
 			NodeID:         row.NodeID,
 			Name:           row.Name,
 			Protocol:       row.Protocol,
@@ -586,6 +588,10 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 			return
 		}
 		row = *existing
+		if isExternalInbound(&row) {
+			response.WriteJSON(w, response.ErrDefault("导入的节点请在“编辑”里修改地址和密码"))
+			return
+		}
 		k, err = h.repo.GetNodeKernel(row.KernelID)
 		if err != nil || k == nil {
 			response.WriteJSON(w, response.ErrDefault("内核不存在"))
@@ -826,6 +832,10 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	if isExternalInbound(row) {
+		response.WriteJSON(w, response.OKEmpty())
+		return
+	}
 	if err := h.applyKernel(row.KernelID, false); err != nil {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已删除，但下发到节点失败: " + err.Error(), TS: time.Now().UnixMilli()})
 		return
@@ -857,6 +867,10 @@ func (h *Handler) inboundToggle(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	if isExternalInbound(row) {
+		response.WriteJSON(w, response.OKEmpty())
+		return
+	}
 	if err := h.applyKernel(row.KernelID, false); err != nil {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), TS: row.UpdatedTime})
 		return
@@ -884,6 +898,10 @@ func (h *Handler) inboundRegenerate(w http.ResponseWriter, r *http.Request) {
 	row, err := h.repo.GetNodeInbound(id)
 	if err != nil || row == nil {
 		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
+		return
+	}
+	if isExternalInbound(row) {
+		response.WriteJSON(w, response.ErrDefault("导入的节点由原服务器管理，不能在面板里更换密钥"))
 		return
 	}
 	k, err := h.repo.GetNodeKernel(row.KernelID)

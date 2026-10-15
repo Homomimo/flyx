@@ -653,6 +653,21 @@ export const resetInboundTraffic = (id: number) =>
   Network.post("/inbound/reset-traffic", { id });
 export const regenerateInbound = (id: number) =>
   Network.post("/inbound/regenerate", { id });
+export const importInbounds = (links: string, relayOnly: boolean) =>
+  Network.post<{ created: number[]; errors: string[] }>("/inbound/import", {
+    links,
+    relayOnly,
+  });
+export const updateExternalInbound = (data: {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  method: string;
+  password: string;
+  remark: string;
+  relayOnly: boolean;
+}) => Network.post("/inbound/external/update", data);
 export const getInboundShare = (id: number) =>
   Network.post<InboundShareEntry[]>("/inbound/share", { id });
 export const getSubInfo = (reset = false) =>

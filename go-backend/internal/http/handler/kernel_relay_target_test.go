@@ -67,6 +67,7 @@ func TestRelayTargetTunnelThroughIX(t *testing.T) {
 
 	public := &model.NodeInbound{NodeID: landing, Listen: "::", Port: 443}
 	local := &model.NodeInbound{NodeID: landing, Listen: "127.0.0.1", Port: 444}
+	imported := &model.NodeInbound{Listen: "198.51.100.9", Port: 8388}
 
 	cases := []struct {
 		name    string
@@ -80,6 +81,8 @@ func TestRelayTargetTunnelThroughIX(t *testing.T) {
 		{"loopback inbound via IX", local, viaIX, "", "只监听本机"},
 		{"loopback inbound exiting on landing", local, direct, "127.0.0.1:444", ""},
 		{"landing mixed with other exits", public, mixed, "", "只能有这一个出口"},
+		{"imported node via IX", imported, viaIX, "198.51.100.9:8388", ""},
+		{"imported node via any tunnel", imported, direct, "198.51.100.9:8388", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

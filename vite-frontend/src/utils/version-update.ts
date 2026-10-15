@@ -35,13 +35,9 @@ const normalizeChannel = (
   return value === CHANNEL_DEV ? CHANNEL_DEV : CHANNEL_STABLE;
 };
 
-export const getUpdateReleaseChannel = (): UpdateReleaseChannel => {
-  if (typeof window === "undefined") {
-    return CHANNEL_STABLE;
-  }
-
-  return normalizeChannel(localStorage.getItem(UPDATE_CHANNEL_STORAGE_KEY));
-};
+// This fork only publishes stable releases, so the channel is fixed.
+export const getUpdateReleaseChannel = (): UpdateReleaseChannel =>
+  CHANNEL_STABLE;
 
 export const setUpdateReleaseChannel = (
   channel: UpdateReleaseChannel,

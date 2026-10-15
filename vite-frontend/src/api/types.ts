@@ -544,8 +544,6 @@ export interface SystemUpgradeVersionApiData {
   channel: "stable" | "dev";
   reason?: string;
   capability: SystemUpgradeCapabilityApiData;
-  lastLog?: string;
-  lastLogTime?: number;
 }
 
 export interface SystemUpgradeCheckApiData extends SystemUpgradeVersionApiData {
@@ -735,6 +733,8 @@ export interface InboundApiItem {
   kernelId: number;
   kernelType: string;
   kernelStatus: string;
+  /** Imported node: not deployed by the panel, only relayed and shared. */
+  external: boolean;
   nodeId: number;
   nodeName: string;
   nodeServerIp: string;
