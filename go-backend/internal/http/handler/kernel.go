@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -1024,6 +1025,90 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		payload["extras"] = extras
 	}
 	return payload, rendered.Hash, nil
+}
+
+type kernelVersionItem struct {
+	Version     string `json:"version"`
+	Prerelease  bool   `json:"prerelease"`
+	PublishedAt string `json:"publishedAt,omitempty"`
+}
+
+var kernelVersionCache = struct {
+	sync.Mutex
+	at    map[string]time.Time
+	items map[string][]kernelVersionItem
+}{at: map[string]time.Time{}, items: map[string][]kernelVersionItem{}}
+
+// kernelReleaseVersions lists recent releases of a kernel from GitHub,
+// cached for 30 minutes. Kernels with a pinned list return that list.
+func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
+	if len(info.Versions) > 0 {
+		out := make([]kernelVersionItem, 0, len(info.Versions))
+		for _, v := range info.Versions {
+			out = append(out, kernelVersionItem{Version: v})
+		}
+		return out, nil
+	}
+	if info.ReleaseRepo == "" {
+		return nil, nil
+	}
+	kernelVersionCache.Lock()
+	defer kernelVersionCache.Unlock()
+	if at, ok := kernelVersionCache.at[info.Type]; ok && time.Since(at) < 30*time.Minute {
+		return kernelVersionCache.items[info.Type], nil
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/repos/%s/releases?per_page=30", githubAPIBase, info.ReleaseRepo))
+	if err != nil {
+		return nil, fmt.Errorf("获取版本列表失败: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("获取版本列表失败: GitHub 返回 %d", resp.StatusCode)
+	}
+	var releases []githubRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&releases); err != nil {
+		return nil, fmt.Errorf("解析版本列表失败: %v", err)
+	}
+	out := make([]kernelVersionItem, 0, len(releases))
+	for _, r := range releases {
+		if r.Draft {
+			continue
+		}
+		v := normalizeKernelVersion(r.TagName)
+		if v == "" || v == "latest" {
+			continue
+		}
+		out = append(out, kernelVersionItem{Version: v, Prerelease: r.Prerelease, PublishedAt: r.PublishedAt})
+	}
+	kernelVersionCache.at[info.Type] = time.Now()
+	kernelVersionCache.items[info.Type] = out
+	return out, nil
+}
+
+func (h *Handler) kernelVersions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		KernelType string `json:"kernelType"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	info, ok := kernel.Lookup(req.KernelType)
+	if !ok || !info.Implemented {
+		response.WriteJSON(w, response.ErrDefault("未知内核"))
+		return
+	}
+	items, err := kernelReleaseVersions(info)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	response.WriteJSON(w, response.OK(items))
 }
 
 // versionBelow reports whether a concrete "x.y[.z]" version is older than

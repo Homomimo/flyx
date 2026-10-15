@@ -8,10 +8,16 @@ import type {
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
+import { type GroupBy, GroupHeader, groupItems, useCollapsed } from "./group";
 import { eligibleNodes } from "./inbound-form-modal";
 import { KERNEL_STATUS } from "./presets";
 
-import { controlKernel, getKernelLogs, installKernel } from "@/api";
+import {
+  controlKernel,
+  getKernelLogs,
+  getKernelVersions,
+  installKernel,
+} from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
@@ -40,6 +46,7 @@ interface Props {
   installRequest: InstallRequest | null;
   onInstallRequestHandled: () => void;
   onChanged: () => void;
+  groupBy: GroupBy;
 }
 
 function shortVersion(v: string): string {
@@ -55,7 +62,15 @@ export function KernelPanel({
   installRequest,
   onInstallRequestHandled,
   onChanged,
+  groupBy,
 }: Props) {
+  const [isCollapsed, toggleCollapsed] = useCollapsed();
+  const [releases, setReleases] = useState<{
+    type: string;
+    items: { version: string; prerelease: boolean }[];
+    error: string;
+  } | null>(null);
+  const [customVersion, setCustomVersion] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [installForm, setInstallForm] = useState({
     nodeId: "",
@@ -171,9 +186,140 @@ export function KernelPanel({
   };
 
   const installNodeOptions = eligibleNodes(nodes);
+  const versionListType =
+    installOpen &&
+    !caps?.kernels.find((k) => k.type === installForm.kernelType)?.versions
+      ?.length
+      ? installForm.kernelType
+      : "";
+
+  useEffect(() => {
+    if (!versionListType || releases?.type === versionListType) return;
+    setCustomVersion(false);
+    getKernelVersions(versionListType)
+      .then((res) =>
+        setReleases({
+          type: versionListType,
+          items: res.code === 0 ? res.data || [] : [],
+          error: res.code === 0 ? "" : res.msg || "获取版本列表失败",
+        }),
+      )
+      .catch(() =>
+        setReleases({
+          type: versionListType,
+          items: [],
+          error: "获取版本列表失败",
+        }),
+      );
+  }, [versionListType]);
+
+  const releaseItems =
+    releases?.type === installForm.kernelType ? releases.items : [];
   const pinnedVersions =
     caps?.kernels.find((k) => k.type === installForm.kernelType)?.versions ??
     [];
+
+  const renderKernel = (k: KernelApiItem) => {
+    const st = KERNEL_STATUS[k.status] ?? {
+      label: k.status,
+      color: "default" as const,
+    };
+
+    return (
+      <Card key={k.id} className="shadow-sm">
+        <CardBody className="space-y-2">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="font-semibold truncate">
+                {k.nodeName || `节点 ${k.nodeId}`}
+              </div>
+              <div className="text-xs text-default-500">
+                {kernelName(k.kernelType)}{" "}
+                {k.installedVersion
+                  ? shortVersion(k.installedVersion)
+                  : k.version}
+                {" · "}
+                {k.inboundCount} 个入站
+              </div>
+            </div>
+            <div className="flex gap-1 shrink-0">
+              {!k.nodeOnline && (
+                <Chip color="default" size="sm" variant="flat">
+                  节点离线
+                </Chip>
+              )}
+              <Chip color={st.color} size="sm" variant="flat">
+                {st.label}
+              </Chip>
+            </div>
+          </div>
+          {k.lastError && (
+            <p className="text-xs text-danger break-all line-clamp-3">
+              {k.lastError}
+            </p>
+          )}
+          {!k.synced && !k.lastError && (
+            <p className="text-xs text-warning">
+              配置尚未同步到节点，节点上线后会自动下发
+            </p>
+          )}
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {k.enabled ? (
+              <Button
+                isLoading={busy === `${k.id}-stop`}
+                size="sm"
+                variant="flat"
+                onPress={() => doControl(k, "stop")}
+              >
+                停止
+              </Button>
+            ) : (
+              <Button
+                color="success"
+                isLoading={busy === `${k.id}-start`}
+                size="sm"
+                variant="flat"
+                onPress={() => doControl(k, "start")}
+              >
+                启动
+              </Button>
+            )}
+            <Button
+              isDisabled={!k.enabled}
+              isLoading={busy === `${k.id}-restart`}
+              size="sm"
+              variant="flat"
+              onPress={() => doControl(k, "restart")}
+            >
+              重启
+            </Button>
+            <Button size="sm" variant="flat" onPress={() => openLogs(k)}>
+              日志
+            </Button>
+            <Button
+              color="danger"
+              size="sm"
+              variant="flat"
+              onPress={() => {
+                setRemoveFailed(false);
+                setRemoveTarget(k);
+              }}
+            >
+              卸载
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
+    );
+  };
+  const groups = groupItems(
+    kernels,
+    (k) => (groupBy === "node" ? String(k.nodeId) : k.kernelType),
+    (_key, k) =>
+      groupBy === "node"
+        ? k.nodeName || `节点 ${k.nodeId}`
+        : kernelName(k.kernelType),
+  );
 
   return (
     <div className="mb-6">
@@ -190,103 +336,41 @@ export function KernelPanel({
             还没有在任何节点上安装内核。先安装 Xray，再创建入站。
           </CardBody>
         </Card>
-      ) : (
+      ) : groups.length <= 1 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {kernels.map((k) => {
-            const st = KERNEL_STATUS[k.status] ?? {
-              label: k.status,
-              color: "default" as const,
-            };
+          {kernels.map(renderKernel)}
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {groups.map((g) => {
+            const id = `kernel:${groupBy}:${g.key}`;
+            const folded = isCollapsed(id);
+            const bad = g.items.filter(
+              (k) => k.status === "error" || !k.nodeOnline,
+            ).length;
 
             return (
-              <Card key={k.id} className="shadow-sm">
-                <CardBody className="space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-semibold truncate">
-                        {k.nodeName || `节点 ${k.nodeId}`}
-                      </div>
-                      <div className="text-xs text-default-500">
-                        {kernelName(k.kernelType)}{" "}
-                        {k.installedVersion
-                          ? shortVersion(k.installedVersion)
-                          : k.version}
-                        {" · "}
-                        {k.inboundCount} 个入站
-                      </div>
-                    </div>
-                    <div className="flex gap-1 shrink-0">
-                      {!k.nodeOnline && (
-                        <Chip color="default" size="sm" variant="flat">
-                          节点离线
-                        </Chip>
-                      )}
-                      <Chip color={st.color} size="sm" variant="flat">
-                        {st.label}
+              <div key={g.key}>
+                <GroupHeader
+                  collapsed={folded}
+                  count={g.items.length}
+                  extra={
+                    bad > 0 ? (
+                      <Chip color="danger" size="sm" variant="flat">
+                        {bad} 个异常
                       </Chip>
-                    </div>
+                    ) : undefined
+                  }
+                  title={g.title}
+                  unit="个内核"
+                  onToggle={() => toggleCollapsed(id)}
+                />
+                {!folded && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-2">
+                    {g.items.map(renderKernel)}
                   </div>
-                  {k.lastError && (
-                    <p className="text-xs text-danger break-all line-clamp-3">
-                      {k.lastError}
-                    </p>
-                  )}
-                  {!k.synced && !k.lastError && (
-                    <p className="text-xs text-warning">
-                      配置尚未同步到节点，节点上线后会自动下发
-                    </p>
-                  )}
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {k.enabled ? (
-                      <Button
-                        isLoading={busy === `${k.id}-stop`}
-                        size="sm"
-                        variant="flat"
-                        onPress={() => doControl(k, "stop")}
-                      >
-                        停止
-                      </Button>
-                    ) : (
-                      <Button
-                        color="success"
-                        isLoading={busy === `${k.id}-start`}
-                        size="sm"
-                        variant="flat"
-                        onPress={() => doControl(k, "start")}
-                      >
-                        启动
-                      </Button>
-                    )}
-                    <Button
-                      isDisabled={!k.enabled}
-                      isLoading={busy === `${k.id}-restart`}
-                      size="sm"
-                      variant="flat"
-                      onPress={() => doControl(k, "restart")}
-                    >
-                      重启
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      onPress={() => openLogs(k)}
-                    >
-                      日志
-                    </Button>
-                    <Button
-                      color="danger"
-                      size="sm"
-                      variant="flat"
-                      onPress={() => {
-                        setRemoveFailed(false);
-                        setRemoveTarget(k);
-                      }}
-                    >
-                      卸载
-                    </Button>
-                  </div>
-                </CardBody>
-              </Card>
+                )}
+              </div>
             );
           })}
         </div>
@@ -386,18 +470,76 @@ export function KernelPanel({
                       ))}
                     </Select>
                   ) : (
-                    <Input
-                      description="latest 表示最新版，也可填写具体版本号"
-                      label="版本"
-                      value={installForm.version}
-                      variant="bordered"
-                      onChange={(e) =>
-                        setInstallForm((p) => ({
-                          ...p,
-                          version: e.target.value,
-                        }))
-                      }
-                    />
+                    <>
+                      {releaseItems.length > 0 && (
+                        <Select
+                          description="最新版出问题时可以选旧版本；预发布版不建议使用"
+                          label="版本"
+                          selectedKeys={[
+                            customVersion
+                              ? "custom"
+                              : installForm.version === "latest" ||
+                                  !installForm.version
+                                ? "latest"
+                                : installForm.version,
+                          ]}
+                          onSelectionChange={(keys) => {
+                            const v = String(Array.from(keys)[0] ?? "latest");
+
+                            setCustomVersion(v === "custom");
+                            if (v !== "custom") {
+                              setInstallForm((p) => ({ ...p, version: v }));
+                            }
+                          }}
+                        >
+                          {[
+                            <SelectItem
+                              key="latest"
+                              textValue="最新版（latest）"
+                            >
+                              最新版（latest）
+                            </SelectItem>,
+                            ...releaseItems.map((r) => (
+                              <SelectItem
+                                key={r.version}
+                                textValue={
+                                  r.prerelease
+                                    ? `${r.version}（预发布）`
+                                    : r.version
+                                }
+                              >
+                                {r.prerelease
+                                  ? `${r.version}（预发布）`
+                                  : r.version}
+                              </SelectItem>
+                            )),
+                            <SelectItem key="custom" textValue="手动输入…">
+                              手动输入…
+                            </SelectItem>,
+                          ]}
+                        </Select>
+                      )}
+                      {(releaseItems.length === 0 || customVersion) && (
+                        <Input
+                          description={
+                            releases?.error && releaseItems.length === 0
+                              ? `${releases.error}，可手动填写版本号，latest 表示最新版`
+                              : "latest 表示最新版，也可填写具体版本号"
+                          }
+                          label={
+                            releaseItems.length > 0 ? "自定义版本" : "版本"
+                          }
+                          value={installForm.version}
+                          variant="bordered"
+                          onChange={(e) =>
+                            setInstallForm((p) => ({
+                              ...p,
+                              version: e.target.value,
+                            }))
+                          }
+                        />
+                      )}
+                    </>
                   )}
                 </div>
               </ModalBody>

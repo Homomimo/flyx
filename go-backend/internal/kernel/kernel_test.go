@@ -519,3 +519,20 @@ func TestSingboxACMEAndNaive(t *testing.T) {
 		t.Fatalf("ACME certificates are trusted: %s", uri)
 	}
 }
+
+func TestRealityMinClientVer(t *testing.T) {
+	in := Inbound{ID: 1, Protocol: ProtocolVLESS, Port: 443, Security: Security{Type: SecurityReality}}
+	if err := Normalize(TypeXray, &in); err != nil || in.Security.RealityMinClientVer != "1.0.0" {
+		t.Fatalf("default: %v %q", err, in.Security.RealityMinClientVer)
+	}
+	// Stored before the field existed: still rendered with the default.
+	in.Security.RealityMinClientVer = ""
+	out, err := Render(TypeXray, []Inbound{in})
+	if err != nil || !strings.Contains(out.Files[0].Content, `"minClientVer": "1.0.0"`) {
+		t.Fatalf("legacy inbound must get minClientVer: %v", err)
+	}
+	bad := Inbound{ID: 2, Protocol: ProtocolVLESS, Port: 443, Security: Security{Type: SecurityReality, RealityMinClientVer: "v26"}}
+	if err := Normalize(TypeXray, &bad); err == nil {
+		t.Fatal("malformed version must be rejected")
+	}
+}

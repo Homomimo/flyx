@@ -622,6 +622,11 @@ export const getKernelCapabilities = () =>
   Network.post<KernelCapabilitiesApiData>("/kernel/capabilities");
 export const getKernelList = (nodeId?: number) =>
   Network.post<KernelApiItem[]>("/kernel/list", nodeId ? { nodeId } : {});
+export const getKernelVersions = (kernelType: string) =>
+  Network.post<
+    { version: string; prerelease: boolean; publishedAt?: string }[]
+  >("/kernel/versions", { kernelType });
+
 export const installKernel = (data: {
   nodeId: number;
   kernelType: string;

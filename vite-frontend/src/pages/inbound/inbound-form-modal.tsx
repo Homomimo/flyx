@@ -653,6 +653,18 @@ export function InboundFormModal({
                         onChange={(e) => set("realityShortIds", e.target.value)}
                       />
                     </div>
+                    {form.kernelType === "xray" && (
+                      <Input
+                        description="低于此版本的客户端会被拒绝。Xray 新版默认 26.3.27，会导致 Clash / Mihomo 等客户端连不上，保持 1.0.0 即可兼容所有客户端"
+                        label="最低客户端版本"
+                        placeholder="1.0.0"
+                        value={form.realityMinClientVer}
+                        variant="bordered"
+                        onChange={(e) =>
+                          set("realityMinClientVer", e.target.value)
+                        }
+                      />
+                    )}
                   </div>
                 )}
 

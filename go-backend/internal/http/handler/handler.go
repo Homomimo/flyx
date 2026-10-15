@@ -204,6 +204,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/kernel/capabilities", h.kernelCapabilities)
 	mux.HandleFunc("/api/v1/kernel/list", h.kernelList)
 	mux.HandleFunc("/api/v1/kernel/install", h.kernelInstall)
+	mux.HandleFunc("/api/v1/kernel/versions", h.kernelVersions)
 	mux.HandleFunc("/api/v1/kernel/control", h.kernelControl)
 	mux.HandleFunc("/api/v1/kernel/logs", h.kernelLogs)
 	mux.HandleFunc("/api/v1/inbound/list", h.inboundList)

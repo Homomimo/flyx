@@ -92,6 +92,7 @@ export interface InboundForm {
   realityDest: string;
   realityPrivateKey: string;
   realityShortIds: string;
+  realityMinClientVer: string;
   shadowTlsPassword: string;
   acmeEmail: string;
   acmeDns: string;
@@ -284,6 +285,7 @@ export function emptyForm(
     realityDest: "",
     realityPrivateKey: "",
     realityShortIds: "",
+    realityMinClientVer: "",
     shadowTlsPassword: "",
     acmeEmail: "",
     acmeDns: "",
@@ -377,6 +379,7 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     realityDest: item.security.realityDest ?? "",
     realityPrivateKey: item.security.realityPrivateKey ?? "",
     realityShortIds: (item.security.realityShortIds ?? []).join(","),
+    realityMinClientVer: item.security.realityMinClientVer ?? "",
     shadowTlsPassword: item.security.shadowTlsPassword ?? "",
     acmeEmail: item.security.acmeEmail ?? "",
     acmeDns: item.security.acmeDns ?? "",
@@ -477,6 +480,10 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
       realityShortIds: form.realityShortIds.trim()
         ? splitList(form.realityShortIds)
         : undefined,
+      realityMinClientVer:
+        form.securityType === "reality"
+          ? form.realityMinClientVer.trim() || undefined
+          : undefined,
       shadowTlsPassword:
         form.securityType === "shadowtls"
           ? form.shadowTlsPassword.trim() || undefined

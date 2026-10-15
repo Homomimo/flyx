@@ -1,7 +1,6 @@
 import type { BatchOperationFailure } from "@/api/types";
 
-import toast from "react-hot-toast";
-
+import { copyWithToast } from "@/utils/clipboard";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import {
@@ -69,24 +68,10 @@ export function BatchActionResultModal({
   title,
 }: BatchActionResultModalProps) {
   const handleCopy = async () => {
-    if (
-      typeof navigator === "undefined" ||
-      !navigator.clipboard ||
-      typeof navigator.clipboard.writeText !== "function"
-    ) {
-      toast.error("当前环境不支持复制");
-
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(
-        buildFailureCopyText(title, summary, failures),
-      );
-      toast.success(`已复制 ${failures.length} 项失败原因`);
-    } catch {
-      toast.error("复制失败，请稍后重试");
-    }
+    await copyWithToast(
+      buildFailureCopyText(title, summary, failures),
+      `已复制 ${failures.length} 项失败原因`,
+    );
   };
 
   return (

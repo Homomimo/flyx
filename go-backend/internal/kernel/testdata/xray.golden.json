@@ -25,6 +25,7 @@
         "network": "tcp",
         "realitySettings": {
           "dest": "www.example.com:443",
+          "minClientVer": "1.0.0",
           "privateKey": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
           "serverNames": [
             "www.example.com"

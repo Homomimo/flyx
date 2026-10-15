@@ -1,11 +1,4 @@
-export const tryCopyInstallCommand = async (
-  command: string,
-): Promise<boolean> => {
-  try {
-    await navigator.clipboard.writeText(command);
+import { writeClipboard } from "@/utils/clipboard";
 
-    return true;
-  } catch {
-    return false;
-  }
-};
+export const tryCopyInstallCommand = (command: string): Promise<boolean> =>
+  writeClipboard(command);

@@ -26,6 +26,7 @@ import {
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+import { copyWithToast } from "@/utils/clipboard";
 import { AnimatedPage } from "@/components/animated-page";
 import { formatTraffic } from "@/utils/traffic";
 import { BatchActionResultModal } from "@/components/batch-action-result-modal";
@@ -2733,31 +2734,7 @@ export default function ForwardPage() {
 
   // 复制到剪贴板
   const copyToClipboard = async (text: string, label: string = "内容") => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        toast.success(`已复制${label}`);
-      } else {
-        const textArea = document.createElement("textarea");
-
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-9999px";
-        textArea.style.top = "0";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          document.execCommand("copy");
-          toast.success(`已复制${label}`);
-        } catch {
-          toast.error("复制失败");
-        }
-        document.body.removeChild(textArea);
-      }
-    } catch {
-      toast.error("复制失败");
-    }
+    await copyWithToast(text, `已复制${label}`);
   };
 
   // 复制地址

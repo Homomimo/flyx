@@ -1,6 +1,5 @@
 import type {
   SystemUpgradeCheckApiData,
-  SystemUpgradeRunApiData,
   SystemUpgradeReleaseApiItem,
   SystemUpgradeVersionApiData,
 } from "@/api/types";
@@ -332,6 +331,10 @@ export default function ConfigPage() {
   const [systemUpgradeChecking, setSystemUpgradeChecking] = useState(false);
   const [systemUpgradeExecuting, setSystemUpgradeExecuting] = useState(false);
   const [systemUpgradeLoading, setSystemUpgradeLoading] = useState(true);
+  const [systemUpgradeLog, setSystemUpgradeLog] = useState<{
+    text: string;
+    time: number;
+  } | null>(null);
   const [systemUpgradeModalOpen, setSystemUpgradeModalOpen] = useState(false);
   const [systemUpgradeReleases, setSystemUpgradeReleases] = useState<
     SystemUpgradeReleaseApiItem[]
@@ -447,6 +450,14 @@ export default function ConfigPage() {
       const response = await getSystemUpgradeVersion();
 
       if (response.code === 0 && response.data) {
+        setSystemUpgradeLog(
+          response.data.lastLog
+            ? {
+                text: response.data.lastLog,
+                time: response.data.lastLogTime ?? 0,
+              }
+            : null,
+        );
         setSystemUpgradeInfo({
           ...response.data,
           channel,
@@ -585,11 +596,12 @@ export default function ConfigPage() {
       );
 
       if (response.code === 0 && response.data) {
-        const data = response.data as SystemUpgradeRunApiData;
-
         setSystemUpgradeModalOpen(false);
         setSystemUpgradeSelectedVersion("");
-        toast.success(data.message || "升级已触发，请稍后刷新页面");
+        toast.success(
+          "升级已开始，约 1 分钟后刷新页面；如果版本没有变化，可在“上次升级日志”里查看原因",
+          { duration: 8000 },
+        );
       } else {
         toast.error(response.msg || "面板升级失败");
       }
@@ -1649,6 +1661,22 @@ export default function ConfigPage() {
                       ))}
                     </ul>
                   </div>
+                )}
+
+                {systemUpgradeLog && (
+                  <details className="rounded-lg border border-divider px-4 py-3">
+                    <summary className="cursor-pointer text-xs font-medium text-default-600">
+                      上次升级日志
+                      {systemUpgradeLog.time > 0 &&
+                        `（${new Date(systemUpgradeLog.time).toLocaleString()}）`}
+                      {/错误|失败|error/i.test(systemUpgradeLog.text) && (
+                        <span className="ml-2 text-danger">有错误</span>
+                      )}
+                    </summary>
+                    <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap break-all text-xs font-mono text-default-600">
+                      {systemUpgradeLog.text}
+                    </pre>
+                  </details>
                 )}
 
                 <div className="space-y-3">

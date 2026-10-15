@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, QrCode, RefreshCw } from "lucide-react";
 
+import { copyWithToast } from "@/utils/clipboard";
 import { getInboundShare, getSubInfo } from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
@@ -22,12 +23,7 @@ const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
 
 export async function copyText(text: string, label = "已复制") {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success(label);
-  } catch {
-    toast.error("复制失败，请手动复制");
-  }
+  await copyWithToast(text, label);
 }
 
 /** The panel origin the browser talks to, so links work behind a proxy. */
@@ -82,47 +78,11 @@ export function QrImage({ text, size = 220 }: { text: string; size?: number }) {
   );
 }
 
-type ShareFormat = "surge" | "uri";
-
-const SHARE_FORMAT_KEY = "flvx_share_format";
-
-function preferredFormat(): ShareFormat {
-  try {
-    return localStorage.getItem(SHARE_FORMAT_KEY) === "uri" ? "uri" : "surge";
-  } catch {
-    return "surge";
-  }
-}
-
-function rememberFormat(f: ShareFormat) {
-  try {
-    localStorage.setItem(SHARE_FORMAT_KEY, f);
-  } catch {
-    // Remembering the choice is only a convenience.
-  }
-}
-
-/** Surge first when the protocol has a Surge line, unless the user picked links. */
-function formatFor(e: InboundShareEntry, preferred: ShareFormat): ShareFormat {
-  if (!e.surge) return "uri";
-  if (!e.uri) return "surge";
-
-  return preferred;
-}
-
-function ShareEntryCard({
-  entry,
-  preferred,
-  onPreferred,
-}: {
-  entry: InboundShareEntry;
-  preferred: ShareFormat;
-  onPreferred: (f: ShareFormat) => void;
-}) {
-  const format = formatFor(entry, preferred);
+function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
   const [showQr, setShowQr] = useState(false);
-  const text = format === "surge" ? entry.surge : entry.uri;
-  const both = Boolean(entry.surge && entry.uri);
+  // Snell has no common link format; its Surge line is all there is.
+  const surgeOnly = !entry.uri;
+  const text = entry.uri || entry.surge;
 
   return (
     <div className="rounded-2xl border border-divider p-4 space-y-3">
@@ -142,33 +102,6 @@ function ShareEntryCard({
         </p>
       </div>
 
-      {both && (
-        <div className="grid grid-cols-2 gap-1 rounded-xl bg-default-100 p-1">
-          {(
-            [
-              ["surge", "Surge"],
-              ["uri", "链接"],
-            ] as const
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              className={`rounded-lg py-1.5 text-sm transition-colors ${
-                format === key
-                  ? "bg-background shadow-sm font-medium"
-                  : "text-default-500"
-              }`}
-              type="button"
-              onClick={() => {
-                setShowQr(false);
-                onPreferred(key);
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-
       <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded-xl bg-default-100 p-3 max-h-32 overflow-y-auto select-all">
         {text}
       </pre>
@@ -179,15 +112,12 @@ function ShareEntryCard({
           color="primary"
           startContent={<Copy className="w-4 h-4" />}
           onPress={() =>
-            copyText(
-              text,
-              format === "surge" ? "Surge 配置行已复制" : "链接已复制",
-            )
+            copyText(text, surgeOnly ? "Surge 配置行已复制" : "链接已复制")
           }
         >
-          {format === "surge" ? "复制 Surge 配置" : "复制链接"}
+          {surgeOnly ? "复制 Surge 配置" : "复制链接"}
         </Button>
-        {format === "uri" && (
+        {!surgeOnly && (
           <Button
             isIconOnly
             aria-label="二维码"
@@ -199,13 +129,13 @@ function ShareEntryCard({
         )}
       </div>
 
-      {format === "surge" && !entry.uri && (
+      {surgeOnly && (
         <p className="text-xs text-default-500">
-          该协议没有通用分享链接，粘贴到 Surge 配置的 [Proxy] 段，或使用 Surge
+          Snell 没有通用分享链接，粘贴到 Surge 配置的 [Proxy] 段，或使用 Surge
           订阅。
         </p>
       )}
-      {format === "uri" && showQr && (
+      {showQr && (
         <div className="flex justify-center">
           <QrImage text={entry.uri} />
         </div>
@@ -223,7 +153,6 @@ export function ShareModal({
 }) {
   const [entries, setEntries] = useState<InboundShareEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [preferred, setPreferred] = useState<ShareFormat>(preferredFormat);
 
   useEffect(() => {
     if (!item) return;
@@ -239,11 +168,6 @@ export function ShareModal({
       })
       .finally(() => setLoading(false));
   }, [item]);
-
-  const choose = (f: ShareFormat) => {
-    setPreferred(f);
-    rememberFormat(f);
-  };
 
   return (
     <Modal
@@ -261,7 +185,8 @@ export function ShareModal({
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-lg font-bold">分享 · {item?.name}</h2>
               <p className="text-small text-default-500">
-                Surge 复制配置行；其他客户端复制链接或扫码导入
+                复制链接或扫码导入 v2rayN、Shadowrocket、NekoBox 等客户端；Surge
+                请使用订阅
               </p>
             </ModalHeader>
             <ModalBody>
@@ -276,8 +201,6 @@ export function ShareModal({
                   <ShareEntryCard
                     key={`${e.kind}-${e.host}-${e.port}`}
                     entry={e}
-                    preferred={preferred}
-                    onPreferred={choose}
                   />
                 ))}
               </div>
@@ -309,7 +232,26 @@ const SUB_FORMATS: { key: string; label: string; hint: string }[] = [
 export function SubscriptionCard() {
   const [path, setPath] = useState("");
   const [showQr, setShowQr] = useState(false);
+  const [expanded, setExpanded] = useState(() => {
+    try {
+      return localStorage.getItem("flvx_sub_expanded") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [resetOpen, setResetOpen] = useState(false);
+
+  const toggleExpanded = () => {
+    setExpanded((v) => {
+      try {
+        localStorage.setItem("flvx_sub_expanded", v ? "0" : "1");
+      } catch {
+        // Only a convenience.
+      }
+
+      return !v;
+    });
+  };
   const [resetting, setResetting] = useState(false);
 
   const load = (reset = false) =>
@@ -374,23 +316,40 @@ export function SubscriptionCard() {
             </Button>
           </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
-          {SUB_FORMATS.map((f) => (
-            <button
-              key={f.key || "auto"}
-              className="text-left rounded-xl border border-divider px-3 py-2 hover:bg-default-100 transition-colors disabled:opacity-50"
-              disabled={!path}
-              type="button"
-              onClick={() => copyText(url(f.key), `${f.label} 订阅已复制`)}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{f.label}</span>
-                <Copy className="w-3.5 h-3.5 text-default-400" />
-              </div>
-              <div className="text-xs text-default-500">{f.hint}</div>
-            </button>
-          ))}
+        <div className="flex gap-2">
+          <Button
+            className="flex-1"
+            color="primary"
+            isDisabled={!path}
+            startContent={<Copy className="w-4 h-4" />}
+            variant="flat"
+            onPress={() => copyText(url(""), "订阅链接已复制")}
+          >
+            复制订阅链接（自动识别客户端）
+          </Button>
+          <Button variant="light" onPress={toggleExpanded}>
+            {expanded ? "收起" : "更多格式"}
+          </Button>
         </div>
+        {expanded && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+            {SUB_FORMATS.filter((f) => f.key).map((f) => (
+              <button
+                key={f.key || "auto"}
+                className="text-left rounded-xl border border-divider px-3 py-2 hover:bg-default-100 transition-colors disabled:opacity-50"
+                disabled={!path}
+                type="button"
+                onClick={() => copyText(url(f.key), `${f.label} 订阅已复制`)}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">{f.label}</span>
+                  <Copy className="w-3.5 h-3.5 text-default-400" />
+                </div>
+                <div className="text-xs text-default-500">{f.hint}</div>
+              </button>
+            ))}
+          </div>
+        )}
         {showQr && path && (
           <div className="flex flex-col items-center gap-2 pt-1">
             <QrImage text={url("")} />

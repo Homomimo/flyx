@@ -122,6 +122,12 @@ func xrayStream(in Inbound) obj {
 			"privateKey":  sec.RealityPrivateKey,
 			"shortIds":    sec.RealityShortIDs,
 		}
+		// Inbounds saved before the field existed get the default too.
+		minVer := sec.RealityMinClientVer
+		if minVer == "" {
+			minVer = DefaultRealityMinClientVer
+		}
+		stream["realitySettings"].(obj)["minClientVer"] = minVer
 	}
 	return stream
 }

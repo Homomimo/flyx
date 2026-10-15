@@ -92,6 +92,10 @@ type Security struct {
 	RealityPrivateKey string   `json:"realityPrivateKey,omitempty"`
 	RealityPublicKey  string   `json:"realityPublicKey,omitempty"`
 	RealityShortIDs   []string `json:"realityShortIds,omitempty"`
+	// RealityMinClientVer is the oldest client Xray accepts. Xray 26.7.11+
+	// defaults to 26.3.27 when unset, which locks out Mihomo/Clash (they
+	// report 1.8.2) and older mobile clients, so the panel always sets it.
+	RealityMinClientVer string `json:"realityMinClientVer,omitempty"`
 
 	// ShadowTLS v3: SNI is the handshake site, this is the shared secret.
 	ShadowTLSPassword string `json:"shadowTlsPassword,omitempty"`
@@ -141,21 +145,22 @@ func (in Inbound) Network() string {
 }
 
 const (
-	FlowVision          = "xtls-rprx-vision"
-	DefaultRealitySNI   = "www.microsoft.com"
-	DefaultSSMethod     = "2022-blake3-aes-128-gcm"
-	DefaultFingerprint  = "chrome"
-	DefaultTLSCertMode  = CertModeSelf
-	CertModeSelf        = "self"
-	CertModeFile        = "file"
-	CertModeACME        = "acme"
-	ACMEDNSCloudflare   = "cloudflare"
-	ACMEDNSAliDNS       = "alidns"
-	DefaultQUICSNI      = "www.bing.com"
-	DefaultSnellVersion = 5
-	defaultGRPCService  = "grpc"
-	defaultXHTTPMode    = "auto"
-	maxExtraConfigBytes = 64 * 1024
+	FlowVision                 = "xtls-rprx-vision"
+	DefaultRealitySNI          = "www.microsoft.com"
+	DefaultSSMethod            = "2022-blake3-aes-128-gcm"
+	DefaultFingerprint         = "chrome"
+	DefaultTLSCertMode         = CertModeSelf
+	CertModeSelf               = "self"
+	CertModeFile               = "file"
+	CertModeACME               = "acme"
+	ACMEDNSCloudflare          = "cloudflare"
+	ACMEDNSAliDNS              = "alidns"
+	DefaultQUICSNI             = "www.bing.com"
+	DefaultRealityMinClientVer = "1.0.0"
+	DefaultSnellVersion        = 5
+	defaultGRPCService         = "grpc"
+	defaultXHTTPMode           = "auto"
+	maxExtraConfigBytes        = 64 * 1024
 )
 
 var ssMethods = []string{
@@ -432,6 +437,8 @@ func normalizeSettings(in *Inbound) error {
 
 var naiveUserPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
+var semverPattern = regexp.MustCompile(`^\d{1,4}\.\d{1,4}\.\d{1,4}$`)
+
 var snellPSKPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -465,6 +472,7 @@ func normalizeSecurity(in *Inbound) error {
 		return nil
 	case SecurityTLS:
 		sec.RealityDest, sec.RealityPrivateKey, sec.RealityPublicKey, sec.RealityShortIDs = "", "", "", nil
+		sec.RealityMinClientVer = ""
 		sec.ShadowTLSPassword = ""
 		quic := in.Protocol == ProtocolHysteria2 || in.Protocol == ProtocolTUIC
 		if quic {
@@ -554,6 +562,13 @@ func normalizeSecurity(in *Inbound) error {
 			ids = []string{RealityShortID()}
 		}
 		sec.RealityShortIDs = ids
+		sec.RealityMinClientVer = strings.TrimSpace(sec.RealityMinClientVer)
+		if sec.RealityMinClientVer == "" {
+			sec.RealityMinClientVer = DefaultRealityMinClientVer
+		}
+		if !semverPattern.MatchString(sec.RealityMinClientVer) {
+			return errors.New("最低客户端版本格式应为 x.y.z，例如 1.0.0")
+		}
 		return nil
 	}
 	return fmt.Errorf("未知安全层 %s", sec.Type)
