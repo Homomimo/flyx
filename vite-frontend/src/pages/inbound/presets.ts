@@ -520,6 +520,7 @@ export function protocolCap(
 }
 
 export function describeInbound(item: InboundApiItem): string {
+  if (item.importedSummary) return item.importedSummary;
   const parts = [PROTOCOL_LABELS[item.protocol] ?? item.protocol];
 
   const implicitTransport = [

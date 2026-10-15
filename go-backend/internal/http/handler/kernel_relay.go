@@ -439,13 +439,14 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 			node, _ = h.repo.GetNodeByID(row.NodeID)
 			nodes[row.NodeID] = node
 		}
+		proxy := importedProxy(&row)
 		if row.RelayOnly != 1 && !isLoopbackListen(row.Listen) {
 			host := strings.TrimSpace(row.ShareHost)
 			if host == "" && node != nil {
 				host = strings.TrimSpace(node.ServerIP)
 			}
 			if host != "" {
-				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true})
+				endpoints = append(endpoints, kernel.Endpoint{Name: row.Name, Host: host, Port: row.Port, Inbound: in, Direct: true, Proxy: proxy})
 				kinds = append(kinds, "direct")
 			}
 		}
@@ -462,7 +463,7 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 				if rel.ShareHost != "" {
 					host = rel.ShareHost
 				}
-				endpoints = append(endpoints, kernel.Endpoint{Name: name, Host: host, Port: entry.Port, Inbound: in})
+				endpoints = append(endpoints, kernel.Endpoint{Name: name, Host: host, Port: entry.Port, Inbound: in, Proxy: proxy})
 				kinds = append(kinds, "relay")
 			}
 		}

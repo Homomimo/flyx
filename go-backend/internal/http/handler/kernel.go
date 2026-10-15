@@ -60,35 +60,39 @@ type kernelView struct {
 }
 
 type inboundView struct {
-	ID             int64              `json:"id"`
-	KernelID       int64              `json:"kernelId"`
-	KernelType     string             `json:"kernelType"`
-	KernelStatus   string             `json:"kernelStatus"`
-	External       bool               `json:"external"`
-	NodeID         int64              `json:"nodeId"`
-	NodeName       string             `json:"nodeName"`
-	NodeServerIP   string             `json:"nodeServerIp"`
-	Name           string             `json:"name"`
-	Protocol       string             `json:"protocol"`
-	Listen         string             `json:"listen"`
-	Port           int                `json:"port"`
-	Network        string             `json:"network"`
-	Settings       kernel.Settings    `json:"settings"`
-	Transport      kernel.Transport   `json:"transport"`
-	Security       kernelSecurityView `json:"security"`
-	Extra          string             `json:"extra"`
-	ShareHost      string             `json:"shareHost"`
-	Remark         string             `json:"remark"`
-	RelayOnly      bool               `json:"relayOnly"`
-	RelayCount     int                `json:"relayCount"`
-	AcceptProxy    bool               `json:"acceptProxyProtocol"`
-	Whitelist      bool               `json:"relayWhitelist"`
-	WhitelistExtra string             `json:"whitelistExtra"`
-	Enabled        bool               `json:"enabled"`
-	UploadBytes    int64              `json:"uploadBytes"`
-	DownloadBytes  int64              `json:"downloadBytes"`
-	CreatedTime    int64              `json:"createdTime"`
-	UpdatedTime    int64              `json:"updatedTime"`
+	ID           int64  `json:"id"`
+	KernelID     int64  `json:"kernelId"`
+	KernelType   string `json:"kernelType"`
+	KernelStatus string `json:"kernelStatus"`
+	External     bool   `json:"external"`
+	// ImportedSummary / ImportedParams describe imported nodes, whose
+	// parameters live in the stored proxy rather than the kernel fields.
+	ImportedSummary string             `json:"importedSummary,omitempty"`
+	ImportedParams  [][2]string        `json:"importedParams,omitempty"`
+	NodeID          int64              `json:"nodeId"`
+	NodeName        string             `json:"nodeName"`
+	NodeServerIP    string             `json:"nodeServerIp"`
+	Name            string             `json:"name"`
+	Protocol        string             `json:"protocol"`
+	Listen          string             `json:"listen"`
+	Port            int                `json:"port"`
+	Network         string             `json:"network"`
+	Settings        kernel.Settings    `json:"settings"`
+	Transport       kernel.Transport   `json:"transport"`
+	Security        kernelSecurityView `json:"security"`
+	Extra           string             `json:"extra"`
+	ShareHost       string             `json:"shareHost"`
+	Remark          string             `json:"remark"`
+	RelayOnly       bool               `json:"relayOnly"`
+	RelayCount      int                `json:"relayCount"`
+	AcceptProxy     bool               `json:"acceptProxyProtocol"`
+	Whitelist       bool               `json:"relayWhitelist"`
+	WhitelistExtra  string             `json:"whitelistExtra"`
+	Enabled         bool               `json:"enabled"`
+	UploadBytes     int64              `json:"uploadBytes"`
+	DownloadBytes   int64              `json:"downloadBytes"`
+	CreatedTime     int64              `json:"createdTime"`
+	UpdatedTime     int64              `json:"updatedTime"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -543,6 +547,11 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 		if node != nil {
 			v.NodeName = node.Name
 			v.NodeServerIP = node.ServerIP
+		}
+		if p := importedProxy(&row); p != nil {
+			v.ImportedSummary = kernel.DescribeProxy(p)
+			v.ImportedParams = kernel.ProxyParams(p)
+			v.Extra = ""
 		}
 		views = append(views, v)
 	}
