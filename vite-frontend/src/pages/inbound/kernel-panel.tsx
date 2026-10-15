@@ -7,8 +7,10 @@ import type {
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import { MoreHorizontal } from "lucide-react";
 
-import { type GroupBy, GroupHeader, groupItems, useCollapsed } from "./group";
+import { ActionSheet } from "./action-sheet";
+import { groupItems } from "./group";
 import { eligibleNodes } from "./inbound-form-modal";
 import { KERNEL_STATUS } from "./presets";
 
@@ -46,9 +48,6 @@ interface Props {
   installRequest: InstallRequest | null;
   onInstallRequestHandled: () => void;
   onChanged: () => void;
-  groupBy: GroupBy;
-  /** Show foldable group headers (off when there is nothing to group). */
-  grouped: boolean;
 }
 
 function shortVersion(v: string): string {
@@ -64,10 +63,8 @@ export function KernelPanel({
   installRequest,
   onInstallRequestHandled,
   onChanged,
-  groupBy,
-  grouped,
 }: Props) {
-  const [isCollapsed, toggleCollapsed] = useCollapsed();
+  const [sheetFor, setSheetFor] = useState<number | null>(null);
   const [releases, setReleases] = useState<{
     type: string;
     items: { version: string; prerelease: boolean }[];
@@ -102,8 +99,14 @@ export function KernelPanel({
   const kernelName = (type: string) =>
     caps?.kernels.find((k) => k.type === type)?.name ?? type;
 
-  const openInstall = () => {
-    setInstallForm({ nodeId: "", kernelType: "xray", version: "latest" });
+  const openInstall = (nodeId?: number, kernelType = "xray") => {
+    setInstallForm({
+      nodeId: nodeId ? String(nodeId) : "",
+      kernelType,
+      version:
+        caps?.kernels.find((k) => k.type === kernelType)?.versions?.[0] ??
+        "latest",
+    });
     setInstallOpen(true);
   };
 
@@ -222,6 +225,13 @@ export function KernelPanel({
     caps?.kernels.find((k) => k.type === installForm.kernelType)?.versions ??
     [];
 
+  const nodeGroups = groupItems(
+    kernels,
+    (k) => String(k.nodeId),
+    (_key, k) => k.nodeName || `节点 ${k.nodeId}`,
+  );
+  const sheetKernel = kernels.find((k) => k.id === sheetFor) ?? null;
+
   const renderKernel = (k: KernelApiItem) => {
     const st = KERNEL_STATUS[k.status] ?? {
       label: k.status,
@@ -229,155 +239,176 @@ export function KernelPanel({
     };
 
     return (
-      <Card key={k.id} className="shadow-sm">
-        <CardBody className="space-y-2">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="font-semibold truncate">
-                {k.nodeName || `节点 ${k.nodeId}`}
-              </div>
-              <div className="text-xs text-default-500">
-                {kernelName(k.kernelType)}{" "}
-                {k.installedVersion
-                  ? shortVersion(k.installedVersion)
-                  : k.version}
-                {" · "}
-                {k.inboundCount} 个入站
-              </div>
-            </div>
-            <div className="flex gap-1 shrink-0">
-              {!k.nodeOnline && (
-                <Chip color="default" size="sm" variant="flat">
-                  节点离线
-                </Chip>
-              )}
-              <Chip color={st.color} size="sm" variant="flat">
-                {st.label}
-              </Chip>
-            </div>
+      <div
+        key={k.id}
+        className="flex w-full cursor-pointer items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-default-100"
+        role="button"
+        tabIndex={0}
+        onClick={() => setSheetFor(k.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setSheetFor(k.id);
+          }
+        }}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="shrink-0 font-medium">
+              {kernelName(k.kernelType)}
+            </span>
+            <span className="truncate text-xs text-default-500 font-mono">
+              {k.installedVersion
+                ? shortVersion(k.installedVersion)
+                : k.version}
+            </span>
+          </div>
+          <div className="text-xs text-default-500">
+            {k.inboundCount} 个入站
           </div>
           {k.lastError && (
-            <p className="text-xs text-danger break-all line-clamp-3">
+            <p className="mt-1 text-xs text-danger break-all line-clamp-2">
               {k.lastError}
             </p>
           )}
           {!k.synced && !k.lastError && (
-            <p className="text-xs text-warning">
-              配置尚未同步到节点，节点上线后会自动下发
+            <p className="mt-1 text-xs text-warning">
+              配置尚未同步，节点上线后自动下发
             </p>
           )}
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {k.enabled ? (
-              <Button
-                isLoading={busy === `${k.id}-stop`}
-                size="sm"
-                variant="flat"
-                onPress={() => doControl(k, "stop")}
-              >
-                停止
-              </Button>
-            ) : (
-              <Button
-                color="success"
-                isLoading={busy === `${k.id}-start`}
-                size="sm"
-                variant="flat"
-                onPress={() => doControl(k, "start")}
-              >
-                启动
-              </Button>
-            )}
-            <Button
-              isDisabled={!k.enabled}
-              isLoading={busy === `${k.id}-restart`}
-              size="sm"
-              variant="flat"
-              onPress={() => doControl(k, "restart")}
-            >
-              重启
-            </Button>
-            <Button size="sm" variant="flat" onPress={() => openLogs(k)}>
-              日志
-            </Button>
-            <Button
-              color="danger"
-              size="sm"
-              variant="flat"
-              onPress={() => {
-                setRemoveFailed(false);
-                setRemoveTarget(k);
-              }}
-            >
-              卸载
-            </Button>
-          </div>
-        </CardBody>
-      </Card>
+        </div>
+        <Chip color={st.color} size="sm" variant="flat">
+          {st.label}
+        </Chip>
+        <MoreHorizontal className="mt-0.5 h-4 w-4 shrink-0 text-default-400" />
+      </div>
     );
   };
-  const groups = groupItems(
-    kernels,
-    (k) => (groupBy === "node" ? String(k.nodeId) : k.kernelType),
-    (_key, k) =>
-      groupBy === "node"
-        ? k.nodeName || `节点 ${k.nodeId}`
-        : kernelName(k.kernelType),
-  );
 
   return (
-    <div className="mb-6">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-base font-semibold">节点内核</h3>
-        <Button color="primary" size="sm" variant="flat" onPress={openInstall}>
+    <div>
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <p className="text-xs text-default-500">
+          点击内核可启停、重启、查看日志或卸载
+        </p>
+        <Button
+          color="primary"
+          size="sm"
+          variant="flat"
+          onPress={() => openInstall()}
+        >
           安装内核
         </Button>
       </div>
 
       {kernels.length === 0 ? (
         <Card className="shadow-sm bg-default-50/50">
-          <CardBody className="text-center py-8 text-sm text-default-500">
-            还没有在任何节点上安装内核。先安装 Xray，再创建入站。
+          <CardBody className="text-center py-10 text-sm text-default-500">
+            还没有在任何节点上安装内核。点击“安装内核”，先在落地节点上安装
+            Xray，再到“入站”里创建节点。
           </CardBody>
         </Card>
-      ) : !grouped ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {kernels.map(renderKernel)}
-        </div>
       ) : (
-        <div className="space-y-1">
-          {groups.map((g) => {
-            const id = `kernel:${groupBy}:${g.key}`;
-            const folded = isCollapsed(id);
-            const bad = g.items.filter(
-              (k) => k.status === "error" || !k.nodeOnline,
-            ).length;
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
+          {nodeGroups.map((g) => {
+            const online = g.items[0]?.nodeOnline;
 
             return (
-              <div key={g.key}>
-                <GroupHeader
-                  collapsed={folded}
-                  count={g.items.length}
-                  extra={
-                    bad > 0 ? (
-                      <Chip color="danger" size="sm" variant="flat">
-                        {bad} 个异常
-                      </Chip>
-                    ) : undefined
-                  }
-                  title={g.title}
-                  unit="个内核"
-                  onToggle={() => toggleCollapsed(id)}
-                />
-                {!folded && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-2">
-                    {g.items.map(renderKernel)}
-                  </div>
-                )}
-              </div>
+              <Card key={g.key} className="shadow-sm overflow-hidden">
+                <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      online ? "bg-success" : "bg-default-300"
+                    }`}
+                  />
+                  <span className="min-w-0 flex-1 truncate font-semibold">
+                    {g.title}
+                  </span>
+                  {!online && (
+                    <Chip size="sm" variant="flat">
+                      离线
+                    </Chip>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="light"
+                    onPress={() => openInstall(g.items[0].nodeId)}
+                  >
+                    + 内核
+                  </Button>
+                </div>
+                <div className="divide-y divide-divider border-t border-divider">
+                  {g.items.map(renderKernel)}
+                </div>
+              </Card>
             );
           })}
         </div>
       )}
+
+      <ActionSheet
+        actions={
+          sheetKernel
+            ? [
+                sheetKernel.enabled
+                  ? {
+                      key: "stop",
+                      label: "停止",
+                      onPress: () => doControl(sheetKernel, "stop"),
+                    }
+                  : {
+                      key: "start",
+                      label: "启动",
+                      color: "success" as const,
+                      onPress: () => doControl(sheetKernel, "start"),
+                    },
+                {
+                  key: "restart",
+                  label: "重启",
+                  disabled: !sheetKernel.enabled,
+                  onPress: () => doControl(sheetKernel, "restart"),
+                },
+                {
+                  key: "logs",
+                  label: "日志",
+                  onPress: () => openLogs(sheetKernel),
+                },
+                {
+                  key: "upgrade",
+                  label: "换版本",
+                  onPress: () =>
+                    openInstall(sheetKernel.nodeId, sheetKernel.kernelType),
+                },
+                {
+                  key: "remove",
+                  label: "卸载",
+                  color: "danger" as const,
+                  onPress: () => {
+                    setRemoveFailed(false);
+                    setRemoveTarget(sheetKernel);
+                  },
+                },
+              ]
+            : []
+        }
+        isOpen={Boolean(sheetKernel)}
+        subtitle={
+          sheetKernel &&
+          `${sheetKernel.nodeName || `节点 ${sheetKernel.nodeId}`} · ${
+            sheetKernel.installedVersion
+              ? shortVersion(sheetKernel.installedVersion)
+              : sheetKernel.version
+          } · ${sheetKernel.inboundCount} 个入站`
+        }
+        title={sheetKernel ? kernelName(sheetKernel.kernelType) : ""}
+        onClose={() => setSheetFor(null)}
+      >
+        {sheetKernel?.lastError && (
+          <p className="text-xs text-danger break-all">
+            {sheetKernel.lastError}
+          </p>
+        )}
+      </ActionSheet>
 
       <Modal
         backdrop="blur"

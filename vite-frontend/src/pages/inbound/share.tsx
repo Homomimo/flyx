@@ -232,26 +232,7 @@ const SUB_FORMATS: { key: string; label: string; hint: string }[] = [
 export function SubscriptionCard() {
   const [path, setPath] = useState("");
   const [showQr, setShowQr] = useState(false);
-  const [expanded, setExpanded] = useState(() => {
-    try {
-      return localStorage.getItem("flvx_sub_expanded") === "1";
-    } catch {
-      return false;
-    }
-  });
   const [resetOpen, setResetOpen] = useState(false);
-
-  const toggleExpanded = () => {
-    setExpanded((v) => {
-      try {
-        localStorage.setItem("flvx_sub_expanded", v ? "0" : "1");
-      } catch {
-        // Only a convenience.
-      }
-
-      return !v;
-    });
-  };
   const [resetting, setResetting] = useState(false);
 
   const load = (reset = false) =>
@@ -286,7 +267,7 @@ export function SubscriptionCard() {
   };
 
   return (
-    <Card className="shadow-sm mb-6">
+    <Card className="shadow-sm">
       <CardBody className="space-y-3">
         <div className="flex items-center justify-between gap-2">
           <div>
@@ -327,29 +308,25 @@ export function SubscriptionCard() {
           >
             复制订阅链接（自动识别客户端）
           </Button>
-          <Button variant="light" onPress={toggleExpanded}>
-            {expanded ? "收起" : "更多格式"}
-          </Button>
         </div>
-        {expanded && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
-            {SUB_FORMATS.filter((f) => f.key).map((f) => (
-              <button
-                key={f.key || "auto"}
-                className="text-left rounded-xl border border-divider px-3 py-2 hover:bg-default-100 transition-colors disabled:opacity-50"
-                disabled={!path}
-                type="button"
-                onClick={() => copyText(url(f.key), `${f.label} 订阅已复制`)}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{f.label}</span>
-                  <Copy className="w-3.5 h-3.5 text-default-400" />
-                </div>
-                <div className="text-xs text-default-500">{f.hint}</div>
-              </button>
-            ))}
-          </div>
-        )}
+        <p className="pt-1 text-xs text-default-500">指定格式</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+          {SUB_FORMATS.filter((f) => f.key).map((f) => (
+            <button
+              key={f.key || "auto"}
+              className="text-left rounded-xl border border-divider px-3 py-2 hover:bg-default-100 transition-colors disabled:opacity-50"
+              disabled={!path}
+              type="button"
+              onClick={() => copyText(url(f.key), `${f.label} 订阅已复制`)}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">{f.label}</span>
+                <Copy className="w-3.5 h-3.5 text-default-400" />
+              </div>
+              <div className="text-xs text-default-500">{f.hint}</div>
+            </button>
+          ))}
+        </div>
         {showQr && path && (
           <div className="flex flex-col items-center gap-2 pt-1">
             <QrImage text={url("")} />
