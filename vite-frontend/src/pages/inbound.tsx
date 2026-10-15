@@ -414,8 +414,9 @@ export default function InboundPage() {
                         {item.remark}
                       </p>
                     )}
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="grid grid-cols-4 gap-1.5">
                       <Button
+                        className="w-full min-w-0 px-1"
                         color="primary"
                         size="sm"
                         variant="flat"
@@ -424,6 +425,7 @@ export default function InboundPage() {
                         分享
                       </Button>
                       <Button
+                        className="w-full min-w-0 px-1"
                         color="secondary"
                         size="sm"
                         variant="flat"
@@ -432,6 +434,7 @@ export default function InboundPage() {
                         中转
                       </Button>
                       <Button
+                        className="w-full min-w-0 px-1"
                         size="sm"
                         variant="flat"
                         onPress={() => setDetails(item)}
@@ -439,6 +442,7 @@ export default function InboundPage() {
                         参数
                       </Button>
                       <Button
+                        className="w-full min-w-0 px-1"
                         size="sm"
                         variant="flat"
                         onPress={() => openEdit(item)}
@@ -446,6 +450,7 @@ export default function InboundPage() {
                         编辑
                       </Button>
                       <Button
+                        className="w-full min-w-0 px-1"
                         size="sm"
                         variant="flat"
                         onPress={() => setConfirm({ action: "reset", item })}
@@ -453,6 +458,7 @@ export default function InboundPage() {
                         重置流量
                       </Button>
                       <Button
+                        className="w-full min-w-0 px-1"
                         size="sm"
                         variant="flat"
                         onPress={() =>
@@ -462,6 +468,7 @@ export default function InboundPage() {
                         换密钥
                       </Button>
                       <Button
+                        className="w-full min-w-0 px-1"
                         color="danger"
                         size="sm"
                         variant="flat"

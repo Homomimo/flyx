@@ -301,6 +301,17 @@ export function emptyForm(
   };
 }
 
+/** A name still holding a template or protocol label was filled in by us. */
+export function isAutoName(name: string): boolean {
+  const n = name.trim();
+
+  return (
+    n === "" ||
+    PRESETS.some((p) => p.label === n) ||
+    Object.values(PROTOCOL_LABELS).includes(n)
+  );
+}
+
 export function applyPreset(
   form: InboundForm,
   preset: Preset,
@@ -327,7 +338,7 @@ export function applyPreset(
     sni,
     certMode:
       preset.certMode ?? (form.certMode === "acme" ? "self" : form.certMode),
-    name: form.name || preset.label,
+    name: isAutoName(form.name) ? preset.label : form.name,
   };
 }
 

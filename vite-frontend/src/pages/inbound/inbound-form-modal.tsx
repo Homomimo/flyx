@@ -15,6 +15,7 @@ import {
   TRANSPORT_LABELS,
   type InboundForm,
   applyPreset,
+  isAutoName,
   passwordProtocols,
   presetsFor,
   protocolCap,
@@ -157,6 +158,10 @@ export function InboundFormModal({
         transportType: transport,
         securityType: security,
         sni: nextSni(prev.securityType, prev.sni, security),
+        name:
+          prev.name.trim() && isAutoName(prev.name)
+            ? (PROTOCOL_LABELS[protocol] ?? protocol)
+            : prev.name,
       };
     });
   };
