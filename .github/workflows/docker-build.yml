@@ -369,9 +369,9 @@ jobs:
           **安装最新版:**
           \`\`\`bash
           # 面板端
-          curl -L https://raw.githubusercontent.com/${{ github.repository }}/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+          curl -L https://github.com/${{ github.repository }}/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
           # 节点端
-          curl -L https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+          curl -L https://github.com/${{ github.repository }}/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && ./install.sh
           \`\`\`" \
             --repo ${{ github.repository }}
 
