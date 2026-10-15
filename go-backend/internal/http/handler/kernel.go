@@ -852,6 +852,51 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// inboundBatchDelete removes several inbounds and their relays, then pushes
+// each affected kernel's config once instead of once per inbound.
+func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
+	ids := idsFromBody(r, w)
+	if ids == nil {
+		return
+	}
+	s := 0
+	f := 0
+	failures := make([]batchFailureDetail, 0)
+	kernelIDs := make([]int64, 0)
+	seenKernel := make(map[int64]bool)
+	for _, id := range ids {
+		row, err := h.repo.GetNodeInbound(id)
+		if err != nil || row == nil {
+			f++
+			failures = appendBatchFailureReason(failures, id, "", "节点服务不存在")
+			continue
+		}
+		h.removeInboundRelays(id)
+		if err := h.repo.DeleteNodeInbound(id); err != nil {
+			f++
+			failures = appendBatchFailure(failures, id, row.Name, err)
+			continue
+		}
+		s++
+		if !isExternalInbound(row) && !seenKernel[row.KernelID] {
+			seenKernel[row.KernelID] = true
+			kernelIDs = append(kernelIDs, row.KernelID)
+		}
+	}
+	msg := "操作成功"
+	for _, kernelID := range kernelIDs {
+		if err := h.applyKernel(kernelID, false); err != nil {
+			msg = "已删除，但下发到节点失败: " + err.Error()
+		}
+	}
+	response.WriteJSON(w, response.R{
+		Code: 0,
+		Msg:  msg,
+		Data: batchOperationResult{SuccessCount: s, FailCount: f, Failures: failures},
+		TS:   time.Now().UnixMilli(),
+	})
+}
+
 func (h *Handler) inboundToggle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))

@@ -211,6 +211,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/inbound/create", h.inboundCreate)
 	mux.HandleFunc("/api/v1/inbound/update", h.inboundUpdate)
 	mux.HandleFunc("/api/v1/inbound/delete", h.inboundDelete)
+	mux.HandleFunc("/api/v1/inbound/batch-delete", h.inboundBatchDelete)
 	mux.HandleFunc("/api/v1/inbound/toggle", h.inboundToggle)
 	mux.HandleFunc("/api/v1/inbound/reset-traffic", h.inboundResetTraffic)
 	mux.HandleFunc("/api/v1/inbound/regenerate", h.inboundRegenerate)

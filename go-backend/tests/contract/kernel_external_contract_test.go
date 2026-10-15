@@ -140,4 +140,17 @@ func TestExternalImportFromSubscriptionURLContract(t *testing.T) {
 	if !strings.Contains(body, "30009") || !strings.Contains(body, `sni: "a.example.com"`) {
 		t.Fatalf("the relay line must keep the original domain as SNI:\n%s", body)
 	}
+
+	ids := make([]string, 0, len(list))
+	for _, it := range list {
+		ids = append(ids, jsonInt64(int64(it.(map[string]interface{})["id"].(float64))))
+	}
+	out = kernelContractPost(t, router, admin, "/api/v1/inbound/batch-delete", `{"ids":[`+strings.Join(ids, ",")+`,999999]}`)
+	res := out.Data.(map[string]interface{})
+	if out.Code != 0 || valueAsInt(res["successCount"]) != 2 || valueAsInt(res["failCount"]) != 1 {
+		t.Fatalf("batch delete: %+v", out)
+	}
+	if mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound`) != 0 || mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound_relay`) != 0 {
+		t.Fatal("batch delete must drop the nodes and their relays")
+	}
 }
