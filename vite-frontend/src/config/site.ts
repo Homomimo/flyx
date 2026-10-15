@@ -16,7 +16,6 @@ const PUBLIC_BRAND_CONFIG_KEYS = [
   "app_bg_image",
   "app_bg_image_light",
   "app_bg_image_dark",
-  "is_commercial",
   "hide_footer_brand",
 ] as const;
 const SENSITIVE_CONFIG_KEYS = new Set([
@@ -118,7 +117,6 @@ const getInitialConfig = () => {
       app_bg_image: "",
       app_bg_image_light: "",
       app_bg_image_dark: "",
-      is_commercial: false,
       hide_footer_brand: false,
     };
   }
@@ -135,24 +133,21 @@ const getInitialConfig = () => {
     localStorage.getItem(CACHE_PREFIX + "app_bg_image_light") || "";
   const cachedAppBgImageDark =
     localStorage.getItem(CACHE_PREFIX + "app_bg_image_dark") || "";
-  const isCommercial =
-    localStorage.getItem(CACHE_PREFIX + "is_commercial") === "true";
   const hideFooterBrand =
     localStorage.getItem(CACHE_PREFIX + "hide_footer_brand") === "true";
 
   if (cachedAppName) {
     return {
-      name: isCommercial ? cachedAppName : "FLVX",
+      name: cachedAppName,
       version: VERSION,
       app_version: APP_VERSION,
       github_repo: GITHUB_REPO,
-      app_logo: isCommercial ? cachedAppLogo : "",
-      app_favicon: isCommercial ? cachedAppFavicon : "",
+      app_logo: cachedAppLogo,
+      app_favicon: cachedAppFavicon,
       app_bg_image: cachedAppBgImage,
       app_bg_image_light: cachedAppBgImageLight,
       app_bg_image_dark: cachedAppBgImageDark,
-      is_commercial: isCommercial,
-      hide_footer_brand: isCommercial && hideFooterBrand,
+      hide_footer_brand: hideFooterBrand,
     };
   }
 
@@ -161,13 +156,12 @@ const getInitialConfig = () => {
     version: VERSION,
     app_version: APP_VERSION,
     github_repo: GITHUB_REPO,
-    app_logo: isCommercial ? cachedAppLogo : "",
-    app_favicon: isCommercial ? cachedAppFavicon : "",
+    app_logo: cachedAppLogo,
+    app_favicon: cachedAppFavicon,
     app_bg_image: cachedAppBgImage,
     app_bg_image_light: cachedAppBgImageLight,
     app_bg_image_dark: cachedAppBgImageDark,
-    is_commercial: isCommercial,
-    hide_footer_brand: isCommercial && hideFooterBrand,
+    hide_footer_brand: hideFooterBrand,
   };
 };
 
@@ -403,12 +397,6 @@ export const updateSiteConfig = async (configMap?: Record<string, string>) => {
     "app_bg_image_dark",
   );
 
-  const resolvedCommercial = Object.prototype.hasOwnProperty.call(
-    resolvedConfigMap,
-    "is_commercial",
-  )
-    ? resolvedConfigMap.is_commercial === "true"
-    : siteConfig.is_commercial;
   const appName = hasAppName
     ? String(resolvedConfigMap.app_name || "").trim()
     : siteConfig.name;
@@ -428,24 +416,17 @@ export const updateSiteConfig = async (configMap?: Record<string, string>) => {
     ? String(resolvedConfigMap.app_bg_image_dark || "").trim()
     : (siteConfig.app_bg_image_dark || "").trim();
 
-  siteConfig.name = resolvedCommercial && appName ? appName : "FLVX";
-  siteConfig.app_logo = resolvedCommercial ? appLogo : "";
-  siteConfig.app_favicon = resolvedCommercial ? appFavicon : "";
+  siteConfig.name = appName || "FLVX";
+  siteConfig.app_logo = appLogo;
+  siteConfig.app_favicon = appFavicon;
   siteConfig.app_bg_image = appBgImage;
   siteConfig.app_bg_image_light = appBgImageLight;
   siteConfig.app_bg_image_dark = appBgImageDark;
   if (
-    Object.prototype.hasOwnProperty.call(resolvedConfigMap, "is_commercial")
-  ) {
-    siteConfig.is_commercial = resolvedCommercial;
-  }
-  if (
     Object.prototype.hasOwnProperty.call(resolvedConfigMap, "hide_footer_brand")
   ) {
     siteConfig.hide_footer_brand =
-      resolvedCommercial && resolvedConfigMap.hide_footer_brand === "true";
-  } else if (!resolvedCommercial) {
-    siteConfig.hide_footer_brand = false;
+      resolvedConfigMap.hide_footer_brand === "true";
   }
 
   if (typeof document !== "undefined") {

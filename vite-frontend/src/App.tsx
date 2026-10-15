@@ -106,46 +106,36 @@ function App() {
           ? siteConfig.app_bg_image_dark
           : siteConfig.app_bg_image_light) || siteConfig.app_bg_image;
 
-      if (customBg) {
-        if (customBg === "theme") {
-          document.documentElement.style.removeProperty("--custom-bg-image");
-          document.documentElement.style.removeProperty("--custom-bg-color");
-          document.documentElement.classList.add("has-theme-bg");
-          document.documentElement.classList.remove("has-custom-bg");
-        } else if (
-          customBg.startsWith("http") ||
-          customBg.startsWith("data:") ||
-          customBg.startsWith("/") ||
-          customBg.startsWith("blob:")
-        ) {
-          document.documentElement.style.setProperty(
-            "--custom-bg-image",
-            `url(${customBg})`,
-          );
-          document.documentElement.style.setProperty(
-            "--custom-bg-color",
-            "transparent",
-          );
-          document.documentElement.classList.add("has-custom-bg");
-          document.documentElement.classList.remove("has-theme-bg");
-        } else {
-          // Assume solid color like "#ffffff", "white", etc.
-          document.documentElement.style.setProperty(
-            "--custom-bg-image",
-            "none",
-          );
-          document.documentElement.style.setProperty(
-            "--custom-bg-color",
-            customBg,
-          );
-          document.documentElement.classList.add("has-custom-bg");
-          document.documentElement.classList.remove("has-theme-bg");
-        }
+      const root = document.documentElement;
+      const isImage =
+        customBg.startsWith("http") ||
+        customBg.startsWith("data:") ||
+        customBg.startsWith("/") ||
+        customBg.startsWith("blob:");
+      // "" and "theme" are the default plain background; "wallpaper" is
+      // the built-in picture; anything else is an image URL or a colour.
+      const mode =
+        !customBg || customBg === "theme"
+          ? "plain"
+          : customBg === "wallpaper"
+            ? "wallpaper"
+            : "custom";
+
+      root.classList.toggle("has-wallpaper-bg", mode === "wallpaper");
+      root.classList.toggle("has-custom-bg", mode === "custom");
+      root.classList.remove("has-theme-bg");
+      if (mode === "custom") {
+        root.style.setProperty(
+          "--custom-bg-image",
+          isImage ? `url(${customBg})` : "none",
+        );
+        root.style.setProperty(
+          "--custom-bg-color",
+          isImage ? "transparent" : customBg,
+        );
       } else {
-        document.documentElement.style.removeProperty("--custom-bg-image");
-        document.documentElement.style.removeProperty("--custom-bg-color");
-        document.documentElement.classList.remove("has-custom-bg");
-        document.documentElement.classList.remove("has-theme-bg");
+        root.style.removeProperty("--custom-bg-image");
+        root.style.removeProperty("--custom-bg-color");
       }
     };
 
@@ -260,7 +250,7 @@ function App() {
         />
         <Route
           element={
-            <ProtectedRoute useSimpleLayout={true}>
+            <ProtectedRoute>
               <InboundPage />
             </ProtectedRoute>
           }

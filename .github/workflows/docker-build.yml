@@ -240,7 +240,6 @@ jobs:
 
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
-            --build-arg KEYGEN_ACCOUNT_ID=${{ secrets.KEYGEN_ACCOUNT_ID }} \
             --build-arg GITHUB_REPO=${{ github.repository }} \
             --push \
             -t ${{ env.REGISTRY }}/${OWNER}/flux-panel-backend:latest \

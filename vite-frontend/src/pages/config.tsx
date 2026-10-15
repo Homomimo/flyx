@@ -28,7 +28,6 @@ import {
 } from "@/shadcn-bridge/heroui/modal";
 import {
   updateConfigs,
-  activateLicense,
   exportBackup,
   importBackup,
   getAnnouncement,
@@ -151,7 +150,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
   {
     key: "hide_footer_brand",
     label: "隐藏页面底部 FLVX 版权信息",
-    description: "需商业版授权才能生效",
+    description: "开启后页面底部不再显示 Powered by FLVX",
     type: "switch",
   },
   {
@@ -271,8 +270,6 @@ const getInitialConfigs = (): Record<string, string> => {
     "github_proxy_enabled",
     "github_proxy_url",
     "allow_local_remote_addr",
-    "is_commercial",
-    "license_expiry",
     "hide_footer_brand",
   ];
   const initialConfigs: Record<string, string> = {};
@@ -311,9 +308,6 @@ export default function ConfigPage() {
   const [importSelectorOpen, setImportSelectorOpen] = useState(false);
   const [importFileName, setImportFileName] = useState("");
   const backupFileInputRef = useRef<HTMLInputElement>(null);
-
-  const [activatingLicense, setActivatingLicense] = useState(false);
-  const [licenseKeyInput, setLicenseKeyInput] = useState("");
 
   const logoFileInputRef = useRef<HTMLInputElement>(null);
   const faviconFileInputRef = useRef<HTMLInputElement>(null);
@@ -606,31 +600,6 @@ export default function ConfigPage() {
     }
   };
 
-  const handleActivateLicense = async () => {
-    if (!licenseKeyInput.trim()) {
-      toast.error("请输入有效的商业授权码");
-
-      return;
-    }
-    setActivatingLicense(true);
-    try {
-      const res = await activateLicense(licenseKeyInput.trim());
-
-      if (res.code === 0) {
-        toast.success("商业版授权激活成功！");
-        setLicenseKeyInput("");
-        await loadConfigs();
-        window.dispatchEvent(new CustomEvent("configUpdated"));
-      } else {
-        toast.error(res.msg || "授权激活失败");
-      }
-    } catch (e: any) {
-      toast.error(e.message || "授权激活出错");
-    } finally {
-      setActivatingLicense(false);
-    }
-  };
-
   const handleConfigChange = (key: string, value: string) => {
     const newConfigs = { ...configs, [key]: value };
 
@@ -750,7 +719,7 @@ export default function ConfigPage() {
 
   // 检查配置项是否应该显示（依赖检查）
   const shouldShowItem = (item: ConfigItem): boolean => {
-    // 隐藏商业版专属的设置项，它们会在专门的卡片中展示
+    // 品牌设置项在单独的卡片中展示
     if (
       ["app_name", "app_logo", "app_favicon", "hide_footer_brand"].includes(
         item.key,
@@ -897,7 +866,8 @@ export default function ConfigPage() {
       bgImage.startsWith("/") ||
       bgImage.startsWith("blob:");
     const isTheme = bgImage === "theme";
-    const isSolidColor = bgImage && !isImage && !isTheme;
+    const isWallpaper = bgImage === "wallpaper";
+    const isSolidColor = bgImage && !isImage && !isTheme && !isWallpaper;
 
     return (
       <div className="flex flex-col gap-3 w-full rounded-xl border border-divider p-4">
@@ -933,11 +903,11 @@ export default function ConfigPage() {
           {isDefault && (
             <Button
               color="secondary"
-              isDisabled={bgImageUploading !== null || isTheme}
+              isDisabled={bgImageUploading !== null || isWallpaper}
               variant="flat"
-              onPress={() => handleConfigChange(key, "theme")}
+              onPress={() => handleConfigChange(key, "wallpaper")}
             >
-              自适应纯色 (跟随深色模式)
+              内置壁纸
             </Button>
           )}
           {isDefault && (
@@ -957,7 +927,7 @@ export default function ConfigPage() {
               variant="flat"
               onPress={() => handleConfigChange(key, "")}
             >
-              {isDefault ? "恢复内置背景" : "清除专属壁纸"}
+              {isDefault ? "恢复默认纯色" : "清除专属壁纸"}
             </Button>
           )}
         </div>
@@ -972,6 +942,14 @@ export default function ConfigPage() {
             <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent flex items-end p-4">
               <span className="text-white text-sm font-medium">预览效果</span>
             </div>
+          </div>
+        )}
+
+        {bgImage && isWallpaper && (
+          <div className="relative rounded-xl border border-divider bg-background h-32 flex items-center justify-center">
+            <span className="text-foreground text-sm font-medium">
+              当前为内置壁纸（亮色 / 暗色各一张）
+            </span>
           </div>
         )}
 
@@ -1080,7 +1058,6 @@ export default function ConfigPage() {
     const value = (configs[key] || "").trim();
     const uploading = brandUploading[key] === true;
     const isLogo = key === "app_logo";
-    const isCommercialDisabled = configs.is_commercial !== "true";
 
     return (
       <div
@@ -1094,7 +1071,7 @@ export default function ConfigPage() {
           ref={getBrandInputRef(key)}
           accept={BRAND_FILE_ACCEPT}
           className="hidden"
-          disabled={uploading || isCommercialDisabled}
+          disabled={uploading}
           type="file"
           onChange={(event) => {
             void handleBrandFileChange(key, event);
@@ -1104,7 +1081,6 @@ export default function ConfigPage() {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             color="primary"
-            isDisabled={isCommercialDisabled}
             isLoading={uploading}
             size="sm"
             variant="flat"
@@ -1146,10 +1122,6 @@ export default function ConfigPage() {
   const renderConfigItem = (item: ConfigItem) => {
     const isChanged =
       hasChanges && configs[item.key] !== originalConfigs[item.key];
-    const isCommercialDisabled =
-      ["app_name", "app_logo", "app_favicon", "hide_footer_brand"].includes(
-        item.key,
-      ) && configs.is_commercial !== "true";
 
     switch (item.type) {
       case "bg_image":
@@ -1186,12 +1158,8 @@ export default function ConfigPage() {
                 ? "border-warning-300 data-[hover=true]:border-warning-400"
                 : "",
             }}
-            description={
-              isCommercialDisabled ? "需商业版授权才能修改此项" : undefined
-            }
             endContent={isTunnelQualityInterval ? "秒" : undefined}
             errorMessage={intervalError || undefined}
-            isDisabled={isCommercialDisabled}
             isInvalid={Boolean(intervalError)}
             max={
               isTunnelQualityInterval
@@ -1220,7 +1188,6 @@ export default function ConfigPage() {
             classNames={{
               wrapper: isChanged ? "border-warning-300" : "",
             }}
-            isDisabled={isCommercialDisabled}
             isSelected={configs[item.key] === "true"}
             size="sm"
             onValueChange={(checked) =>
@@ -1456,80 +1423,44 @@ export default function ConfigPage() {
         <CardHeader className="pb-6">
           <div className="flex items-center w-full">
             <div>
-              <h2 className="text-xl font-semibold">商业版授权</h2>
+              <h2 className="text-xl font-semibold">品牌设置</h2>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                激活商业版授权以解锁自定义品牌功能（替换
-                Logo、应用名称，移除底部版权信息等）
+                自定义面板名称、Logo、网站图标和底部版权信息
               </p>
             </div>
           </div>
         </CardHeader>
         <Divider />
         <CardBody className="pt-8">
-          <div className="flex items-end gap-3 max-w-lg mb-6">
-            <Input
-              description={
-                configs.is_commercial === "true"
-                  ? configs.license_expiry && configs.license_expiry !== "never"
-                    ? `已激活商业版授权 (有效期至: ${new Date(configs.license_expiry).toLocaleDateString()})`
-                    : "已激活商业版授权 (永久有效)"
-                  : "需商业授权才能修改站名、图标并隐藏页脚品牌"
-              }
-              isDisabled={configs.is_commercial === "true"}
-              label="授权激活码"
-              placeholder="请输入 FLVX- 开头的商业授权码"
-              value={licenseKeyInput}
-              variant="bordered"
-              onChange={(e) => setLicenseKeyInput(e.target.value)}
-            />
-            <Button
-              className="mb-6"
-              color="primary"
-              isDisabled={
-                configs.is_commercial === "true" || !licenseKeyInput.trim()
-              }
-              isLoading={activatingLicense}
-              onPress={handleActivateLicense}
-            >
-              {configs.is_commercial === "true" ? "已授权" : "激活授权"}
-            </Button>
-          </div>
-
-          {configs.is_commercial === "true" && (
-            <div className="space-y-6">
-              <Divider className="my-2" />
-              <h3 className="text-md font-medium text-default-700">
-                白标与品牌设置
-              </h3>
-              {CONFIG_ITEMS.filter((item) =>
-                [
-                  "app_name",
-                  "app_logo",
-                  "app_favicon",
-                  "hide_footer_brand",
-                ].includes(item.key),
-              ).map((item, index) => (
-                <div key={item.key}>
-                  <div className="grid grid-cols-1 gap-6 md:grid-cols-[1fr_2fr]">
-                    <div className="space-y-1">
-                      <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                        {item.label}
-                      </label>
-                      {item.description && (
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {item.description}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-start">
-                      {renderConfigItem(item)}
-                    </div>
+          <div className="space-y-6">
+            {CONFIG_ITEMS.filter((item) =>
+              [
+                "app_name",
+                "app_logo",
+                "app_favicon",
+                "hide_footer_brand",
+              ].includes(item.key),
+            ).map((item, index) => (
+              <div key={item.key}>
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-[1fr_2fr]">
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                      {item.label}
+                    </label>
+                    {item.description && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {item.description}
+                      </p>
+                    )}
                   </div>
-                  {index < 3 && <Divider className="mt-6" />}
+                  <div className="flex items-start">
+                    {renderConfigItem(item)}
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
+                {index < 3 && <Divider className="mt-6" />}
+              </div>
+            ))}
+          </div>
         </CardBody>
       </Card>
 
