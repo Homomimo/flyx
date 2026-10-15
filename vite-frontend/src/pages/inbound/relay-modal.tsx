@@ -38,15 +38,31 @@ export function relayBlocker(
   inbound: InboundApiItem,
 ): string | null {
   if (tunnel.status !== 1) return "隧道已禁用";
-  if (tunnel.type === 2) {
-    const exits = (tunnel.outNodeId ?? []).map((n) => n.nodeId);
+  const exits = tunnelExits(tunnel);
 
-    return exits.includes(inbound.nodeId) ? null : "隧道出口不是该落地节点";
+  if (tunnel.type === 2 && exits.includes(inbound.nodeId)) {
+    return exits.length > 1 ? "出口为落地节点时只能有这一个出口" : null;
   }
 
   return isLoopback(inbound.listen)
     ? "入站只监听本机，需用出口为落地节点的隧道转发"
     : null;
+}
+
+function tunnelExits(tunnel: TunnelApiItem): number[] {
+  return (tunnel.outNodeId ?? []).map((n) => n.nodeId);
+}
+
+/** How the relay reaches the inbound, shown next to the tunnel name. */
+export function relayRoute(
+  tunnel: TunnelApiItem,
+  inbound: InboundApiItem,
+): string {
+  if (tunnel.type !== 2) return "端口转发";
+
+  return tunnelExits(tunnel).includes(inbound.nodeId)
+    ? "隧道转发到本机"
+    : "隧道经出口节点转发到公网地址";
 }
 
 export function RelayModal({
@@ -97,11 +113,18 @@ export function RelayModal({
   const options = useMemo(
     () =>
       item
-        ? tunnels.map((t) => ({ tunnel: t, blocker: relayBlocker(t, item) }))
+        ? tunnels.map((t) => ({
+            tunnel: t,
+            blocker: relayBlocker(t, item),
+            route: relayRoute(t, item),
+          }))
         : [],
     [tunnels, item],
   );
   const usable = options.filter((o) => !o.blocker);
+  const selectedRoute = options.find(
+    (o) => String(o.tunnel.id) === form.tunnelId,
+  )?.route;
 
   const create = async () => {
     if (!item || !form.tunnelId) {
@@ -246,8 +269,7 @@ export function RelayModal({
                     <p className="text-sm font-medium">添加中转</p>
                     {usable.length === 0 && !loading && (
                       <p className="text-xs text-warning">
-                        没有可用的隧道：请先在“隧道”页创建以中转机为入口的端口转发隧道，
-                        或出口为该落地节点的隧道转发。
+                        没有可用的隧道：请先在“隧道”页创建以中转机为入口的端口转发或隧道转发。
                       </p>
                     )}
                     <Select
@@ -264,10 +286,10 @@ export function RelayModal({
                         }))
                       }
                     >
-                      {options.map(({ tunnel, blocker }) => {
-                        const text = `${tunnel.name}（${
-                          tunnel.type === 2 ? "隧道转发" : "端口转发"
-                        }）${blocker ? ` - ${blocker}` : ""}`;
+                      {options.map(({ tunnel, blocker, route }) => {
+                        const text = `${tunnel.name}（${route}）${
+                          blocker ? ` - ${blocker}` : ""
+                        }`;
 
                         return (
                           <SelectItem key={String(tunnel.id)} textValue={text}>
@@ -276,6 +298,13 @@ export function RelayModal({
                         );
                       })}
                     </Select>
+                    {selectedRoute === "隧道经出口节点转发到公网地址" && (
+                      <p className="text-xs text-default-500">
+                        流量经隧道到出口节点（如
+                        IX），再由出口节点连接落地机的公网地址。
+                        开启入站白名单后，会自动放行出口节点的地址。
+                      </p>
+                    )}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <Input
                         label="入口端口"

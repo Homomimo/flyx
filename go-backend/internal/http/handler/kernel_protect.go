@@ -19,8 +19,9 @@ const relayProxyProtocolVersion = 1
 var loopbackAllow = []string{"127.0.0.0/8", "::1/128"}
 
 // inboundAllowList computes the sources allowed to reach a whitelisted
-// inbound: loopback (tunnel exits dial locally), every address of the relay
-// entry nodes, and the user's extra entries.
+// inbound: loopback (tunnel exits dial locally), every address of the nodes
+// that dial the landing node (entry nodes of port forwards, exit nodes of
+// tunnel forwards), and the user's extra entries.
 func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 	set := make(map[string]bool)
 	for _, c := range loopbackAllow {
@@ -41,11 +42,11 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 		if !rel.ForwardExists {
 			continue
 		}
-		entryNodes, err := h.tunnelEntryNodeIDs(rel.TunnelID)
+		dialers, err := h.relayDialerNodeIDs(rel.TunnelID, rel.TunnelType)
 		if err != nil {
 			continue
 		}
-		for _, nodeID := range entryNodes {
+		for _, nodeID := range dialers {
 			if seenNodes[nodeID] {
 				continue
 			}
@@ -68,6 +69,16 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// relayDialerNodeIDs returns the nodes whose connections reach the landing
+// node: a port-forward tunnel dials from its entry nodes, a tunnel forward
+// from its exit nodes.
+func (h *Handler) relayDialerNodeIDs(tunnelID int64, tunnelType int) ([]int64, error) {
+	if tunnelType == 2 {
+		return h.repo.TunnelExitNodeIDs(tunnelID)
+	}
+	return h.tunnelEntryNodeIDs(tunnelID)
 }
 
 func nodeAddresses(node *model.Node) []string {
