@@ -82,6 +82,138 @@ export function QrImage({ text, size = 220 }: { text: string; size?: number }) {
   );
 }
 
+type ShareFormat = "surge" | "uri";
+
+const SHARE_FORMAT_KEY = "flvx_share_format";
+
+function preferredFormat(): ShareFormat {
+  try {
+    return localStorage.getItem(SHARE_FORMAT_KEY) === "uri" ? "uri" : "surge";
+  } catch {
+    return "surge";
+  }
+}
+
+function rememberFormat(f: ShareFormat) {
+  try {
+    localStorage.setItem(SHARE_FORMAT_KEY, f);
+  } catch {
+    // Remembering the choice is only a convenience.
+  }
+}
+
+/** Surge first when the protocol has a Surge line, unless the user picked links. */
+function formatFor(e: InboundShareEntry, preferred: ShareFormat): ShareFormat {
+  if (!e.surge) return "uri";
+  if (!e.uri) return "surge";
+
+  return preferred;
+}
+
+function ShareEntryCard({
+  entry,
+  preferred,
+  onPreferred,
+}: {
+  entry: InboundShareEntry;
+  preferred: ShareFormat;
+  onPreferred: (f: ShareFormat) => void;
+}) {
+  const format = formatFor(entry, preferred);
+  const [showQr, setShowQr] = useState(false);
+  const text = format === "surge" ? entry.surge : entry.uri;
+  const both = Boolean(entry.surge && entry.uri);
+
+  return (
+    <div className="rounded-2xl border border-divider p-4 space-y-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Chip
+            color={entry.kind === "relay" ? "secondary" : "primary"}
+            size="sm"
+            variant="flat"
+          >
+            {entry.kind === "relay" ? "中转" : "直连"}
+          </Chip>
+          <span className="font-medium truncate">{entry.name}</span>
+        </div>
+        <p className="text-xs text-default-500 font-mono mt-1 break-all">
+          {entry.host}:{entry.port}
+        </p>
+      </div>
+
+      {both && (
+        <div className="grid grid-cols-2 gap-1 rounded-xl bg-default-100 p-1">
+          {(
+            [
+              ["surge", "Surge"],
+              ["uri", "链接"],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              className={`rounded-lg py-1.5 text-sm transition-colors ${
+                format === key
+                  ? "bg-background shadow-sm font-medium"
+                  : "text-default-500"
+              }`}
+              type="button"
+              onClick={() => {
+                setShowQr(false);
+                onPreferred(key);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded-xl bg-default-100 p-3 max-h-32 overflow-y-auto select-all">
+        {text}
+      </pre>
+
+      <div className="flex gap-2">
+        <Button
+          className="flex-1"
+          color="primary"
+          startContent={<Copy className="w-4 h-4" />}
+          onPress={() =>
+            copyText(
+              text,
+              format === "surge" ? "Surge 配置行已复制" : "链接已复制",
+            )
+          }
+        >
+          {format === "surge" ? "复制 Surge 配置" : "复制链接"}
+        </Button>
+        {format === "uri" && (
+          <Button
+            isIconOnly
+            aria-label="二维码"
+            variant={showQr ? "solid" : "flat"}
+            onPress={() => setShowQr((v) => !v)}
+          >
+            <QrCode className="w-4 h-4" />
+          </Button>
+        )}
+      </div>
+
+      {format === "surge" && !entry.uri && (
+        <p className="text-xs text-default-500">
+          该协议没有通用分享链接，粘贴到 Surge 配置的 [Proxy] 段，或使用 Surge
+          订阅。
+        </p>
+      )}
+      {format === "uri" && showQr && (
+        <div className="flex justify-center">
+          <QrImage text={entry.uri} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ShareModal({
   item,
   onClose,
@@ -91,12 +223,11 @@ export function ShareModal({
 }) {
   const [entries, setEntries] = useState<InboundShareEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [qrFor, setQrFor] = useState<string | null>(null);
+  const [preferred, setPreferred] = useState<ShareFormat>(preferredFormat);
 
   useEffect(() => {
     if (!item) return;
     setEntries([]);
-    setQrFor(null);
     setLoading(true);
     getInboundShare(item.id)
       .then((res) => {
@@ -109,6 +240,11 @@ export function ShareModal({
       .finally(() => setLoading(false));
   }, [item]);
 
+  const choose = (f: ShareFormat) => {
+    setPreferred(f);
+    rememberFormat(f);
+  };
+
   return (
     <Modal
       backdrop="blur"
@@ -116,7 +252,7 @@ export function ShareModal({
       isOpen={Boolean(item)}
       placement="center"
       scrollBehavior="inside"
-      size="2xl"
+      size="lg"
       onOpenChange={(open) => !open && onClose()}
     >
       <ModalContent>
@@ -125,7 +261,7 @@ export function ShareModal({
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-lg font-bold">分享 · {item?.name}</h2>
               <p className="text-small text-default-500">
-                复制链接或扫码导入 v2rayN、Shadowrocket、NekoBox 等客户端
+                Surge 复制配置行；其他客户端复制链接或扫码导入
               </p>
             </ModalHeader>
             <ModalBody>
@@ -137,80 +273,12 @@ export function ShareModal({
               )}
               <div className="space-y-3">
                 {entries.map((e) => (
-                  <div
+                  <ShareEntryCard
                     key={`${e.kind}-${e.host}-${e.port}`}
-                    className="rounded-xl border border-divider p-3 space-y-2"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <Chip
-                            color={e.kind === "relay" ? "secondary" : "primary"}
-                            size="sm"
-                            variant="flat"
-                          >
-                            {e.kind === "relay" ? "中转" : "直连"}
-                          </Chip>
-                          <span className="font-medium truncate">{e.name}</span>
-                        </div>
-                        <p className="text-xs text-default-500 font-mono mt-1">
-                          {e.host}:{e.port}
-                        </p>
-                      </div>
-                      <div className="flex gap-1 shrink-0">
-                        {e.surge && (
-                          <Button
-                            size="sm"
-                            startContent={<Copy className="w-3.5 h-3.5" />}
-                            variant="flat"
-                            onPress={() =>
-                              copyText(e.surge, "Surge 配置行已复制")
-                            }
-                          >
-                            Surge
-                          </Button>
-                        )}
-                        {e.uri && (
-                          <Button
-                            isIconOnly
-                            aria-label="二维码"
-                            size="sm"
-                            variant="flat"
-                            onPress={() =>
-                              setQrFor(qrFor === e.uri ? null : e.uri)
-                            }
-                          >
-                            <QrCode className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {e.uri && (
-                          <Button
-                            color="primary"
-                            size="sm"
-                            startContent={<Copy className="w-3.5 h-3.5" />}
-                            variant="flat"
-                            onPress={() => copyText(e.uri, "链接已复制")}
-                          >
-                            复制
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                    <p className="text-xs font-mono break-all text-default-600 line-clamp-2">
-                      {e.uri || e.surge}
-                    </p>
-                    {!e.uri && (
-                      <p className="text-xs text-warning">
-                        该协议没有通用分享链接，请复制 Surge 配置行或使用 Surge
-                        订阅
-                      </p>
-                    )}
-                    {qrFor === e.uri && (
-                      <div className="flex justify-center pt-1">
-                        <QrImage text={e.uri} />
-                      </div>
-                    )}
-                  </div>
+                    entry={e}
+                    preferred={preferred}
+                    onPreferred={choose}
+                  />
                 ))}
               </div>
             </ModalBody>
