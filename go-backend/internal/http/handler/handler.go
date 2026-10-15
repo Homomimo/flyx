@@ -215,6 +215,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/inbound/reset-traffic", h.inboundResetTraffic)
 	mux.HandleFunc("/api/v1/inbound/regenerate", h.inboundRegenerate)
 	mux.HandleFunc("/api/v1/inbound/share", h.inboundShare)
+	mux.HandleFunc("/api/v1/inbound/import", h.inboundImport)
+	mux.HandleFunc("/api/v1/inbound/external/update", h.inboundExternalUpdate)
 	mux.HandleFunc("/api/v1/inbound/sub/info", h.inboundSubInfo)
 	mux.HandleFunc("/api/v1/inbound/relay/list", h.inboundRelayList)
 	mux.HandleFunc("/api/v1/inbound/relay/create", h.inboundRelayCreate)

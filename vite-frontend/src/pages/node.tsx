@@ -395,10 +395,6 @@ export default function NodePage() {
   const [installCommandModal, setInstallCommandModal] = useState(false);
   const [installCommand, setInstallCommand] = useState("");
   const [currentNodeName, setCurrentNodeName] = useState("");
-  const [installSelectorOpen, setInstallSelectorOpen] = useState(false);
-  const [installTargetNode, setInstallTargetNode] = useState<Node | null>(null);
-  const [installChannel, setInstallChannel] =
-    useState<ReleaseChannel>("stable");
 
   // 升级相关状态
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
@@ -1019,11 +1015,9 @@ export default function NodePage() {
     }
   };
 
-  const openInstallSelector = (node: Node) => {
-    setInstallTargetNode(node);
-    setInstallChannel("stable");
-    setInstallSelectorOpen(true);
-  };
+  // Only the stable channel is published, so there is nothing to choose.
+  const openInstallSelector = (node: Node) =>
+    handleCopyInstallCommand(node, "stable");
 
   // 复制安装命令
   const handleCopyInstallCommand = async (
@@ -1041,9 +1035,7 @@ export default function NodePage() {
         const copied = await tryCopyInstallCommand(res.data);
 
         if (copied) {
-          toast.success(
-            `${channel === "stable" ? "正式版" : "测试版"}安装命令已复制到剪贴板`,
-          );
+          toast.success("安装命令已复制到剪贴板");
         } else {
           setInstallCommand(res.data);
           setCurrentNodeName(node.name);
@@ -1059,13 +1051,6 @@ export default function NodePage() {
         prev.map((n) => (n.id === node.id ? { ...n, copyLoading: false } : n)),
       );
     }
-  };
-
-  const handleConfirmInstallCommand = async () => {
-    if (!installTargetNode) return;
-
-    setInstallSelectorOpen(false);
-    await handleCopyInstallCommand(installTargetNode, installChannel);
   };
 
   // 手动复制安装命令
@@ -3232,58 +3217,6 @@ export default function NodePage() {
         </ModalContent>
       </Modal>
 
-      <Modal
-        backdrop="blur"
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={installSelectorOpen}
-        placement="center"
-        size="md"
-        onOpenChange={setInstallSelectorOpen}
-      >
-        <ModalContent>
-          {(onClose) => (
-            <>
-              <ModalHeader className="flex flex-col gap-1">
-                <h2 className="text-xl font-bold">
-                  选择安装通道
-                  {installTargetNode ? ` - ${installTargetNode.name}` : ""}
-                </h2>
-              </ModalHeader>
-              <ModalBody>
-                <div className="space-y-4">
-                  <Select
-                    label="版本通道"
-                    selectedKeys={[installChannel]}
-                    onSelectionChange={(keys) => {
-                      const selected = Array.from(keys)[0] as ReleaseChannel;
-
-                      setInstallChannel(selected || "stable");
-                    }}
-                  >
-                    <SelectItem key="stable" textValue="stable">
-                      正式版（纯数字版本，如 2.1.4）
-                    </SelectItem>
-                    <SelectItem key="dev" textValue="dev">
-                      测试版（含 alpha / beta / rc）
-                    </SelectItem>
-                  </Select>
-                </div>
-              </ModalBody>
-              <ModalFooter>
-                <Button variant="light" onPress={onClose}>
-                  取消
-                </Button>
-                <Button color="primary" onPress={handleConfirmInstallCommand}>
-                  生成命令
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
-
       {/* 安装命令模态框 */}
       <Modal
         backdrop="blur"
@@ -3371,27 +3304,8 @@ export default function NodePage() {
                 ) : (
                   <div className="space-y-4">
                     <Select
-                      label="版本通道"
-                      selectedKeys={[releaseChannel]}
-                      onSelectionChange={(keys) => {
-                        const selected =
-                          (Array.from(keys)[0] as ReleaseChannel) || "stable";
-
-                        setReleaseChannel(selected);
-                        setSelectedVersion("");
-                        void loadReleasesByChannel(selected);
-                      }}
-                    >
-                      <SelectItem key="stable" textValue="stable">
-                        正式版（纯数字版本，如 2.1.4）
-                      </SelectItem>
-                      <SelectItem key="dev" textValue="dev">
-                        测试版（含 alpha / beta / rc）
-                      </SelectItem>
-                    </Select>
-                    <Select
                       label="选择版本"
-                      placeholder="留空则使用当前通道最新版本"
+                      placeholder="留空则使用最新版本"
                       selectedKeys={selectedVersion ? [selectedVersion] : []}
                       onSelectionChange={(keys) => {
                         const selected = Array.from(keys)[0] as string;
@@ -3425,7 +3339,7 @@ export default function NodePage() {
                     <p className="text-sm text-default-500">
                       {selectedVersion
                         ? `将升级到版本 ${selectedVersion}`
-                        : `未选择版本，将自动使用最新${releaseChannel === "stable" ? "正式" : "测试"}版`}
+                        : "未选择版本，将自动使用最新版"}
                     </p>
                   </div>
                 )}

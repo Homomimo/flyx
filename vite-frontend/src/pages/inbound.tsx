@@ -35,6 +35,11 @@ import {
   useGroupBy,
 } from "@/pages/inbound/group";
 import { ActionSheet } from "@/pages/inbound/action-sheet";
+import {
+  EXTERNAL_LABEL,
+  ExternalEditModal,
+  ImportModal,
+} from "@/pages/inbound/external";
 import { InboundFormModal } from "@/pages/inbound/inbound-form-modal";
 import { type InstallRequest, KernelPanel } from "@/pages/inbound/kernel-panel";
 import { RelayModal } from "@/pages/inbound/relay-modal";
@@ -185,6 +190,8 @@ export default function InboundPage() {
   const [nodeFilter, setNodeFilter] = useState("");
   const [tab, setTab] = usePageTab();
   const [sheetFor, setSheetFor] = useState<number | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [externalEdit, setExternalEdit] = useState<InboundApiItem | null>(null);
 
   const [formOpen, setFormOpen] = useState(false);
   const [formInitial, setFormInitial] = useState<InboundForm>(() =>
@@ -218,7 +225,12 @@ export default function InboundPage() {
         if (nodeRes.code === 0) setNodes(nodeRes.data || []);
         if (kernelRes.code === 0) {
           setKernels(kernelRes.data || []);
-          if (initial && (kernelRes.data || []).length === 0) {
+          if (
+            initial &&
+            (kernelRes.data || []).length === 0 &&
+            inboundRes.code === 0 &&
+            (inboundRes.data || []).length === 0
+          ) {
             setTab("kernels");
           }
         }
@@ -247,7 +259,10 @@ export default function InboundPage() {
     const map = new Map<string, string>();
 
     for (const i of inbounds) {
-      map.set(String(i.nodeId), i.nodeName || `节点 ${i.nodeId}`);
+      map.set(
+        String(i.nodeId),
+        i.external ? EXTERNAL_LABEL : i.nodeName || `节点 ${i.nodeId}`,
+      );
     }
 
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "zh-CN"));
@@ -269,11 +284,18 @@ export default function InboundPage() {
 
   const inboundGroups = groupItems(
     filtered,
-    (i) => (groupBy === "node" ? String(i.nodeId) : i.kernelType),
+    (i) =>
+      i.external
+        ? "external"
+        : groupBy === "node"
+          ? String(i.nodeId)
+          : i.kernelType,
     (_key, i) =>
-      groupBy === "node"
-        ? i.nodeName || `节点 ${i.nodeId}`
-        : (KERNEL_LABELS[i.kernelType] ?? i.kernelType),
+      i.external
+        ? EXTERNAL_LABEL
+        : groupBy === "node"
+          ? i.nodeName || `节点 ${i.nodeId}`
+          : (KERNEL_LABELS[i.kernelType] ?? i.kernelType),
   );
   const showGroupToggle =
     new Set(inbounds.map((i) => i.nodeId)).size > 1 ||
@@ -348,10 +370,15 @@ export default function InboundPage() {
   };
 
   const renderInbound = (item: InboundApiItem) => {
-    const running = item.enabled && item.kernelStatus === "running";
-    const kernelBad = item.enabled && item.kernelStatus !== "running";
-    const where =
-      groupBy === "node" && showGroupToggle
+    const running =
+      item.enabled && (item.external || item.kernelStatus === "running");
+    const kernelBad =
+      item.enabled && !item.external && item.kernelStatus !== "running";
+    const where = item.external
+      ? showGroupToggle
+        ? item.listen
+        : EXTERNAL_LABEL
+      : groupBy === "node" && showGroupToggle
         ? (KERNEL_LABELS[item.kernelType] ?? item.kernelType)
         : item.nodeName;
 
@@ -548,16 +575,24 @@ export default function InboundPage() {
             {showGroupToggle && (
               <GroupToggle value={groupBy} onChange={setGroupBy} />
             )}
-            <Button
-              className="ml-auto"
-              color="primary"
-              isDisabled={kernels.length === 0}
-              size="sm"
-              variant="flat"
-              onPress={openCreate}
-            >
-              新建入站
-            </Button>
+            <div className="ml-auto flex gap-2">
+              <Button
+                size="sm"
+                variant="flat"
+                onPress={() => setImportOpen(true)}
+              >
+                导入
+              </Button>
+              <Button
+                color="primary"
+                isDisabled={kernels.length === 0}
+                size="sm"
+                variant="flat"
+                onPress={openCreate}
+              >
+                新建入站
+              </Button>
+            </div>
           </div>
 
           {filtered.length === 0 ? (
@@ -567,13 +602,13 @@ export default function InboundPage() {
                   {inbounds.length === 0 ? "暂无入站" : "没有匹配的入站"}
                 </h3>
                 <p className="text-default-500 text-sm max-w-sm">
-                  {kernels.length === 0
-                    ? "先为落地节点安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站。"
+                  {kernels.length === 0 && inbounds.length === 0
+                    ? "先为落地节点安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站；也可以点“导入”，导入别处搭好的 ss 节点用来对接中转。"
                     : inbounds.length === 0
                       ? "点击“新建入站”，选择一个模板即可快速创建。"
                       : "换个关键词或节点试试。"}
                 </p>
-                {kernels.length === 0 && (
+                {kernels.length === 0 && inbounds.length === 0 && (
                   <Button
                     color="primary"
                     size="sm"
@@ -629,7 +664,7 @@ export default function InboundPage() {
 
       <ActionSheet
         actions={
-          sheetItem
+          sheetItem?.external
             ? [
                 {
                   key: "share",
@@ -651,19 +686,7 @@ export default function InboundPage() {
                 {
                   key: "edit",
                   label: "编辑",
-                  onPress: () => openEdit(sheetItem),
-                },
-                {
-                  key: "reset",
-                  label: "重置流量",
-                  onPress: () =>
-                    setConfirm({ action: "reset", item: sheetItem }),
-                },
-                {
-                  key: "regenerate",
-                  label: "换密钥",
-                  onPress: () =>
-                    setConfirm({ action: "regenerate", item: sheetItem }),
+                  onPress: () => setExternalEdit(sheetItem),
                 },
                 {
                   key: "delete",
@@ -673,12 +696,56 @@ export default function InboundPage() {
                     setConfirm({ action: "delete", item: sheetItem }),
                 },
               ]
-            : []
+            : sheetItem
+              ? [
+                  {
+                    key: "share",
+                    label: "分享",
+                    color: "primary" as const,
+                    onPress: () => setSharing(sheetItem),
+                  },
+                  {
+                    key: "relay",
+                    label: "中转",
+                    color: "secondary" as const,
+                    onPress: () => setRelaying(sheetItem),
+                  },
+                  {
+                    key: "details",
+                    label: "参数",
+                    onPress: () => setDetails(sheetItem),
+                  },
+                  {
+                    key: "edit",
+                    label: "编辑",
+                    onPress: () => openEdit(sheetItem),
+                  },
+                  {
+                    key: "reset",
+                    label: "重置流量",
+                    onPress: () =>
+                      setConfirm({ action: "reset", item: sheetItem }),
+                  },
+                  {
+                    key: "regenerate",
+                    label: "换密钥",
+                    onPress: () =>
+                      setConfirm({ action: "regenerate", item: sheetItem }),
+                  },
+                  {
+                    key: "delete",
+                    label: "删除",
+                    color: "danger" as const,
+                    onPress: () =>
+                      setConfirm({ action: "delete", item: sheetItem }),
+                  },
+                ]
+              : []
         }
         isOpen={Boolean(sheetItem)}
         subtitle={
           sheetItem &&
-          `${sheetItem.nodeName} · ${
+          `${sheetItem.external ? EXTERNAL_LABEL : sheetItem.nodeName} · ${
             sheetItem.listen === "::" || sheetItem.listen === "0.0.0.0"
               ? ""
               : `${sheetItem.listen}:`
@@ -694,7 +761,10 @@ export default function InboundPage() {
                 {describeInbound(sheetItem)}
               </Chip>
               <Chip size="sm" variant="flat">
-                {KERNEL_LABELS[sheetItem.kernelType] ?? sheetItem.kernelType}
+                {sheetItem.external
+                  ? "导入"
+                  : (KERNEL_LABELS[sheetItem.kernelType] ??
+                    sheetItem.kernelType)}
               </Chip>
               {sheetItem.relayOnly && (
                 <Chip size="sm" variant="flat">
@@ -719,6 +789,11 @@ export default function InboundPage() {
                 {formatTraffic(sheetItem.downloadBytes)}
               </span>
             </div>
+            {sheetItem.external && (
+              <p className="text-xs text-default-500">
+                没有流量统计；原服务器上的配置变了，请在“编辑”里同步
+              </p>
+            )}
             {sheetItem.remark && (
               <p className="text-xs text-default-500">{sheetItem.remark}</p>
             )}
@@ -727,6 +802,17 @@ export default function InboundPage() {
       </ActionSheet>
 
       <ShareModal item={sharing} onClose={() => setSharing(null)} />
+      <ImportModal
+        isOpen={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => loadData(false)}
+      />
+      <ExternalEditModal
+        item={externalEdit}
+        ssMethods={caps?.ssMethods ?? []}
+        onClose={() => setExternalEdit(null)}
+        onSaved={() => loadData(false)}
+      />
       <RelayModal
         item={relaying}
         onChanged={() => loadData(false)}
@@ -829,7 +915,9 @@ export default function InboundPage() {
                     </span>
                   </p>
                   <p className="text-small text-default-500">
-                    {CONFIRM_TEXT[confirm.action].body}
+                    {confirm.item.external && confirm.action === "delete"
+                      ? "只删除面板里的记录和相关中转，原服务器上的节点不受影响。"
+                      : CONFIRM_TEXT[confirm.action].body}
                   </p>
                 </ModalBody>
                 <ModalFooter>

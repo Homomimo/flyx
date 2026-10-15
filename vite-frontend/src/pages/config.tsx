@@ -52,7 +52,6 @@ import {
 import {
   type UpdateReleaseChannel,
   getUpdateReleaseChannel,
-  setUpdateReleaseChannel,
 } from "@/utils/version-update";
 import {
   convertBrandAssetToPngDataURL,
@@ -323,18 +322,12 @@ export default function ConfigPage() {
   });
   const [announcementLoading, setAnnouncementLoading] = useState(true);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
-  const [updateChannel, setUpdateChannel] = useState<UpdateReleaseChannel>(
-    getUpdateReleaseChannel(),
-  );
+  const updateChannel: UpdateReleaseChannel = getUpdateReleaseChannel();
   const [systemUpgradeInfo, setSystemUpgradeInfo] =
     useState<SystemUpgradeVersionApiData | null>(null);
   const [systemUpgradeChecking, setSystemUpgradeChecking] = useState(false);
   const [systemUpgradeExecuting, setSystemUpgradeExecuting] = useState(false);
   const [systemUpgradeLoading, setSystemUpgradeLoading] = useState(true);
-  const [systemUpgradeLog, setSystemUpgradeLog] = useState<{
-    text: string;
-    time: number;
-  } | null>(null);
   const [systemUpgradeModalOpen, setSystemUpgradeModalOpen] = useState(false);
   const [systemUpgradeReleases, setSystemUpgradeReleases] = useState<
     SystemUpgradeReleaseApiItem[]
@@ -450,14 +443,6 @@ export default function ConfigPage() {
       const response = await getSystemUpgradeVersion();
 
       if (response.code === 0 && response.data) {
-        setSystemUpgradeLog(
-          response.data.lastLog
-            ? {
-                text: response.data.lastLog,
-                time: response.data.lastLogTime ?? 0,
-              }
-            : null,
-        );
         setSystemUpgradeInfo({
           ...response.data,
           channel,
@@ -518,18 +503,6 @@ export default function ConfigPage() {
     } finally {
       setAnnouncementSaving(false);
     }
-  };
-
-  const handleUpdateChannelChange = (channel: UpdateReleaseChannel) => {
-    setUpdateChannel(channel);
-    setUpdateReleaseChannel(channel);
-    setSystemUpgradeSelectedVersion("");
-    setSystemUpgradeReleases([]);
-    setSystemUpgradeCheckedChannel(null);
-    void loadSystemUpgradeInfo(channel);
-    toast.success(
-      `更新通道已切换为${channel === "stable" ? "稳定版" : "开发版"}`,
-    );
   };
 
   const handleCheckSystemUpgrade = async () => {
@@ -598,10 +571,7 @@ export default function ConfigPage() {
       if (response.code === 0 && response.data) {
         setSystemUpgradeModalOpen(false);
         setSystemUpgradeSelectedVersion("");
-        toast.success(
-          "升级已开始，约 1 分钟后刷新页面；如果版本没有变化，可在“上次升级日志”里查看原因",
-          { duration: 8000 },
-        );
+        toast.success("升级已开始，约 1 分钟后刷新页面", { duration: 8000 });
       } else {
         toast.error(response.msg || "面板升级失败");
       }
@@ -1530,43 +1500,6 @@ export default function ConfigPage() {
           <div className="space-y-3">
             <div className="flex flex-col gap-1">
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                更新通道
-              </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                稳定版仅匹配纯数字版本；开发版仅匹配包含 alpha / beta / rc
-                的版本。
-              </p>
-            </div>
-
-            <Select
-              aria-label="更新通道"
-              selectedKeys={[updateChannel]}
-              size="md"
-              variant="bordered"
-              onSelectionChange={(keys) => {
-                const selected =
-                  (Array.from(keys)[0] as UpdateReleaseChannel) || "stable";
-
-                handleUpdateChannelChange(selected);
-              }}
-            >
-              <SelectItem key="stable" description="仅纯数字版本，如 2.1.4">
-                稳定版
-              </SelectItem>
-              <SelectItem
-                key="dev"
-                description="仅 alpha / beta / rc 关键字版本"
-              >
-                开发版
-              </SelectItem>
-            </Select>
-          </div>
-
-          <Divider className="my-2" />
-
-          <div className="space-y-3">
-            <div className="flex flex-col gap-1">
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 数据库占用
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -1611,18 +1544,6 @@ export default function ConfigPage() {
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-default-500">当前通道</p>
-                    <p className="mt-1 font-medium">
-                      {systemUpgradeInfo?.channel === "dev"
-                        ? "开发版"
-                        : systemUpgradeInfo?.channel === "stable"
-                          ? "稳定版"
-                          : updateChannel === "dev"
-                            ? "开发版"
-                            : "稳定版"}
-                    </p>
-                  </div>
-                  <div>
                     <p className="text-xs text-default-500">升级能力</p>
                     <p className="mt-1 font-medium">
                       {systemUpgradeInfo?.capability.capable
@@ -1661,22 +1582,6 @@ export default function ConfigPage() {
                       ))}
                     </ul>
                   </div>
-                )}
-
-                {systemUpgradeLog && (
-                  <details className="rounded-lg border border-divider px-4 py-3">
-                    <summary className="cursor-pointer text-xs font-medium text-default-600">
-                      上次升级日志
-                      {systemUpgradeLog.time > 0 &&
-                        `（${new Date(systemUpgradeLog.time).toLocaleString()}）`}
-                      {/错误|失败|error/i.test(systemUpgradeLog.text) && (
-                        <span className="ml-2 text-danger">有错误</span>
-                      )}
-                    </summary>
-                    <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap break-all text-xs font-mono text-default-600">
-                      {systemUpgradeLog.text}
-                    </pre>
-                  </details>
                 )}
 
                 <div className="space-y-3">

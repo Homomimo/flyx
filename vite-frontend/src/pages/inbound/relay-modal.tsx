@@ -222,20 +222,34 @@ export function RelayModal({
                         key={rel.id}
                         className="flex items-center justify-between gap-3 rounded-xl border border-divider px-3 py-2"
                       >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium truncate">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="min-w-0 font-medium truncate">
                               {rel.name}
                             </span>
-                            <Chip size="sm" variant="flat">
+                            <Chip
+                              className="shrink-0 whitespace-nowrap"
+                              size="sm"
+                              variant="flat"
+                            >
                               {rel.mode === "tunnel" ? "隧道转发" : "端口转发"}
                             </Chip>
                             {!rel.forwardExists ? (
-                              <Chip color="danger" size="sm" variant="flat">
+                              <Chip
+                                className="shrink-0 whitespace-nowrap"
+                                color="danger"
+                                size="sm"
+                                variant="flat"
+                              >
                                 转发已删除
                               </Chip>
                             ) : rel.forwardStatus !== 1 ? (
-                              <Chip color="warning" size="sm" variant="flat">
+                              <Chip
+                                className="shrink-0 whitespace-nowrap"
+                                color="warning"
+                                size="sm"
+                                variant="flat"
+                              >
                                 转发已暂停
                               </Chip>
                             ) : null}
