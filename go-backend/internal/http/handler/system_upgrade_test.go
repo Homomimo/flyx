@@ -435,3 +435,19 @@ func TestSystemUpgradeVersionDataSurfacesLookupFailureReason(t *testing.T) {
 		t.Fatalf("expected reason field in JSON, got %s", string(data))
 	}
 }
+
+func TestLastUpgradeLogTail(t *testing.T) {
+	dir := t.TempDir()
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+	if text, _ := exec.lastUpgradeLog(3); text != "" {
+		t.Fatalf("no log yet, got %q", text)
+	}
+	content := "\n[1] 开始面板升级\n[2] 拉取新镜像...\n[3] 错误: 拉取镜像失败\n[4] x\n"
+	if err := os.WriteFile(filepath.Join(dir, "upgrade.log"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	text, ts := exec.lastUpgradeLog(3)
+	if text != "[2] 拉取新镜像...\n[3] 错误: 拉取镜像失败\n[4] x" || ts == 0 {
+		t.Fatalf("tail: %q %d", text, ts)
+	}
+}

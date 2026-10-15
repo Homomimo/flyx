@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "react-hot-toast";
 
+import { copyWithToast } from "@/utils/clipboard";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Tabs, Tab } from "@/shadcn-bridge/heroui/tabs";
@@ -397,8 +398,7 @@ export default function PanelSharingPage() {
   };
 
   const copyToken = (token: string) => {
-    navigator.clipboard.writeText(token);
-    toast.success("Token已复制");
+    void copyWithToast(token, "Token已复制");
   };
 
   const formatFlowGB = formatTraffic;

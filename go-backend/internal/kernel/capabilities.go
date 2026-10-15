@@ -81,6 +81,9 @@ type Info struct {
 	// Versions, when set, is the closed list of installable versions (the
 	// first is the default); otherwise any version or "latest" is allowed.
 	Versions []string `json:"versions,omitempty"`
+	// ReleaseRepo is the GitHub repository whose releases list the
+	// installable versions when Versions is empty.
+	ReleaseRepo string `json:"-"`
 	// CertModes lists the TLS certificate sources the kernel supports.
 	CertModes []string  `json:"certModes"`
 	Download  *Download `json:"-"`
@@ -154,6 +157,7 @@ var catalog = []Info{
 		Type:        TypeXray,
 		Name:        "Xray",
 		Implemented: true,
+		ReleaseRepo: "XTLS/Xray-core",
 		CertModes:   []string{"self", "file"},
 		Download:    xrayDownload,
 		Protocols: []ProtocolCap{
@@ -182,6 +186,7 @@ var catalog = []Info{
 		Type:        TypeSingbox,
 		Name:        "sing-box",
 		Implemented: true,
+		ReleaseRepo: "SagerNet/sing-box",
 		CertModes:   []string{"self", "file", "acme"},
 		Download:    singboxDownload,
 		Protocols: []ProtocolCap{

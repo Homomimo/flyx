@@ -2,6 +2,7 @@ import { useState } from "react";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
 
+import { copyWithToast } from "@/utils/clipboard";
 import { AnimatedPage } from "@/components/animated-page";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -581,12 +582,7 @@ export default function DashboardPage() {
   };
 
   const copyToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success(`已复制`);
-    } catch {
-      toast.error("复制失败");
-    }
+    await copyWithToast(text);
   };
 
   const copyAddress = async (addressItem: AddressItem) => {

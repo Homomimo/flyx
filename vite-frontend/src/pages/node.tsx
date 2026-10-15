@@ -71,6 +71,7 @@ import {
   getRemoteSyncErrorMessage,
 } from "@/pages/node/display";
 import { tryCopyInstallCommand } from "@/pages/node/install-command";
+import { copyWithToast } from "@/utils/clipboard";
 import {
   getNodeRenewalSnapshot,
   formatNodeRenewalTime,
@@ -1069,12 +1070,8 @@ export default function NodePage() {
 
   // 手动复制安装命令
   const handleManualCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(installCommand);
-      toast.success("安装命令已复制到剪贴板");
+    if (await copyWithToast(installCommand, "安装命令已复制到剪贴板")) {
       setInstallCommandModal(false);
-    } catch {
-      toast.error("复制失败，请手动选择文本复制");
     }
   };
 

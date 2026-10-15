@@ -544,6 +544,8 @@ export interface SystemUpgradeVersionApiData {
   channel: "stable" | "dev";
   reason?: string;
   capability: SystemUpgradeCapabilityApiData;
+  lastLog?: string;
+  lastLogTime?: number;
 }
 
 export interface SystemUpgradeCheckApiData extends SystemUpgradeVersionApiData {
@@ -718,6 +720,7 @@ export interface InboundSecurity {
   realityPrivateKey?: string;
   realityPublicKey?: string;
   realityShortIds?: string[];
+  realityMinClientVer?: string;
   shadowTlsPassword?: string;
   acmeEmail?: string;
   acmeDns?: string;

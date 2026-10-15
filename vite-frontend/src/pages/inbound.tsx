@@ -27,6 +27,13 @@ import {
 import { PageLoadingState } from "@/components/page-state";
 import { SearchBar } from "@/components/search-bar";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import {
+  GroupHeader,
+  GroupToggle,
+  groupItems,
+  useCollapsed,
+  useGroupBy,
+} from "@/pages/inbound/group";
 import { InboundFormModal } from "@/pages/inbound/inbound-form-modal";
 import { type InstallRequest, KernelPanel } from "@/pages/inbound/kernel-panel";
 import { RelayModal } from "@/pages/inbound/relay-modal";
@@ -140,6 +147,8 @@ export default function InboundPage() {
   const [nodes, setNodes] = useState<NodeApiItem[]>([]);
   const [kernels, setKernels] = useState<KernelApiItem[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
+  const [groupBy, setGroupBy] = useGroupBy();
+  const [isCollapsed, toggleCollapsed] = useCollapsed();
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
     "inbound-search-keyword",
     "",
@@ -275,14 +284,181 @@ export default function InboundPage() {
     }
   };
 
+  const renderInbound = (item: InboundApiItem) => {
+    const kst = KERNEL_STATUS[item.kernelStatus];
+    const running = item.enabled && item.kernelStatus === "running";
+
+    return (
+      <StaggerItem key={item.id}>
+        <Card className="shadow-sm h-full">
+          <CardHeader className="pb-2 md:pb-2">
+            <div className="flex justify-between items-start w-full gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`shrink-0 w-2 h-2 rounded-full ${
+                      running
+                        ? "bg-success"
+                        : item.enabled
+                          ? "bg-warning"
+                          : "bg-default-300"
+                    }`}
+                  />
+                  <h3 className="font-semibold truncate">{item.name}</h3>
+                </div>
+                <p className="text-xs text-default-500 truncate mt-0.5">
+                  {item.nodeName} ·{" "}
+                  {item.listen === "::" ? "" : `${item.listen}:`}
+                  {item.port}
+                </p>
+              </div>
+              <Switch
+                isDisabled={toggling === item.id}
+                isSelected={item.enabled}
+                size="sm"
+                onValueChange={() => handleToggle(item)}
+              />
+            </div>
+          </CardHeader>
+          <CardBody className="pt-0 space-y-3">
+            <div className="flex flex-wrap gap-1.5">
+              <Chip color="primary" size="sm" variant="flat">
+                {describeInbound(item)}
+              </Chip>
+              <Chip size="sm" variant="flat">
+                {KERNEL_LABELS[item.kernelType] ?? item.kernelType}
+              </Chip>
+              {item.relayCount > 0 && (
+                <Chip color="secondary" size="sm" variant="flat">
+                  {item.relayCount} 个中转
+                </Chip>
+              )}
+              {item.relayOnly && (
+                <Chip size="sm" variant="flat">
+                  仅中转
+                </Chip>
+              )}
+              {item.acceptProxyProtocol && (
+                <Chip size="sm" variant="flat">
+                  真实 IP
+                </Chip>
+              )}
+              {item.relayWhitelist && (
+                <Chip color="warning" size="sm" variant="flat">
+                  白名单
+                </Chip>
+              )}
+              {item.enabled && kst && item.kernelStatus !== "running" && (
+                <Chip color={kst.color} size="sm" variant="flat">
+                  内核{kst.label}
+                </Chip>
+              )}
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-default-500">流量</span>
+              <span className="font-mono text-xs">
+                ↑ {formatTraffic(item.uploadBytes)} · ↓{" "}
+                {formatTraffic(item.downloadBytes)}
+              </span>
+            </div>
+            {item.remark && (
+              <p className="text-xs text-default-500 line-clamp-2">
+                {item.remark}
+              </p>
+            )}
+            <div className="grid grid-cols-4 gap-1.5">
+              <Button
+                className="w-full min-w-0 px-1"
+                color="primary"
+                size="sm"
+                variant="flat"
+                onPress={() => setSharing(item)}
+              >
+                分享
+              </Button>
+              <Button
+                className="w-full min-w-0 px-1"
+                color="secondary"
+                size="sm"
+                variant="flat"
+                onPress={() => setRelaying(item)}
+              >
+                中转
+              </Button>
+              <Button
+                className="w-full min-w-0 px-1"
+                size="sm"
+                variant="flat"
+                onPress={() => setDetails(item)}
+              >
+                参数
+              </Button>
+              <Button
+                className="w-full min-w-0 px-1"
+                size="sm"
+                variant="flat"
+                onPress={() => openEdit(item)}
+              >
+                编辑
+              </Button>
+              <Button
+                className="w-full min-w-0 px-1"
+                size="sm"
+                variant="flat"
+                onPress={() => setConfirm({ action: "reset", item })}
+              >
+                重置流量
+              </Button>
+              <Button
+                className="w-full min-w-0 px-1"
+                size="sm"
+                variant="flat"
+                onPress={() => setConfirm({ action: "regenerate", item })}
+              >
+                换密钥
+              </Button>
+              <Button
+                className="w-full min-w-0 px-1"
+                color="danger"
+                size="sm"
+                variant="flat"
+                onPress={() => setConfirm({ action: "delete", item })}
+              >
+                删除
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      </StaggerItem>
+    );
+  };
+  const inboundGroups = groupItems(
+    filtered,
+    (i) => (groupBy === "node" ? String(i.nodeId) : i.kernelType),
+    (_key, i) =>
+      groupBy === "node"
+        ? i.nodeName || `节点 ${i.nodeId}`
+        : (KERNEL_LABELS[i.kernelType] ?? i.kernelType),
+  );
+  const showGroupToggle =
+    new Set(kernels.map((k) => k.nodeId)).size > 1 ||
+    new Set(kernels.map((k) => k.kernelType)).size > 1;
+
   if (loading) {
     return <PageLoadingState message="正在加载..." />;
   }
 
   return (
     <AnimatedPage className="px-3 lg:px-6 py-8">
+      {showGroupToggle && (
+        <div className="mb-4 flex items-center justify-end gap-2">
+          <span className="text-xs text-default-500">分组</span>
+          <GroupToggle value={groupBy} onChange={setGroupBy} />
+        </div>
+      )}
       <KernelPanel
         caps={caps}
+        groupBy={groupBy}
         installRequest={installRequest}
         kernels={kernels}
         nodes={nodes}
@@ -326,163 +502,42 @@ export default function InboundPage() {
             </p>
           </CardBody>
         </Card>
-      ) : (
+      ) : inboundGroups.length <= 1 ? (
         <StaggerList className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map((item) => {
-            const kst = KERNEL_STATUS[item.kernelStatus];
-            const running = item.enabled && item.kernelStatus === "running";
+          {filtered.map(renderInbound)}
+        </StaggerList>
+      ) : (
+        <div className="space-y-1">
+          {inboundGroups.map((g) => {
+            const id = `inbound:${groupBy}:${g.key}`;
+            const folded = isCollapsed(id);
+            const off = g.items.filter((i) => !i.enabled).length;
 
             return (
-              <StaggerItem key={item.id}>
-                <Card className="shadow-sm h-full">
-                  <CardHeader className="pb-2 md:pb-2">
-                    <div className="flex justify-between items-start w-full gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`shrink-0 w-2 h-2 rounded-full ${
-                              running
-                                ? "bg-success"
-                                : item.enabled
-                                  ? "bg-warning"
-                                  : "bg-default-300"
-                            }`}
-                          />
-                          <h3 className="font-semibold truncate">
-                            {item.name}
-                          </h3>
-                        </div>
-                        <p className="text-xs text-default-500 truncate mt-0.5">
-                          {item.nodeName} ·{" "}
-                          {item.listen === "::" ? "" : `${item.listen}:`}
-                          {item.port}
-                        </p>
-                      </div>
-                      <Switch
-                        isDisabled={toggling === item.id}
-                        isSelected={item.enabled}
-                        size="sm"
-                        onValueChange={() => handleToggle(item)}
-                      />
-                    </div>
-                  </CardHeader>
-                  <CardBody className="pt-0 space-y-3">
-                    <div className="flex flex-wrap gap-1.5">
-                      <Chip color="primary" size="sm" variant="flat">
-                        {describeInbound(item)}
-                      </Chip>
+              <div key={g.key}>
+                <GroupHeader
+                  collapsed={folded}
+                  count={g.items.length}
+                  extra={
+                    off > 0 ? (
                       <Chip size="sm" variant="flat">
-                        {KERNEL_LABELS[item.kernelType] ?? item.kernelType}
+                        {off} 个已停用
                       </Chip>
-                      {item.relayCount > 0 && (
-                        <Chip color="secondary" size="sm" variant="flat">
-                          {item.relayCount} 个中转
-                        </Chip>
-                      )}
-                      {item.relayOnly && (
-                        <Chip size="sm" variant="flat">
-                          仅中转
-                        </Chip>
-                      )}
-                      {item.acceptProxyProtocol && (
-                        <Chip size="sm" variant="flat">
-                          真实 IP
-                        </Chip>
-                      )}
-                      {item.relayWhitelist && (
-                        <Chip color="warning" size="sm" variant="flat">
-                          白名单
-                        </Chip>
-                      )}
-                      {item.enabled &&
-                        kst &&
-                        item.kernelStatus !== "running" && (
-                          <Chip color={kst.color} size="sm" variant="flat">
-                            内核{kst.label}
-                          </Chip>
-                        )}
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-default-500">流量</span>
-                      <span className="font-mono text-xs">
-                        ↑ {formatTraffic(item.uploadBytes)} · ↓{" "}
-                        {formatTraffic(item.downloadBytes)}
-                      </span>
-                    </div>
-                    {item.remark && (
-                      <p className="text-xs text-default-500 line-clamp-2">
-                        {item.remark}
-                      </p>
-                    )}
-                    <div className="grid grid-cols-4 gap-1.5">
-                      <Button
-                        className="w-full min-w-0 px-1"
-                        color="primary"
-                        size="sm"
-                        variant="flat"
-                        onPress={() => setSharing(item)}
-                      >
-                        分享
-                      </Button>
-                      <Button
-                        className="w-full min-w-0 px-1"
-                        color="secondary"
-                        size="sm"
-                        variant="flat"
-                        onPress={() => setRelaying(item)}
-                      >
-                        中转
-                      </Button>
-                      <Button
-                        className="w-full min-w-0 px-1"
-                        size="sm"
-                        variant="flat"
-                        onPress={() => setDetails(item)}
-                      >
-                        参数
-                      </Button>
-                      <Button
-                        className="w-full min-w-0 px-1"
-                        size="sm"
-                        variant="flat"
-                        onPress={() => openEdit(item)}
-                      >
-                        编辑
-                      </Button>
-                      <Button
-                        className="w-full min-w-0 px-1"
-                        size="sm"
-                        variant="flat"
-                        onPress={() => setConfirm({ action: "reset", item })}
-                      >
-                        重置流量
-                      </Button>
-                      <Button
-                        className="w-full min-w-0 px-1"
-                        size="sm"
-                        variant="flat"
-                        onPress={() =>
-                          setConfirm({ action: "regenerate", item })
-                        }
-                      >
-                        换密钥
-                      </Button>
-                      <Button
-                        className="w-full min-w-0 px-1"
-                        color="danger"
-                        size="sm"
-                        variant="flat"
-                        onPress={() => setConfirm({ action: "delete", item })}
-                      >
-                        删除
-                      </Button>
-                    </div>
-                  </CardBody>
-                </Card>
-              </StaggerItem>
+                    ) : undefined
+                  }
+                  title={g.title}
+                  unit="个入站"
+                  onToggle={() => toggleCollapsed(id)}
+                />
+                {!folded && (
+                  <StaggerList className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 pb-3">
+                    {g.items.map(renderInbound)}
+                  </StaggerList>
+                )}
+              </div>
             );
           })}
-        </StaggerList>
+        </div>
       )}
 
       <ShareModal item={sharing} onClose={() => setSharing(null)} />
