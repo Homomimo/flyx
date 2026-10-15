@@ -13,6 +13,8 @@ interface TabItem {
   label: string;
   icon: React.ReactNode;
   adminOnly?: boolean;
+  // Admins reach it from the profile page instead, to keep the bar short.
+  userOnly?: boolean;
 }
 
 export default function H5Layout({ children }: { children: React.ReactNode }) {
@@ -79,6 +81,20 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
       adminOnly: true,
     },
     {
+      path: "/inbound",
+      label: "入站",
+      icon: (
+        <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+          <path
+            clipRule="evenodd"
+            d="M2 5a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm14 1a1 1 0 11-2 0 1 1 0 012 0zM2 13a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2zm14 1a1 1 0 11-2 0 1 1 0 012 0z"
+            fillRule="evenodd"
+          />
+        </svg>
+      ),
+      adminOnly: true,
+    },
+    {
       path: "/monitor",
       label: "监控",
       icon: (
@@ -90,6 +106,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
           />
         </svg>
       ),
+      userOnly: true,
     },
     {
       path: "/profile",
@@ -164,8 +181,8 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
   };
 
   // 过滤tab项（根据权限）
-  const filteredTabItems = tabItems.filter(
-    (item) => !item.adminOnly || isAdmin,
+  const filteredTabItems = tabItems.filter((item) =>
+    isAdmin ? !item.userOnly : !item.adminOnly,
   );
 
   return (

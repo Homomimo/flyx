@@ -42,19 +42,20 @@ func TestPublicConfigGetAllowsBrandKeys(t *testing.T) {
 	}
 }
 
-func TestPublicBrandConfigFallsBackWithoutCommercialLicense(t *testing.T) {
+func TestPublicBrandConfigReturnsSavedValues(t *testing.T) {
 	router, r := setupConfigAccessTestRouter(t)
-	seedConfigValue(t, r, "app_name", "Paid Brand")
+	seedConfigValue(t, r, "app_name", "My Panel")
 	seedConfigValue(t, r, "app_logo", "logo-data")
 	seedConfigValue(t, r, "app_favicon", "favicon-data")
 	seedConfigValue(t, r, "hide_footer_brand", "true")
+	// A leftover flag from the removed commercial license must not matter.
 	seedConfigValue(t, r, "is_commercial", "false")
 
 	for name, want := range map[string]string{
-		"app_name":          "FLVX",
-		"app_logo":          "",
-		"app_favicon":       "",
-		"hide_footer_brand": "false",
+		"app_name":          "My Panel",
+		"app_logo":          "logo-data",
+		"app_favicon":       "favicon-data",
+		"hide_footer_brand": "true",
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/public/config/get", bytes.NewBufferString(`{"name":"`+name+`"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -62,18 +63,6 @@ func TestPublicBrandConfigFallsBackWithoutCommercialLicense(t *testing.T) {
 		router.ServeHTTP(resp, req)
 		assertHandlerConfigValue(t, resp, name, want)
 	}
-}
-
-func TestPublicBrandConfigUsesSavedValuesWithCommercialLicense(t *testing.T) {
-	router, r := setupConfigAccessTestRouter(t)
-	seedConfigValue(t, r, "app_name", "Paid Brand")
-	seedConfigValue(t, r, "is_commercial", "true")
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/public/config/get", bytes.NewBufferString(`{"name":"app_name"}`))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-	router.ServeHTTP(resp, req)
-	assertHandlerConfigValue(t, resp, "app_name", "Paid Brand")
 }
 
 func TestPublicConfigGetRejectsSensitiveKeys(t *testing.T) {
