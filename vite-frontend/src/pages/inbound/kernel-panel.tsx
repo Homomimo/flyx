@@ -47,6 +47,8 @@ interface Props {
   onInstallRequestHandled: () => void;
   onChanged: () => void;
   groupBy: GroupBy;
+  /** Show foldable group headers (off when there is nothing to group). */
+  grouped: boolean;
 }
 
 function shortVersion(v: string): string {
@@ -63,6 +65,7 @@ export function KernelPanel({
   onInstallRequestHandled,
   onChanged,
   groupBy,
+  grouped,
 }: Props) {
   const [isCollapsed, toggleCollapsed] = useCollapsed();
   const [releases, setReleases] = useState<{
@@ -336,7 +339,7 @@ export function KernelPanel({
             还没有在任何节点上安装内核。先安装 Xray，再创建入站。
           </CardBody>
         </Card>
-      ) : groups.length <= 1 ? (
+      ) : !grouped ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {kernels.map(renderKernel)}
         </div>

@@ -459,6 +459,7 @@ export default function InboundPage() {
       <KernelPanel
         caps={caps}
         groupBy={groupBy}
+        grouped={showGroupToggle}
         installRequest={installRequest}
         kernels={kernels}
         nodes={nodes}
@@ -502,7 +503,7 @@ export default function InboundPage() {
             </p>
           </CardBody>
         </Card>
-      ) : inboundGroups.length <= 1 ? (
+      ) : !showGroupToggle ? (
         <StaggerList className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map(renderInbound)}
         </StaggerList>

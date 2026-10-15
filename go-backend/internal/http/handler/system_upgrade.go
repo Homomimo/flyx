@@ -39,6 +39,31 @@ var systemUpgradeHTTPGet = func(client *http.Client, url string) (*http.Response
 type systemUpgradeExecutor struct {
 	deployDir        string
 	backendContainer string
+	// composeProject is the Compose project the running containers belong
+	// to. It need not match the deploy directory's name (e.g. installed
+	// from /root, deployed in /opt/flvx-panel); without it Compose would
+	// try to create a second flux-panel-backend and hit a name conflict.
+	composeProject string
+}
+
+var composeProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// detectComposeProject reads the Compose project label of the backend
+// container, the same way panel_install.sh does.
+func (e *systemUpgradeExecutor) detectComposeProject(ctx context.Context) string {
+	if validateBackendContainerName(e.backendContainer) != nil {
+		return ""
+	}
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
+		`{{index .Config.Labels "com.docker.compose.project"}}`, e.backendContainer).Output()
+	if err != nil {
+		return ""
+	}
+	project := strings.TrimSpace(string(out))
+	if !composeProjectPattern.MatchString(project) {
+		return ""
+	}
+	return project
 }
 
 type systemUpgradeCapabilityData struct {
@@ -196,6 +221,7 @@ cd "$PANEL_DEPLOY_DIR"
 echo "" > "$LOGFILE"
 log "开始面板升级"
 log "工作目录: $(pwd)"
+log "Compose 项目: ${COMPOSE_PROJECT_NAME:-（按目录名）}"
 
 if [ ! -f docker-compose.yml ]; then
   log "错误: docker-compose.yml 不存在"
@@ -229,14 +255,19 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 	if err := validateBackendContainerName(e.backendContainer); err != nil {
 		return nil, err
 	}
-	return []string{
+	args := []string{
 		"run", "-d", "--rm", "--name", helperName,
 		"--volumes-from", e.backendContainer,
 		"-v", dockerSocketPath + ":" + dockerSocketPath,
 		"-e", panelDeployDirEnv + "=" + e.deployDir,
+	}
+	if composeProjectPattern.MatchString(e.composeProject) {
+		args = append(args, "-e", "COMPOSE_PROJECT_NAME="+e.composeProject)
+	}
+	return append(args,
 		"--entrypoint", "/bin/sh", imageID,
 		"-c", e.helperScript(),
-	}, nil
+	), nil
 }
 
 func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error {
@@ -671,6 +702,7 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "更新版本配置失败: "+err.Error()))
 		return
 	}
+	exec.composeProject = exec.detectComposeProject(r.Context())
 	helperName := fmt.Sprintf("flvx-upgrade-helper-%d", time.Now().Unix())
 	helperContainer, err := exec.startHelper(r.Context(), imageID, helperName)
 	if err != nil {

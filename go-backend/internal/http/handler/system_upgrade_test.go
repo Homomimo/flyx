@@ -451,3 +451,20 @@ func TestLastUpgradeLogTail(t *testing.T) {
 		t.Fatalf("tail: %q %d", text, ts)
 	}
 }
+
+func TestHelperRunArgsCarryComposeProject(t *testing.T) {
+	exec := &systemUpgradeExecutor{deployDir: "/opt/flvx-panel", backendContainer: "flux-panel-backend", composeProject: "root"}
+	args, err := exec.buildHelperRunArgs("sha256:abc", "helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-e COMPOSE_PROJECT_NAME=root") {
+		t.Fatalf("helper must reuse the running project: %v", args)
+	}
+	exec.composeProject = "bad name;rm"
+	args, _ = exec.buildHelperRunArgs("sha256:abc", "helper")
+	if strings.Contains(strings.Join(args, " "), "-e COMPOSE_PROJECT_NAME=") {
+		t.Fatalf("invalid project names must be dropped: %v", args)
+	}
+}
