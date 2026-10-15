@@ -10,6 +10,7 @@ import toast from "react-hot-toast";
 import { Copy } from "lucide-react";
 
 import {
+  batchDeleteInbounds,
   deleteInbound,
   getInboundList,
   getKernelCapabilities,
@@ -54,6 +55,7 @@ import {
 } from "@/pages/inbound/presets";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
+import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import {
   Modal,
@@ -218,6 +220,10 @@ export default function InboundPage() {
   } | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [toggling, setToggling] = useState<number | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   const loadData = useCallback(
     async (initial = false) => {
@@ -244,7 +250,15 @@ export default function InboundPage() {
           }
         }
         if (inboundRes.code === 0) {
-          setInbounds(inboundRes.data || []);
+          const rows = inboundRes.data || [];
+
+          setInbounds(rows);
+          setSelectedIds((prev) => {
+            if (prev.size === 0) return prev;
+            const alive = new Set(rows.map((i) => i.id));
+
+            return new Set([...prev].filter((id) => alive.has(id)));
+          });
         } else {
           toast.error(inboundRes.msg || "获取入站列表失败");
         }
@@ -378,6 +392,70 @@ export default function InboundPage() {
     }
   };
 
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((i) => selectedIds.has(i.id));
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+
+      for (const i of filtered) {
+        if (allFilteredSelected) next.delete(i.id);
+        else next.add(i.id);
+      }
+
+      return next;
+    });
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const runBatchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setBatchDeleting(true);
+    try {
+      const res = await batchDeleteInbounds([...selectedIds]);
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "删除失败");
+
+        return;
+      }
+      const { successCount = 0, failCount = 0 } = res.data ?? {};
+
+      if (res.msg && res.msg !== "操作成功") {
+        toast(res.msg, { icon: "⚠️" });
+      } else if (failCount > 0) {
+        toast(`已删除 ${successCount} 个，${failCount} 个失败`, {
+          icon: "⚠️",
+        });
+      } else {
+        toast.success(`已删除 ${successCount} 个入站`);
+      }
+      setBatchDeleteOpen(false);
+      exitSelectMode();
+      await loadData(false);
+    } catch {
+      toast.error("删除失败");
+    } finally {
+      setBatchDeleting(false);
+    }
+  };
+
   const renderInbound = (item: InboundApiItem) => {
     const running =
       item.enabled && (item.external || item.kernelStatus === "running");
@@ -391,21 +469,43 @@ export default function InboundPage() {
         ? (KERNEL_LABELS[item.kernelType] ?? item.kernelType)
         : item.nodeName;
 
+    const selected = selectMode && selectedIds.has(item.id);
+    const activate = () =>
+      selectMode ? toggleSelect(item.id) : setSheetFor(item.id);
+
     return (
       <div
         key={item.id}
-        className="flex w-full cursor-pointer items-center gap-3 rounded-xl border border-divider bg-content1 px-3 py-2.5 text-left shadow-sm transition-colors hover:bg-default-100"
+        aria-pressed={selectMode ? selected : undefined}
+        className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
+          selected
+            ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
+            : "border-divider bg-content1 hover:bg-default-100"
+        }`}
         role="button"
         tabIndex={0}
-        onClick={() => setSheetFor(item.id)}
+        onClick={activate}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setSheetFor(item.id);
+            activate();
           }
         }}
       >
+        {selectMode && (
+          <div
+            className="flex shrink-0"
+            role="presentation"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Checkbox
+              aria-label={`选择 ${item.name}`}
+              isSelected={selected}
+              onValueChange={() => toggleSelect(item.id)}
+            />
+          </div>
+        )}
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
             running
@@ -464,7 +564,7 @@ export default function InboundPage() {
           <div>↓ {formatTraffic(item.downloadBytes)}</div>
         </div>
         <div
-          className="hidden shrink-0 gap-1 md:flex"
+          className={`hidden shrink-0 gap-1 ${selectMode ? "" : "md:flex"}`}
           role="presentation"
           onClick={(e) => e.stopPropagation()}
         >
@@ -486,7 +586,7 @@ export default function InboundPage() {
           </Button>
         </div>
         <div
-          className="shrink-0"
+          className={`shrink-0 ${selectMode ? "hidden" : ""}`}
           role="presentation"
           onClick={(e) => e.stopPropagation()}
         >
@@ -599,6 +699,15 @@ export default function InboundPage() {
               <GroupToggle value={groupBy} onChange={setGroupBy} />
             )}
             <div className="ml-auto flex gap-2">
+              {inbounds.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  onPress={() => setSelectMode(true)}
+                >
+                  多选
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="flat"
@@ -617,6 +726,37 @@ export default function InboundPage() {
               </Button>
             </div>
           </div>
+
+          {selectMode && (
+            <div className="sticky top-0 z-10 mb-3 flex items-center gap-2 rounded-xl border border-divider bg-background/95 px-3 py-2 shadow-sm backdrop-blur">
+              <span className="text-sm text-default-600">
+                已选 {selectedIds.size} 个
+              </span>
+              <div className="ml-auto flex gap-2">
+                <Button
+                  color="primary"
+                  isDisabled={filtered.length === 0}
+                  size="sm"
+                  variant="flat"
+                  onPress={toggleSelectAll}
+                >
+                  {allFilteredSelected ? "取消全选" : "全选"}
+                </Button>
+                <Button
+                  color="danger"
+                  isDisabled={selectedIds.size === 0}
+                  size="sm"
+                  variant="flat"
+                  onPress={() => setBatchDeleteOpen(true)}
+                >
+                  删除
+                </Button>
+                <Button size="sm" variant="light" onPress={exitSelectMode}>
+                  完成
+                </Button>
+              </div>
+            </div>
+          )}
 
           {filtered.length === 0 ? (
             <Card className="shadow-sm bg-default-50/50">
@@ -958,6 +1098,53 @@ export default function InboundPage() {
               </>
             )
           }
+        </ModalContent>
+      </Modal>
+
+      <Modal
+        backdrop="blur"
+        classNames={{ base: modalBase }}
+        isOpen={batchDeleteOpen}
+        placement="center"
+        onOpenChange={(open) => !open && setBatchDeleteOpen(false)}
+      >
+        <ModalContent>
+          {(onClose) => {
+            const chosen = inbounds.filter((i) => selectedIds.has(i.id));
+            const panelOnly = chosen.every((i) => i.external);
+
+            return (
+              <>
+                <ModalHeader>
+                  <h2 className="text-lg font-bold text-danger">
+                    删除 {chosen.length} 个入站
+                  </h2>
+                </ModalHeader>
+                <ModalBody>
+                  <p className="max-h-40 overflow-y-auto text-small text-default-600 break-all">
+                    {chosen.map((i) => i.name).join("、")}
+                  </p>
+                  <p className="text-small text-default-500">
+                    {panelOnly
+                      ? "只删除面板里的记录和相关中转，原服务器上的节点不受影响。"
+                      : "相关中转会一并删除；面板创建的入站会在节点上立即停止，且无法恢复。"}
+                  </p>
+                </ModalBody>
+                <ModalFooter>
+                  <Button variant="light" onPress={onClose}>
+                    取消
+                  </Button>
+                  <Button
+                    color="danger"
+                    isLoading={batchDeleting}
+                    onPress={runBatchDelete}
+                  >
+                    确认删除
+                  </Button>
+                </ModalFooter>
+              </>
+            );
+          }}
         </ModalContent>
       </Modal>
     </AnimatedPage>

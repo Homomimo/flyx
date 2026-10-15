@@ -647,6 +647,8 @@ export const updateInbound = (data: InboundMutationPayload) =>
   Network.post<{ id: number }>("/inbound/update", data);
 export const deleteInbound = (id: number) =>
   Network.post("/inbound/delete", { id });
+export const batchDeleteInbounds = (ids: number[]) =>
+  Network.post<BatchOperationResult>("/inbound/batch-delete", { ids });
 export const toggleInbound = (id: number, enabled: boolean) =>
   Network.post("/inbound/toggle", { id, enabled });
 export const resetInboundTraffic = (id: number) =>
