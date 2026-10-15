@@ -252,7 +252,7 @@ func TestInboundRelayValidationContract(t *testing.T) {
 		name, body, want string
 	}{
 		{"loopback inbound over port forward", `{"inboundId":` + jsonInt64(local) + `,"tunnelId":` + jsonInt64(portTunnel) + `}`, "只监听本机"},
-		{"tunnel exiting elsewhere", `{"inboundId":` + jsonInt64(public) + `,"tunnelId":` + jsonInt64(wrongExit) + `}`, "出口节点"},
+		{"loopback inbound over a tunnel exiting elsewhere", `{"inboundId":` + jsonInt64(local) + `,"tunnelId":` + jsonInt64(wrongExit) + `}`, "只监听本机"},
 		{"missing inbound", `{"inboundId":999,"tunnelId":` + jsonInt64(portTunnel) + `}`, "入站不存在"},
 		{"missing tunnel", `{"inboundId":` + jsonInt64(public) + `,"tunnelId":999}`, "隧道不存在"},
 	}

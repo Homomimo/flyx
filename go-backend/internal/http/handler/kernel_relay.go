@@ -119,9 +119,10 @@ func (h *Handler) inboundRelayList(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(views))
 }
 
-// relayTarget decides where the relay forward dials: the landing node's
-// public address for a port-forward tunnel, or the inbound's local address
-// when the tunnel exits on the landing node itself.
+// relayTarget decides where the relay forward dials: the inbound's local
+// address when a tunnel exits on the landing node itself, otherwise the
+// landing node's public address (port forwards, and tunnels exiting on
+// another node such as an IX hop in front of the landing node).
 func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (string, error) {
 	port := strconv.Itoa(row.Port)
 	if tunnel.Type == 2 {
@@ -135,14 +136,16 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 				onLanding = true
 			}
 		}
-		if !onLanding {
-			return "", errors.New("隧道转发的出口节点必须是该入站所在的落地节点")
+		if onLanding {
+			if len(exits) > 1 {
+				return "", errors.New("出口为落地节点的隧道只能有这一个出口节点")
+			}
+			host := row.Listen
+			if isWildcardListen(host) {
+				host = "127.0.0.1"
+			}
+			return net.JoinHostPort(host, port), nil
 		}
-		host := row.Listen
-		if isWildcardListen(host) {
-			host = "127.0.0.1"
-		}
-		return net.JoinHostPort(host, port), nil
 	}
 
 	if isLoopbackListen(row.Listen) {
