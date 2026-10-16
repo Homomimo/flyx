@@ -241,6 +241,7 @@ const BACKUP_TYPE_OPTIONS = [
   { value: "userGroups", label: "用户分组" },
   { value: "permissions", label: "分组权限" },
   { value: "configs", label: "系统配置" },
+  { value: "inbounds", label: "内核与入站" },
 ] as const;
 
 const BACKUP_TYPE_VALUES = BACKUP_TYPE_OPTIONS.map((option) => option.value);

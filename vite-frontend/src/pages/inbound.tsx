@@ -11,11 +11,13 @@ import { Copy } from "lucide-react";
 
 import {
   batchDeleteInbounds,
+  batchToggleInbounds,
   deleteInbound,
   getInboundList,
   getKernelCapabilities,
   getKernelList,
   getNodeList,
+  probeInbounds,
   regenerateInbound,
   resetInboundTraffic,
   toggleInbound,
@@ -224,6 +226,8 @@ export default function InboundPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [batchDeleting, setBatchDeleting] = useState(false);
+  const [batchToggling, setBatchToggling] = useState(false);
+  const [probing, setProbing] = useState(false);
 
   const loadData = useCallback(
     async (initial = false) => {
@@ -456,9 +460,76 @@ export default function InboundPage() {
     }
   };
 
+  const runBatchToggle = async (enabled: boolean) => {
+    if (selectedIds.size === 0) return;
+    setBatchToggling(true);
+    try {
+      const res = await batchToggleInbounds([...selectedIds], enabled);
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "操作失败");
+
+        return;
+      }
+      const { successCount = 0, failCount = 0 } = res.data ?? {};
+      const verb = enabled ? "启用" : "停用";
+
+      if (res.msg && res.msg !== "操作成功") {
+        toast(res.msg, { icon: "⚠️" });
+      } else if (failCount > 0) {
+        toast(`已${verb} ${successCount} 个，${failCount} 个失败`, {
+          icon: "⚠️",
+        });
+      } else {
+        toast.success(`已${verb} ${successCount} 个入站`);
+      }
+      exitSelectMode();
+      await loadData(false);
+    } catch {
+      toast.error("操作失败");
+    } finally {
+      setBatchToggling(false);
+    }
+  };
+
+  const hasExternal = inbounds.some((i) => i.external);
+
+  const runProbe = async () => {
+    setProbing(true);
+    try {
+      const res = await probeInbounds();
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "检测失败");
+
+        return;
+      }
+      const results = Object.values(res.data ?? {}).filter((p) => !p.skipped);
+      const down = results.filter((p) => !p.ok).length;
+
+      if (down > 0) {
+        toast(`${results.length - down} 个可连接，${down} 个连不上`, {
+          icon: "⚠️",
+        });
+      } else {
+        toast.success(`${results.length} 个导入节点都能连接`);
+      }
+      await loadData(false);
+    } catch {
+      toast.error("检测失败");
+    } finally {
+      setProbing(false);
+    }
+  };
+
   const renderInbound = (item: InboundApiItem) => {
+    const probe =
+      item.external && !item.probe?.skipped ? item.probe : undefined;
+    const unreachable = item.enabled && probe !== undefined && !probe.ok;
     const running =
-      item.enabled && (item.external || item.kernelStatus === "running");
+      item.enabled &&
+      !unreachable &&
+      (item.external || item.kernelStatus === "running");
     const kernelBad =
       item.enabled && !item.external && item.kernelStatus !== "running";
     const where = item.external
@@ -508,18 +579,24 @@ export default function InboundPage() {
         )}
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
-            running
-              ? "bg-success"
-              : item.enabled
-                ? "bg-warning"
-                : "bg-default-300"
+            unreachable
+              ? "bg-danger"
+              : running
+                ? "bg-success"
+                : item.enabled
+                  ? "bg-warning"
+                  : "bg-default-300"
           }`}
           title={
-            running
-              ? "运行中"
-              : item.enabled
-                ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
-                : "已停用"
+            unreachable
+              ? `连不上：${probe?.error ?? ""}`
+              : running
+                ? probe
+                  ? `可连接 · ${probe.latencyMs} ms`
+                  : "运行中"
+                : item.enabled
+                  ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
+                  : "已停用"
           }
         />
         <div className="min-w-0 flex-1">
@@ -549,10 +626,21 @@ export default function InboundPage() {
                 内核{KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}
               </Chip>
             )}
+            {unreachable && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color="danger"
+                size="sm"
+                variant="flat"
+              >
+                {probe?.error || "连不上"}
+              </Chip>
+            )}
           </div>
           <div className="truncate text-xs text-default-500">
             {describeInbound(item)} · {item.port}
             {where ? ` · ${where}` : ""}
+            {item.enabled && probe?.ok ? ` · ${probe.latencyMs} ms` : ""}
             <span className="sm:hidden">
               {" "}
               · {formatTraffic(item.uploadBytes + item.downloadBytes)}
@@ -699,6 +787,16 @@ export default function InboundPage() {
               <GroupToggle value={groupBy} onChange={setGroupBy} />
             )}
             <div className="ml-auto flex gap-2">
+              {hasExternal && (
+                <Button
+                  isLoading={probing}
+                  size="sm"
+                  variant="flat"
+                  onPress={runProbe}
+                >
+                  检测
+                </Button>
+              )}
               {inbounds.length > 0 && (
                 <Button
                   size="sm"
@@ -728,11 +826,11 @@ export default function InboundPage() {
           </div>
 
           {selectMode && (
-            <div className="sticky top-0 z-10 mb-3 flex items-center gap-2 rounded-xl border border-divider bg-background/95 px-3 py-2 shadow-sm backdrop-blur">
+            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-divider bg-background/95 px-3 py-2 shadow-sm backdrop-blur">
               <span className="text-sm text-default-600">
                 已选 {selectedIds.size} 个
               </span>
-              <div className="ml-auto flex gap-2">
+              <div className="ml-auto flex flex-wrap justify-end gap-2">
                 <Button
                   color="primary"
                   isDisabled={filtered.length === 0}
@@ -741,6 +839,24 @@ export default function InboundPage() {
                   onPress={toggleSelectAll}
                 >
                   {allFilteredSelected ? "取消全选" : "全选"}
+                </Button>
+                <Button
+                  color="success"
+                  isDisabled={selectedIds.size === 0 || batchToggling}
+                  size="sm"
+                  variant="flat"
+                  onPress={() => runBatchToggle(true)}
+                >
+                  启用
+                </Button>
+                <Button
+                  color="warning"
+                  isDisabled={selectedIds.size === 0 || batchToggling}
+                  size="sm"
+                  variant="flat"
+                  onPress={() => runBatchToggle(false)}
+                >
+                  停用
                 </Button>
                 <Button
                   color="danger"

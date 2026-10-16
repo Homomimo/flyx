@@ -93,6 +93,8 @@ type inboundView struct {
 	DownloadBytes   int64              `json:"downloadBytes"`
 	CreatedTime     int64              `json:"createdTime"`
 	UpdatedTime     int64              `json:"updatedTime"`
+	// Probe is the last reachability check of an imported node.
+	Probe *externalProbe `json:"probe,omitempty"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -553,6 +555,11 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			v.ImportedParams = kernel.ProxyParams(p)
 			v.Extra = ""
 		}
+		if v.External {
+			if p, ok := h.externalProbes.get(row.ID); ok {
+				v.Probe = &p
+			}
+		}
 		views = append(views, v)
 	}
 	response.WriteJSON(w, response.OK(views))
@@ -887,6 +894,69 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 	for _, kernelID := range kernelIDs {
 		if err := h.applyKernel(kernelID, false); err != nil {
 			msg = "已删除，但下发到节点失败: " + err.Error()
+		}
+	}
+	response.WriteJSON(w, response.R{
+		Code: 0,
+		Msg:  msg,
+		Data: batchOperationResult{SuccessCount: s, FailCount: f, Failures: failures},
+		TS:   time.Now().UnixMilli(),
+	})
+}
+
+// inboundBatchToggle enables or disables several inbounds, then pushes each
+// affected kernel's config once.
+func (h *Handler) inboundBatchToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	var req struct {
+		IDs     []int64 `json:"ids"`
+		Enabled bool    `json:"enabled"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	if len(req.IDs) == 0 {
+		response.WriteJSON(w, response.ErrDefault("ids不能为空"))
+		return
+	}
+	s := 0
+	f := 0
+	failures := make([]batchFailureDetail, 0)
+	kernelIDs := make([]int64, 0)
+	seenKernel := make(map[int64]bool)
+	now := time.Now().UnixMilli()
+	for _, id := range req.IDs {
+		row, err := h.repo.GetNodeInbound(id)
+		if err != nil || row == nil {
+			f++
+			failures = appendBatchFailureReason(failures, id, "", "节点服务不存在")
+			continue
+		}
+		if (row.Enabled == 1) == req.Enabled {
+			s++
+			continue
+		}
+		row.Enabled = boolToInt(req.Enabled)
+		row.UpdatedTime = now
+		if err := h.repo.SaveNodeInbound(row); err != nil {
+			f++
+			failures = appendBatchFailure(failures, id, row.Name, err)
+			continue
+		}
+		s++
+		if !isExternalInbound(row) && !seenKernel[row.KernelID] {
+			seenKernel[row.KernelID] = true
+			kernelIDs = append(kernelIDs, row.KernelID)
+		}
+	}
+	msg := "操作成功"
+	for _, kernelID := range kernelIDs {
+		if err := h.applyKernel(kernelID, false); err != nil {
+			msg = "已保存，但下发到节点失败: " + err.Error()
 		}
 	}
 	response.WriteJSON(w, response.R{
