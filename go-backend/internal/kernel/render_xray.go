@@ -66,11 +66,11 @@ func xraySettings(in Inbound) (obj, error) {
 		if s.Flow != "" {
 			client["flow"] = s.Flow
 		}
-		return obj{"clients": []interface{}{client}, "decryption": "none"}, nil
+		return obj{"clients": append([]interface{}{client}, xrayUserClients(in)...), "decryption": "none"}, nil
 	case ProtocolVMess:
-		return obj{"clients": []interface{}{obj{"id": s.UUID}}}, nil
+		return obj{"clients": append([]interface{}{obj{"id": s.UUID}}, xrayUserClients(in)...)}, nil
 	case ProtocolTrojan:
-		return obj{"clients": []interface{}{obj{"password": s.Password}}}, nil
+		return obj{"clients": append([]interface{}{obj{"password": s.Password}}, xrayUserClients(in)...)}, nil
 	case ProtocolShadowsocks:
 		return obj{"method": s.Method, "password": s.Password, "network": "tcp,udp"}, nil
 	}

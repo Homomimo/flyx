@@ -1109,6 +1109,7 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 	}
 	inbounds := make([]kernel.Inbound, 0, len(rows))
 	ports := make([]map[string]interface{}, 0, len(rows))
+	users := h.activeUsersByInbound(time.Now())
 	for _, row := range rows {
 		if row.Enabled != 1 {
 			continue
@@ -1116,6 +1117,9 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		in, err := inboundFromModel(row)
 		if err != nil {
 			return nil, "", err
+		}
+		if in.SupportsUsers() {
+			in.Users = users[in.ID]
 		}
 		inbounds = append(inbounds, in)
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}

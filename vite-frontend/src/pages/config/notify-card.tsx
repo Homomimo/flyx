@@ -30,6 +30,16 @@ const NOTIFY_EVENTS = [
     label: "节点即将到期",
     description: "到期前 3 天提醒一次",
   },
+  {
+    key: "user_quota",
+    label: "用户流量 / 到期",
+    description: "转发用户流量用到 90%、用完或 3 天内到期，共享用户 3 天内到期",
+  },
+  {
+    key: "daily_report",
+    label: "每日汇总",
+    description: "每天定时发一条：节点在线、出错、流量、共享用户",
+  },
 ] as const;
 
 const ALL_EVENT_KEYS = NOTIFY_EVENTS.map((e) => e.key) as string[];
@@ -147,17 +157,19 @@ export function NotifyCard({
       <Divider />
       <CardBody className="space-y-6 pt-8">
         <Field label="启用通知">
-          <Switch
-            isSelected={enabled}
-            size="sm"
-            onValueChange={(on) =>
-              onChange("notify_enabled", on ? "true" : "false")
-            }
-          >
+          <div className="flex items-center gap-3">
+            <Switch
+              aria-label="启用通知"
+              isSelected={enabled}
+              size="sm"
+              onValueChange={(on) =>
+                onChange("notify_enabled", on ? "true" : "false")
+              }
+            />
             <span className="text-sm text-gray-700 dark:text-gray-300">
               {enabled ? "已启用" : "已禁用"}
             </span>
-          </Switch>
+          </div>
         </Field>
 
         <Divider />
@@ -204,6 +216,29 @@ export function NotifyCard({
             ))}
           </div>
         </Field>
+
+        {selected.includes("daily_report") && (
+          <Field
+            description="按面板服务器的时区（安装脚本默认 Asia/Shanghai），0–23 点"
+            label="每日汇总发送时间"
+          >
+            <Input
+              classNames={{
+                input: "text-sm",
+                inputWrapper: changedClass("notify_daily_hour"),
+              }}
+              endContent="点"
+              max={23}
+              min={0}
+              placeholder="9"
+              size="md"
+              type="number"
+              value={configs.notify_daily_hour ?? ""}
+              variant="bordered"
+              onChange={(e) => onChange("notify_daily_hour", e.target.value)}
+            />
+          </Field>
+        )}
 
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-divider/50 pt-6">
           <span className="text-xs text-default-500">

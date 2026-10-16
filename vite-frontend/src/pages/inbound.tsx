@@ -47,6 +47,8 @@ import { InboundFormModal } from "@/pages/inbound/inbound-form-modal";
 import { type InstallRequest, KernelPanel } from "@/pages/inbound/kernel-panel";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import { ShareModal, SubscriptionCard, copyText } from "@/pages/inbound/share";
+import { SubSettingsCard } from "@/pages/inbound/sub-settings";
+import { SubUsersCard } from "@/pages/inbound/sub-users";
 import {
   type InboundForm,
   KERNEL_LABELS,
@@ -748,7 +750,13 @@ export default function InboundPage() {
 
       {tab === "sub" &&
         (inbounds.length > 0 ? (
-          <SubscriptionCard />
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <div className="space-y-4">
+              <SubscriptionCard />
+              <SubUsersCard inbounds={inbounds} />
+            </div>
+            <SubSettingsCard />
+          </div>
         ) : (
           <Card className="shadow-sm bg-default-50/50">
             <CardBody className="text-center py-10 text-sm text-default-500">

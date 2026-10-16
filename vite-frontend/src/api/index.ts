@@ -656,6 +656,51 @@ export const batchToggleInbounds = (ids: number[], enabled: boolean) =>
     ids,
     enabled,
   });
+export interface SubSettings {
+  rename: string;
+  prefix: string;
+  sort: string;
+  regionGroups: boolean;
+}
+export interface SubPreviewItem {
+  original: string;
+  name: string;
+  region: string;
+}
+export const getSubSettings = () =>
+  Network.post<SubSettings>("/inbound/sub/settings");
+export const saveSubSettings = (data: SubSettings) =>
+  Network.post<SubSettings>("/inbound/sub/settings/save", data);
+export const previewSubSettings = (data: SubSettings) =>
+  Network.post<SubPreviewItem[]>("/inbound/sub/preview", data);
+
+export interface SubUserItem {
+  id: number;
+  name: string;
+  token: string;
+  path: string;
+  inboundIds: number[];
+  sharedIds: number[];
+  expireTime: number;
+  enabled: boolean;
+  active: boolean;
+  remark: string;
+}
+export const getSubUsers = () =>
+  Network.post<SubUserItem[]>("/inbound/user/list");
+export const saveSubUser = (data: {
+  id?: number;
+  name: string;
+  inboundIds: number[];
+  expireTime: number;
+  enabled?: boolean;
+  remark: string;
+}) => Network.post<SubUserItem>("/inbound/user/save", data);
+export const deleteSubUser = (id: number) =>
+  Network.post("/inbound/user/delete", { id });
+export const resetSubUser = (id: number) =>
+  Network.post<SubUserItem>("/inbound/user/reset", { id });
+
 export const testNotify = (data: {
   telegramToken: string;
   telegramChatId: string;

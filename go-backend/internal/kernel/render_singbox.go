@@ -137,6 +137,9 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 	default:
 		return nil, fmt.Errorf("sing-box 不支持协议 %s", in.Protocol)
 	}
+	if extra := singboxUsers(in); len(extra) > 0 {
+		item["users"] = append(item["users"].([]interface{}), extra...)
+	}
 
 	if tls, err := singboxTLS(in.Security, acme); err != nil {
 		return nil, err

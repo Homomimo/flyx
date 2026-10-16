@@ -67,7 +67,9 @@ type notifier struct {
 	offlineTimers  map[int64]*time.Timer
 	offlineAlerted map[int64]bool
 	expiryAlerted  map[int64]int64
-	client         *http.Client
+	// alerted holds keys of reminders already sent (traffic, expiry).
+	alerted map[string]bool
+	client  *http.Client
 }
 
 func newNotifier() *notifier {
@@ -75,6 +77,7 @@ func newNotifier() *notifier {
 		offlineTimers:  make(map[int64]*time.Timer),
 		offlineAlerted: make(map[int64]bool),
 		expiryAlerted:  make(map[int64]int64),
+		alerted:        make(map[string]bool),
 		client:         &http.Client{Timeout: notifySendTimeout},
 	}
 }
@@ -308,20 +311,6 @@ func (h *Handler) checkNodeExpiry(now time.Time) {
 		}
 		h.notify(notifyEventNodeExpiry, title, fmt.Sprintf("节点：%s\n到期：%s（%s）",
 			node.Name, expiry.Format("2006-01-02"), detail))
-	}
-}
-
-func (h *Handler) runNodeExpiryNotifyLoop(ctx context.Context) {
-	defer h.jobsWG.Done()
-	ticker := time.NewTicker(6 * time.Hour)
-	defer ticker.Stop()
-	for {
-		h.checkNodeExpiry(time.Now())
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
 	}
 }
 

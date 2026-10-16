@@ -114,6 +114,9 @@ type Inbound struct {
 	// AcceptProxyProtocol makes the inbound require a PROXY protocol header
 	// (sent by relay forwards) so the kernel sees the real client address.
 	AcceptProxyProtocol bool `json:"acceptProxyProtocol,omitempty"`
+	// Users are extra clients (subscription users) rendered next to the
+	// inbound's own credentials. Filled in when building a kernel config.
+	Users []User `json:"-"`
 }
 
 func (in Inbound) Tag() string {

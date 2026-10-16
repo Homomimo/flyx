@@ -519,8 +519,9 @@ func FormatForUserAgent(ua string) string {
 
 // Subscription renders every supported endpoint in the requested format and
 // returns the body with its content type.
-func Subscription(format string, endpoints []Endpoint) (string, string, error) {
-	endpoints = uniqueNames(endpoints)
+func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string, string, error) {
+	endpoints = uniqueNames(ApplySubOptions(endpoints, opts))
+	groups := opts.RegionGroups
 	switch format {
 	case FormatBase64:
 		lines := make([]string, 0, len(endpoints))
@@ -531,9 +532,9 @@ func Subscription(format string, endpoints []Endpoint) (string, string, error) {
 		}
 		return base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n"))), "text/plain; charset=utf-8", nil
 	case FormatClash:
-		return clashProfile(endpoints), "text/yaml; charset=utf-8", nil
+		return clashProfile(endpoints, groups), "text/yaml; charset=utf-8", nil
 	case FormatSingbox:
-		body, err := singboxProfile(endpoints)
+		body, err := singboxProfile(endpoints, groups)
 		return body, "application/json; charset=utf-8", err
 	case FormatSurge:
 		lines := []string{"[Proxy]"}
@@ -545,28 +546,56 @@ func Subscription(format string, endpoints []Endpoint) (string, string, error) {
 			}
 		}
 		lines = append(lines, "", "[Proxy Group]")
-		if len(names) > 0 {
-			lines = append(lines, "节点选择 = select, "+strings.Join(names, ", "))
+		var regionLines []string
+		choices := names
+		if groups {
+			var regionNames []string
+			for _, g := range regionGroups(names) {
+				regionNames = append(regionNames, g.name)
+				regionLines = append(regionLines, g.name+" = url-test, "+strings.Join(g.members, ", ")+
+					", url=http://www.gstatic.com/generate_204, interval=300")
+			}
+			choices = append(regionNames, names...)
+		}
+		if len(choices) > 0 {
+			lines = append(lines, "节点选择 = select, "+strings.Join(choices, ", "))
 		} else {
 			lines = append(lines, "节点选择 = select, DIRECT")
 		}
+		lines = append(lines, regionLines...)
 		lines = append(lines, "", "[Rule]", "GEOIP,LAN,DIRECT", "FINAL,节点选择", "")
 		return strings.Join(lines, "\n"), "text/plain; charset=utf-8", nil
 	}
 	return "", "", fmt.Errorf("不支持的订阅格式 %s", format)
 }
 
-func clashProfile(endpoints []Endpoint) string {
+func clashProfile(endpoints []Endpoint, withRegions bool) string {
 	proxies := []interface{}{}
 	names := []interface{}{}
+	var plain []string
 	for _, e := range endpoints {
 		if p, ok := ClashProxy(e); ok {
 			proxies = append(proxies, p)
 			names = append(names, e.Name)
+			plain = append(plain, e.Name)
 		}
 	}
 	selectList := append([]interface{}{"自动选择"}, names...)
 	autoList := names
+	var regionNodes []interface{}
+	if withRegions {
+		var regionNames []interface{}
+		for _, g := range regionGroups(plain) {
+			regionNames = append(regionNames, g.name)
+			members := make([]interface{}, len(g.members))
+			for i, m := range g.members {
+				members[i] = m
+			}
+			regionNodes = append(regionNodes, yamlNode{{"name", g.name}, {"type", "url-test"},
+				{"url", "https://www.gstatic.com/generate_204"}, {"interval", 300}, {"proxies", members}})
+		}
+		selectList = append(append([]interface{}{"自动选择"}, regionNames...), names...)
+	}
 	if len(names) == 0 {
 		selectList = []interface{}{"DIRECT"}
 		autoList = []interface{}{"DIRECT"}
@@ -577,38 +606,50 @@ func clashProfile(endpoints []Endpoint) string {
 		{"mode", "rule"},
 		{"log-level", "warning"},
 		{"proxies", proxies},
-		{"proxy-groups", []interface{}{
+		{"proxy-groups", append([]interface{}{
 			yamlNode{{"name", "节点选择"}, {"type", "select"}, {"proxies", selectList}},
 			yamlNode{{"name", "自动选择"}, {"type", "url-test"}, {"url", "https://www.gstatic.com/generate_204"},
 				{"interval", 300}, {"proxies", autoList}},
-		}},
+		}, regionNodes...)},
 		{"rules", []interface{}{"GEOIP,LAN,DIRECT,no-resolve", "MATCH,节点选择"}},
 	}
 	return marshalYAML(profile)
 }
 
-func singboxProfile(endpoints []Endpoint) (string, error) {
+func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 	outbounds := []interface{}{}
 	names := []interface{}{}
+	var plain []string
 	for _, e := range endpoints {
 		if obs, ok := SingboxOutbounds(e); ok {
 			for _, o := range obs {
 				outbounds = append(outbounds, o)
 			}
 			names = append(names, e.Name)
+			plain = append(plain, e.Name)
 		}
 	}
 	selectList := append([]interface{}{"自动选择"}, names...)
 	autoList := names
+	var regionOutbounds []interface{}
+	if withRegions {
+		var regionNames []interface{}
+		for _, g := range regionGroups(plain) {
+			regionNames = append(regionNames, g.name)
+			regionOutbounds = append(regionOutbounds, map[string]interface{}{"type": "urltest", "tag": g.name,
+				"outbounds": g.members, "url": "https://www.gstatic.com/generate_204", "interval": "5m"})
+		}
+		selectList = append(append([]interface{}{"自动选择"}, regionNames...), names...)
+	}
 	if len(names) == 0 {
 		selectList = []interface{}{"direct"}
 		autoList = []interface{}{"direct"}
 	}
-	groups := []interface{}{
+	groups := append([]interface{}{
 		map[string]interface{}{"type": "selector", "tag": "节点选择", "outbounds": selectList},
 		map[string]interface{}{"type": "urltest", "tag": "自动选择", "outbounds": autoList,
 			"url": "https://www.gstatic.com/generate_204", "interval": "5m"},
-	}
+	}, regionOutbounds...)
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{"level": "warn"},
 		"inbounds": []interface{}{
@@ -639,6 +680,9 @@ func singboxProfile(endpoints []Endpoint) (string, error) {
 func uniqueNames(endpoints []Endpoint) []Endpoint {
 	out := make([]Endpoint, len(endpoints))
 	seen := map[string]bool{"节点选择": true, "自动选择": true, "direct": true, "DIRECT": true, "REJECT": true}
+	for _, r := range regions {
+		seen[r.name] = true
+	}
 	for i, e := range endpoints {
 		base := strings.TrimSpace(e.Name)
 		if base == "" {

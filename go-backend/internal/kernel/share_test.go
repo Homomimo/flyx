@@ -58,7 +58,7 @@ func TestShareURIs(t *testing.T) {
 func TestSubscriptionFormats(t *testing.T) {
 	eps := shareFixtures(t)
 
-	b64, ctype, err := Subscription(FormatBase64, eps)
+	b64, ctype, err := Subscription(FormatBase64, eps, SubOptions{})
 	if err != nil || !strings.HasPrefix(ctype, "text/plain") {
 		t.Fatal(err, ctype)
 	}
@@ -70,7 +70,7 @@ func TestSubscriptionFormats(t *testing.T) {
 		t.Fatalf("duplicate names must be suffixed: %s", decoded)
 	}
 
-	clash, _, err := Subscription(FormatClash, eps)
+	clash, _, err := Subscription(FormatClash, eps, SubOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestSubscriptionFormats(t *testing.T) {
 		t.Fatal("xhttp must be skipped for clash")
 	}
 
-	sb, _, err := Subscription(FormatSingbox, eps)
+	sb, _, err := Subscription(FormatSingbox, eps, SubOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestSubscriptionFormats(t *testing.T) {
 	}
 	assertGolden(t, "singbox.golden.json", sb)
 
-	surge, _, err := Subscription(FormatSurge, eps)
+	surge, _, err := Subscription(FormatSurge, eps, SubOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,14 +98,14 @@ func TestSubscriptionFormats(t *testing.T) {
 		t.Fatal("surge has no reality support")
 	}
 
-	if _, _, err := Subscription("nope", eps); err == nil {
+	if _, _, err := Subscription("nope", eps, SubOptions{}); err == nil {
 		t.Fatal("unknown format must fail")
 	}
 }
 
 func TestSubscriptionEmpty(t *testing.T) {
 	for _, f := range []string{FormatBase64, FormatClash, FormatSingbox, FormatSurge} {
-		if _, _, err := Subscription(f, nil); err != nil {
+		if _, _, err := Subscription(f, nil, SubOptions{}); err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
 	}
@@ -160,7 +160,7 @@ func TestSharePhase3(t *testing.T) {
 	var all strings.Builder
 	all.WriteString(strings.Join(uris, "\n") + "\n")
 	for _, f := range []string{FormatClash, FormatSingbox, FormatSurge} {
-		body, _, err := Subscription(f, eps)
+		body, _, err := Subscription(f, eps, SubOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

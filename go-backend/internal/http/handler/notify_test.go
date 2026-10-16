@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -95,5 +97,57 @@ func TestNodeExpiryNotifiesOncePerDate(t *testing.T) {
 	h.checkNodeExpiry(now.Add(time.Hour))
 	if msgs := sent(); len(msgs) != 1 {
 		t.Fatalf("the same expiry must alert once: %v", msgs)
+	}
+}
+
+func TestUserRemindersAndDailyReport(t *testing.T) {
+	h, r, sent := setupNotifyHandler(t)
+	now := time.Now()
+	gb := int64(1024 * 1024 * 1024)
+	exec := func(q string, args ...interface{}) {
+		t.Helper()
+		if err := r.DB().Exec(q, args...).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 9.5 GB of 10 GB used; another user expiring tomorrow.
+	exec(`INSERT INTO user(user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, created_time, status)
+		VALUES('alice', 'x', 1, 0, 10, ?, ?, 0, 10, ?, 1)`, 5*gb, gb*9/2, now.UnixMilli())
+	exec(`INSERT INTO user(user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, created_time, status)
+		VALUES('bob', 'x', 1, ?, 100, 0, 0, 0, 10, ?, 1)`, now.Add(24*time.Hour).UnixMilli(), now.UnixMilli())
+
+	h.checkUserReminders(now)
+	msgs := sent()
+	titles := map[string]bool{}
+	for _, m := range msgs {
+		titles[m.Title] = true
+		if m.Event != notifyEventUserQuota {
+			t.Fatalf("event: %v", m)
+		}
+	}
+	if len(msgs) != 2 || !titles["用户流量即将用完"] || !titles["用户即将到期"] {
+		t.Fatalf("reminders: %v", msgs)
+	}
+	h.checkUserReminders(now.Add(time.Minute))
+	if len(sent()) != 2 {
+		t.Fatal("reminders must not repeat")
+	}
+	// Going over the limit is a separate alert.
+	exec(`UPDATE user SET out_flow = ? WHERE user = 'alice'`, 6*gb)
+	h.checkUserReminders(now.Add(2 * time.Minute))
+	if msgs := sent(); len(msgs) != 3 || msgs[2].Title != "用户流量已用完" {
+		t.Fatalf("over limit: %v", msgs)
+	}
+
+	// The daily report fires once at its hour.
+	exec(`INSERT INTO vite_config(name, value, time) VALUES('notify_daily_hour', ?, 0)`, strconv.Itoa(now.Hour()))
+	h.maybeDailyReport(now)
+	h.maybeDailyReport(now.Add(time.Minute))
+	msgs = sent()
+	if len(msgs) != 4 || msgs[3].Event != notifyEventDailyReport || !strings.Contains(msgs[3].Message, "入站流量") {
+		t.Fatalf("daily report: %v", msgs)
+	}
+	if got := mustQueryInt(t, r, `SELECT COUNT(*) FROM vite_config WHERE name = 'notify_daily_last'`); got != 1 {
+		t.Fatal("the report date must be stored so restarts don't repeat it")
 	}
 }
