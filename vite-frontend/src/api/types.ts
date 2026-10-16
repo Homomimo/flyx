@@ -728,6 +728,14 @@ export interface InboundSecurity {
   acmeDnsSet?: boolean;
 }
 
+export interface InboundProbe {
+  ok: boolean;
+  skipped?: boolean;
+  latencyMs?: number;
+  error?: string;
+  checkedAt: number;
+}
+
 export interface InboundApiItem {
   id: number;
   kernelId: number;
@@ -762,6 +770,8 @@ export interface InboundApiItem {
   downloadBytes: number;
   createdTime: number;
   updatedTime: number;
+  /** Last reachability check of an imported node, from the panel. */
+  probe?: InboundProbe;
 }
 
 export interface InboundMutationPayload {

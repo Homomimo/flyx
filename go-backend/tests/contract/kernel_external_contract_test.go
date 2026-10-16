@@ -2,6 +2,7 @@ package contract_test
 
 import (
 	"encoding/base64"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,6 +146,11 @@ func TestExternalImportFromSubscriptionURLContract(t *testing.T) {
 	for _, it := range list {
 		ids = append(ids, jsonInt64(int64(it.(map[string]interface{})["id"].(float64))))
 	}
+	out = kernelContractPost(t, router, admin, "/api/v1/inbound/batch-toggle", `{"ids":[`+strings.Join(ids, ",")+`],"enabled":false}`)
+	if out.Code != 0 || valueAsInt(out.Data.(map[string]interface{})["successCount"]) != 2 ||
+		mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound WHERE enabled = 1`) != 0 {
+		t.Fatalf("batch disable: %+v", out)
+	}
 	out = kernelContractPost(t, router, admin, "/api/v1/inbound/batch-delete", `{"ids":[`+strings.Join(ids, ",")+`,999999]}`)
 	res := out.Data.(map[string]interface{})
 	if out.Code != 0 || valueAsInt(res["successCount"]) != 2 || valueAsInt(res["failCount"]) != 1 {
@@ -152,5 +158,62 @@ func TestExternalImportFromSubscriptionURLContract(t *testing.T) {
 	}
 	if mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound`) != 0 || mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound_relay`) != 0 {
 		t.Fatal("batch delete must drop the nodes and their relays")
+	}
+}
+
+func TestExternalProbeContract(t *testing.T) {
+	secret := "contract-jwt-secret"
+	router, r := setupContractRouter(t, secret)
+	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	closed, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadPort := closed.Addr().(*net.TCPAddr).Port
+	_ = closed.Close()
+
+	userinfo := base64.RawURLEncoding.EncodeToString([]byte("aes-256-gcm:secret"))
+	links := "ss://" + userinfo + "@198.51.100.40:1001#up\\n" + "ss://" + userinfo + "@198.51.100.41:1002#down"
+	if out := kernelContractPost(t, router, admin, "/api/v1/inbound/import", `{"links":"`+links+`"}`); out.Code != 0 {
+		t.Fatalf("import: %+v", out)
+	}
+	// Import refuses loopback addresses, so point the rows at local ports.
+	upPort := ln.Addr().(*net.TCPAddr).Port
+	for name, port := range map[string]int{"up": upPort, "down": deadPort} {
+		if err := r.DB().Exec(`UPDATE node_inbound SET listen = '127.0.0.1', port = ? WHERE name = ?`, port, name).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := kernelContractPost(t, router, admin, "/api/v1/inbound/probe", `{}`)
+	if out.Code != 0 || len(out.Data.(map[string]interface{})) != 2 {
+		t.Fatalf("probe: %+v", out)
+	}
+	byName := map[string]map[string]interface{}{}
+	for _, it := range kernelContractPost(t, router, admin, "/api/v1/inbound/list", `{}`).Data.([]interface{}) {
+		m := it.(map[string]interface{})
+		probe, _ := m["probe"].(map[string]interface{})
+		if probe == nil {
+			t.Fatalf("imported nodes must carry the probe result: %v", m)
+		}
+		byName[m["name"].(string)] = probe
+	}
+	if byName["up"]["ok"] != true || valueAsInt(byName["up"]["latencyMs"]) < 1 {
+		t.Fatalf("reachable node: %v", byName["up"])
+	}
+	if byName["down"]["ok"] == true || byName["down"]["error"] == "" {
+		t.Fatalf("closed port: %v", byName["down"])
 	}
 }

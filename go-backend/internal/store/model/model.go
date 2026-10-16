@@ -411,6 +411,68 @@ type BackupData struct {
 	UserGroups   []UserGroupBackup   `json:"userGroups,omitempty"`
 	Permissions  []PermissionBackup  `json:"permissions,omitempty"`
 	Configs      map[string]string   `json:"configs,omitempty"`
+	// Inbounds carries node kernels, their inbounds (imported nodes too),
+	// relay links and traffic counter baselines; restored as one unit.
+	Inbounds *InboundsBackup `json:"inbounds,omitempty"`
+}
+
+type InboundsBackup struct {
+	Kernels  []KernelBackup         `json:"kernels"`
+	Inbounds []InboundBackup        `json:"inbounds"`
+	Relays   []InboundRelayBackup   `json:"relays"`
+	Counters []InboundCounterBackup `json:"counters,omitempty"`
+}
+
+type KernelBackup struct {
+	ID          int64  `json:"id"`
+	NodeID      int64  `json:"nodeId"`
+	KernelType  string `json:"kernelType"`
+	Version     string `json:"version"`
+	Enabled     int    `json:"enabled"`
+	CreatedTime int64  `json:"createdTime"`
+}
+
+type InboundBackup struct {
+	ID                  int64  `json:"id"`
+	KernelID            int64  `json:"kernelId"`
+	NodeID              int64  `json:"nodeId"`
+	Name                string `json:"name"`
+	Protocol            string `json:"protocol"`
+	Listen              string `json:"listen"`
+	Port                int    `json:"port"`
+	Transport           string `json:"transport"`
+	Security            string `json:"security"`
+	Settings            string `json:"settings"`
+	Extra               string `json:"extra"`
+	ShareHost           string `json:"shareHost"`
+	Remark              string `json:"remark"`
+	RelayOnly           int    `json:"relayOnly"`
+	AcceptProxyProtocol int    `json:"acceptProxyProtocol"`
+	RelayWhitelist      int    `json:"relayWhitelist"`
+	WhitelistExtra      string `json:"whitelistExtra"`
+	Enabled             int    `json:"enabled"`
+	UploadBytes         int64  `json:"uploadBytes"`
+	DownloadBytes       int64  `json:"downloadBytes"`
+	Inx                 int    `json:"inx"`
+	CreatedTime         int64  `json:"createdTime"`
+}
+
+type InboundRelayBackup struct {
+	ID          int64  `json:"id"`
+	InboundID   int64  `json:"inboundId"`
+	ForwardID   int64  `json:"forwardId"`
+	Name        string `json:"name"`
+	ShareHost   string `json:"shareHost"`
+	Managed     int    `json:"managed"`
+	CreatedTime int64  `json:"createdTime"`
+}
+
+type InboundCounterBackup struct {
+	InboundID int64  `json:"inboundId"`
+	Protocol  string `json:"protocol"`
+	Direction string `json:"direction"`
+	Epoch     string `json:"epoch"`
+	Bytes     int64  `json:"bytes"`
 }
 
 type UserBackup struct {
@@ -594,6 +656,7 @@ type ImportResult struct {
 	UserGroupsImported   int         `json:"userGroupsImported"`
 	PermissionsImported  int         `json:"permissionsImported"`
 	ConfigsImported      int         `json:"configsImported"`
+	InboundsImported     int         `json:"inboundsImported"`
 	AutoBackup           *BackupData `json:"autoBackup,omitempty"`
 }
 

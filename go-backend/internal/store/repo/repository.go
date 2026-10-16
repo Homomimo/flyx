@@ -1994,6 +1994,12 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 	}
 	backup.Configs = FilterBackupConfigs(configs)
 
+	inbounds, err := r.exportInbounds()
+	if err != nil {
+		return nil, fmt.Errorf("export inbounds failed: %w", err)
+	}
+	backup.Inbounds = inbounds
+
 	return backup, nil
 }
 
@@ -2073,6 +2079,13 @@ func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
 			return nil, fmt.Errorf("export configs failed: %w", err)
 		}
 		backup.Configs = FilterBackupConfigs(v)
+	}
+	if typeSet["inbounds"] {
+		v, err := r.exportInbounds()
+		if err != nil {
+			return nil, fmt.Errorf("export inbounds failed: %w", err)
+		}
+		backup.Inbounds = v
 	}
 	return backup, nil
 }
@@ -2444,6 +2457,13 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 				return fmt.Errorf("import configs failed: %w", err)
 			}
 			result.ConfigsImported = count
+		}
+		if typeSet["inbounds"] && backup.Inbounds != nil {
+			count, err := importInbounds(tx, backup.Inbounds, now)
+			if err != nil {
+				return fmt.Errorf("import inbounds failed: %w", err)
+			}
+			result.InboundsImported = count
 		}
 		return nil
 	})

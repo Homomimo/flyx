@@ -56,7 +56,8 @@ type Handler struct {
 	nodeOnlineRedeploying       map[int64]struct{}
 	nodeLocalRuntimeRetryQueued map[int64]struct{}
 
-	qualityProber *tunnelQualityProber
+	qualityProber  *tunnelQualityProber
+	externalProbes *externalProbeStore
 	bestExit      *bestExitManager
 }
 
@@ -116,6 +117,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		nodeOnlineRedeployQueued: make(map[int64]struct{}),
 		nodeOnlineRedeploying:    make(map[int64]struct{}),
 		bestExit:                 newBestExitManager(),
+		externalProbes:           newExternalProbeStore(),
 	}
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
 	h.qualityProber = newTunnelQualityProber(h)
@@ -212,6 +214,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/inbound/update", h.inboundUpdate)
 	mux.HandleFunc("/api/v1/inbound/delete", h.inboundDelete)
 	mux.HandleFunc("/api/v1/inbound/batch-delete", h.inboundBatchDelete)
+	mux.HandleFunc("/api/v1/inbound/probe", h.inboundProbe)
+	mux.HandleFunc("/api/v1/inbound/batch-toggle", h.inboundBatchToggle)
 	mux.HandleFunc("/api/v1/inbound/toggle", h.inboundToggle)
 	mux.HandleFunc("/api/v1/inbound/reset-traffic", h.inboundResetTraffic)
 	mux.HandleFunc("/api/v1/inbound/regenerate", h.inboundRegenerate)
@@ -1587,6 +1591,20 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
 		return
+	}
+
+	if result.InboundsImported > 0 || req.BackupData.Inbounds != nil && len(req.BackupData.Inbounds.Kernels) > 0 {
+		// Restored kernels have no applied config yet: push them to the
+		// nodes that are online; the rest get it when they reconnect.
+		go func() {
+			nodeIDs, err := h.repo.ListKernelNodeIDs()
+			if err != nil {
+				return
+			}
+			for _, nodeID := range nodeIDs {
+				h.reconcileNodeKernels(nodeID)
+			}
+		}()
 	}
 
 	result.AutoBackup = autoBackup

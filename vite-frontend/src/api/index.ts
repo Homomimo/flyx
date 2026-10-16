@@ -49,6 +49,7 @@ import type {
   KernelApiItem,
   KernelStateApiData,
   InboundApiItem,
+  InboundProbe,
   InboundMutationPayload,
   InboundShareEntry,
   InboundRelayApiItem,
@@ -454,6 +455,7 @@ export interface BackupTypes {
   userGroups?: boolean;
   permissions?: boolean;
   configs?: boolean;
+  inbounds?: boolean;
 }
 
 export const exportBackup = async (types: string[] = []) => {
@@ -649,6 +651,17 @@ export const deleteInbound = (id: number) =>
   Network.post("/inbound/delete", { id });
 export const batchDeleteInbounds = (ids: number[]) =>
   Network.post<BatchOperationResult>("/inbound/batch-delete", { ids });
+export const batchToggleInbounds = (ids: number[], enabled: boolean) =>
+  Network.post<BatchOperationResult>("/inbound/batch-toggle", {
+    ids,
+    enabled,
+  });
+export const probeInbounds = (ids: number[] = []) =>
+  Network.post<Record<string, InboundProbe>>(
+    "/inbound/probe",
+    { ids },
+    { timeout: 60000 },
+  );
 export const toggleInbound = (id: number, enabled: boolean) =>
   Network.post("/inbound/toggle", { id, enabled });
 export const resetInboundTraffic = (id: number) =>
