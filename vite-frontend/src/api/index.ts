@@ -656,6 +656,12 @@ export const batchToggleInbounds = (ids: number[], enabled: boolean) =>
     ids,
     enabled,
   });
+export const testNotify = (data: {
+  telegramToken: string;
+  telegramChatId: string;
+  telegramApiBase: string;
+  webhookUrl: string;
+}) => Network.post("/notify/test", data, { timeout: 30000 });
 export const probeInbounds = (ids: number[] = []) =>
   Network.post<Record<string, InboundProbe>>(
     "/inbound/probe",

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -35,10 +36,54 @@ type externalProbe struct {
 type externalProbeStore struct {
 	mu      sync.RWMutex
 	results map[int64]externalProbe
+	// failStreak counts consecutive failed probes; down marks nodes already
+	// reported as unreachable, so alerts fire once per outage.
+	failStreak map[int64]int
+	down       map[int64]bool
 }
 
 func newExternalProbeStore() *externalProbeStore {
-	return &externalProbeStore{results: make(map[int64]externalProbe)}
+	return &externalProbeStore{
+		results:    make(map[int64]externalProbe),
+		failStreak: make(map[int64]int),
+		down:       make(map[int64]bool),
+	}
+}
+
+type probeTransition struct {
+	row  model.NodeInbound
+	down bool
+	err  string
+}
+
+// track updates the outage state of enabled nodes and returns the ones that
+// just went down (after notifyInboundDownStreak failures) or came back.
+func (s *externalProbeStore) track(rows map[int64]model.NodeInbound, results map[int64]externalProbe) []probeTransition {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []probeTransition
+	for id, p := range results {
+		row, ok := rows[id]
+		if !ok || p.Skipped || row.Enabled != 1 {
+			delete(s.failStreak, id)
+			delete(s.down, id)
+			continue
+		}
+		if p.OK {
+			delete(s.failStreak, id)
+			if s.down[id] {
+				delete(s.down, id)
+				out = append(out, probeTransition{row: row})
+			}
+			continue
+		}
+		s.failStreak[id]++
+		if s.failStreak[id] >= notifyInboundDownStreak && !s.down[id] {
+			s.down[id] = true
+			out = append(out, probeTransition{row: row, down: true, err: p.Error})
+		}
+	}
+	return out
 }
 
 func (s *externalProbeStore) get(id int64) (externalProbe, bool) {
@@ -55,6 +100,16 @@ func (s *externalProbeStore) replace(results map[int64]externalProbe, all bool) 
 	defer s.mu.Unlock()
 	if all {
 		s.results = make(map[int64]externalProbe, len(results))
+		for id := range s.failStreak {
+			if _, ok := results[id]; !ok {
+				delete(s.failStreak, id)
+			}
+		}
+		for id := range s.down {
+			if _, ok := results[id]; !ok {
+				delete(s.down, id)
+			}
+		}
 	}
 	for id, p := range results {
 		s.results[id] = p
@@ -132,6 +187,21 @@ func (h *Handler) probeExternalInbounds(ctx context.Context, ids []int64) (map[i
 	}
 	wg.Wait()
 	h.externalProbes.replace(results, len(ids) == 0)
+
+	byID := make(map[int64]model.NodeInbound, len(targets))
+	for _, row := range targets {
+		byID[row.ID] = row
+	}
+	for _, t := range h.externalProbes.track(byID, results) {
+		addr := net.JoinHostPort(t.row.Listen, strconv.Itoa(t.row.Port))
+		if t.down {
+			h.notify(notifyEventInboundDown, "导入节点连不上",
+				fmt.Sprintf("节点：%s\n地址：%s\n原因：%s（从面板服务器检测）", t.row.Name, addr, t.err))
+		} else {
+			h.notify(notifyEventInboundDown, "导入节点已恢复",
+				fmt.Sprintf("节点：%s\n地址：%s", t.row.Name, addr))
+		}
+	}
 	return results, nil
 }
 
