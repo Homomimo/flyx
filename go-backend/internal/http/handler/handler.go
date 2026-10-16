@@ -58,6 +58,7 @@ type Handler struct {
 
 	qualityProber  *tunnelQualityProber
 	externalProbes *externalProbeStore
+	notifier       *notifier
 	bestExit      *bestExitManager
 }
 
@@ -118,10 +119,12 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		nodeOnlineRedeploying:    make(map[int64]struct{}),
 		bestExit:                 newBestExitManager(),
 		externalProbes:           newExternalProbeStore(),
+		notifier:                 newNotifier(),
 	}
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
 	h.qualityProber = newTunnelQualityProber(h)
 	h.wsServer.SetNodeOnlineHook(h.onNodeOnline)
+	h.wsServer.SetNodeOfflineHook(h.notifyNodeOffline)
 	h.wsServer.SetNodeMetricHook(func(nodeID int64, info ws.SystemInfo) {
 		metricInfo := metrics.SystemInfo{
 			Uptime:           info.Uptime,
@@ -216,6 +219,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/inbound/batch-delete", h.inboundBatchDelete)
 	mux.HandleFunc("/api/v1/inbound/probe", h.inboundProbe)
 	mux.HandleFunc("/api/v1/inbound/batch-toggle", h.inboundBatchToggle)
+	mux.HandleFunc("/api/v1/notify/test", h.notifyTest)
 	mux.HandleFunc("/api/v1/inbound/toggle", h.inboundToggle)
 	mux.HandleFunc("/api/v1/inbound/reset-traffic", h.inboundResetTraffic)
 	mux.HandleFunc("/api/v1/inbound/regenerate", h.inboundRegenerate)

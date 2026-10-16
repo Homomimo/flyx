@@ -405,6 +405,7 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	if h == nil || h.repo == nil || h.wsServer == nil {
 		return
 	}
+	h.notifyNodeOnline(nodeID)
 	if node, err := h.getNodeRecord(nodeID); err == nil && (node == nil || node.Status != 1) {
 		return // The next connection will resume any pending reconciliation.
 	}

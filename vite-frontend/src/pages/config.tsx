@@ -38,6 +38,7 @@ import {
   type AnnouncementData,
 } from "@/api";
 import { BackIcon, SettingsIcon } from "@/components/icons";
+import { NotifyCard } from "@/pages/config/notify-card";
 import { ThemeSettings } from "@/components/theme-settings";
 import { isAdmin } from "@/utils/auth";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
@@ -1671,6 +1672,12 @@ export default function ConfigPage() {
           </div>
         </CardBody>
       </Card>
+
+      <NotifyCard
+        configs={configs}
+        originalConfigs={originalConfigs}
+        onChange={handleConfigChange}
+      />
 
       {/* 主题设置 */}
       <div className="mt-6">

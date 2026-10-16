@@ -1442,8 +1442,16 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 			}(k.ID)
 			continue
 		}
+		newStatus := kernelStateStatus(s, k.Enabled == 1)
+		if newStatus == kernelStatusError && k.Status != kernelStatusError {
+			msg := fmt.Sprintf("节点：%s\n内核：%s", h.nodeLabel(nodeID), k.KernelType)
+			if s.Error != "" {
+				msg += "\n错误：" + truncate(s.Error, 300)
+			}
+			h.notify(notifyEventKernelError, "内核运行出错", msg)
+		}
 		fields := map[string]interface{}{
-			"status":       kernelStateStatus(s, k.Enabled == 1),
+			"status":       newStatus,
 			"last_error":   s.Error,
 			"applied_hash": s.ConfigHash,
 			"updated_time": now,
