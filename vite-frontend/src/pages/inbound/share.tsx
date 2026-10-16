@@ -27,7 +27,7 @@ export async function copyText(text: string, label = "已复制") {
 }
 
 /** The panel origin the browser talks to, so links work behind a proxy. */
-function panelOrigin(): string {
+export function panelOrigin(): string {
   const base = axios.defaults.baseURL || "";
 
   try {

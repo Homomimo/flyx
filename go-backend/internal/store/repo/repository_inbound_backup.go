@@ -62,6 +62,17 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			Epoch: c.Epoch, Bytes: c.Bytes,
 		})
 	}
+	var users []model.SubUser
+	if err := r.db.Order("id ASC").Find(&users).Error; err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		out.Users = append(out.Users, model.SubUserBackup{
+			ID: u.ID, Name: u.Name, Token: u.Token, UUID: u.UUID, Password: u.Password,
+			InboundIDs: u.InboundIDs, ExpireTime: u.ExpireTime, Enabled: u.Enabled,
+			Remark: u.Remark, CreatedTime: u.CreatedTime,
+		})
+	}
 	return out, nil
 }
 
@@ -148,6 +159,27 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
 			DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
+		}).Create(&item).Error; err != nil {
+			return 0, err
+		}
+	}
+	// Shared users keep their links and credentials. AppliedActive starts at
+	// 0 so the expiry loop pushes the active ones to the kernels.
+	for _, u := range b.Users {
+		if err := tx.Where("token = ? AND id <> ?", u.Token, u.ID).Delete(&model.SubUser{}).Error; err != nil {
+			return 0, err
+		}
+		item := model.SubUser{
+			ID: u.ID, Name: u.Name, Token: u.Token, UUID: u.UUID, Password: u.Password,
+			InboundIDs: u.InboundIDs, ExpireTime: u.ExpireTime, Enabled: u.Enabled,
+			Remark: u.Remark, CreatedTime: u.CreatedTime, UpdatedTime: now,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"name", "token", "uuid", "password", "inbound_ids", "expire_time", "enabled",
+				"applied_active", "remark", "updated_time",
+			}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
 		}

@@ -9,6 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// The runtime image has no zoneinfo; embed it so TZ (e.g. Asia/Shanghai
+	// in the compose files) applies to logs and notification times.
+	_ "time/tzdata"
 
 	"go-backend/internal/app"
 	"go-backend/internal/config"

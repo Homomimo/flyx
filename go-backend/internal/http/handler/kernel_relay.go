@@ -541,10 +541,23 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/open_api/sub/"), "/")
+	var user *model.SubUser
 	cfg, err := h.repo.GetConfigByName(nodeSubTokenConfigKey)
 	if err != nil || cfg == nil || len(cfg.Value) < 32 || !constantTimeEqual(token, cfg.Value) {
-		http.NotFound(w, r)
-		return
+		// Not the owner's link: a shared user's, looked up by its own
+		// 128-bit token.
+		if len(token) != 32 {
+			http.NotFound(w, r)
+			return
+		}
+		if user, err = h.repo.GetSubUserByToken(token); err != nil || user == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if !subUserActive(user, time.Now()) {
+			http.Error(w, "订阅已过期或已停用", http.StatusForbidden)
+			return
+		}
 	}
 
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
@@ -566,17 +579,28 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = filtered
 	}
-	endpoints, _ := h.inboundEndpoints(rows)
-	body, contentType, err := kernel.Subscription(format, endpoints)
+	var endpoints []kernel.Endpoint
+	if user != nil {
+		endpoints = h.userEndpoints(user, rows)
+	} else {
+		endpoints, _ = h.inboundEndpoints(rows)
+	}
+	body, contentType, err := kernel.Subscription(format, endpoints, h.subOptions())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	var up, down int64
-	for _, row := range rows {
-		up += row.UploadBytes
-		down += row.DownloadBytes
+	// Traffic is counted per inbound, so a shared user's link reports
+	// only the expiry.
+	var up, down, expire int64
+	if user != nil {
+		expire = user.ExpireTime / 1000
+	} else {
+		for _, row := range rows {
+			up += row.UploadBytes
+			down += row.DownloadBytes
+		}
 	}
 	appName := "FLVX"
 	if cfg, err := h.repo.GetConfigByName("app_name"); err == nil && cfg != nil && strings.TrimSpace(cfg.Value) != "" {
@@ -584,7 +608,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=0; expire=0", up, down))
+	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=0; expire=%d", up, down, expire))
 	w.Header().Set("Profile-Update-Interval", "12")
 	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(appName))
 	if r.Method == http.MethodHead {

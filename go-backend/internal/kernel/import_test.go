@@ -148,7 +148,7 @@ func TestImportedRelayEndpoint(t *testing.T) {
 
 	for _, e := range []Endpoint{{Name: "x", Host: "1.2.3.4", Port: 1, Proxy: n.Proxy}} {
 		for _, f := range []string{FormatBase64, FormatClash, FormatSingbox, FormatSurge} {
-			body, _, err := Subscription(f, []Endpoint{e})
+			body, _, err := Subscription(f, []Endpoint{e}, SubOptions{})
 			if err != nil || body == "" {
 				t.Fatalf("%s: %v", f, err)
 			}

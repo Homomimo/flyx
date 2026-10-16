@@ -421,6 +421,20 @@ type InboundsBackup struct {
 	Inbounds []InboundBackup        `json:"inbounds"`
 	Relays   []InboundRelayBackup   `json:"relays"`
 	Counters []InboundCounterBackup `json:"counters,omitempty"`
+	Users    []SubUserBackup        `json:"users,omitempty"`
+}
+
+type SubUserBackup struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Token       string `json:"token"`
+	UUID        string `json:"uuid"`
+	Password    string `json:"password"`
+	InboundIDs  string `json:"inboundIds"`
+	ExpireTime  int64  `json:"expireTime"`
+	Enabled     int    `json:"enabled"`
+	Remark      string `json:"remark"`
+	CreatedTime int64  `json:"createdTime"`
 }
 
 type KernelBackup struct {
