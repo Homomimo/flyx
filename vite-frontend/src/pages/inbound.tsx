@@ -7,7 +7,7 @@ import type {
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy } from "lucide-react";
+import { Copy, LayoutGrid, List } from "lucide-react";
 
 import {
   batchDeleteInbounds,
@@ -30,13 +30,7 @@ import {
 import { PageLoadingState } from "@/components/page-state";
 import { SearchBar } from "@/components/search-bar";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
-import {
-  GroupHeader,
-  GroupToggle,
-  groupItems,
-  useCollapsed,
-  useGroupBy,
-} from "@/pages/inbound/group";
+import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
 import { ActionSheet } from "@/pages/inbound/action-sheet";
 import {
   EXTERNAL_LABEL,
@@ -193,7 +187,10 @@ export default function InboundPage() {
   const [nodes, setNodes] = useState<NodeApiItem[]>([]);
   const [kernels, setKernels] = useState<KernelApiItem[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
-  const [groupBy, setGroupBy] = useGroupBy();
+  const [viewMode, setViewMode] = useLocalStorageState<"list" | "grid">(
+    "inbound-view-mode",
+    "list",
+  );
   const [isCollapsed, toggleCollapsed] = useCollapsed();
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
     "inbound-search-keyword",
@@ -309,24 +306,15 @@ export default function InboundPage() {
     );
   }, [inbounds, searchKeyword, nodeFilter]);
 
+  // Grouped by server, imported nodes last; one group shows as a flat list.
   const inboundGroups = groupItems(
     filtered,
-    (i) =>
-      i.external
-        ? "external"
-        : groupBy === "node"
-          ? String(i.nodeId)
-          : i.kernelType,
+    (i) => (i.external ? "external" : String(i.nodeId)),
     (_key, i) =>
-      i.external
-        ? EXTERNAL_LABEL
-        : groupBy === "node"
-          ? i.nodeName || `节点 ${i.nodeId}`
-          : (KERNEL_LABELS[i.kernelType] ?? i.kernelType),
-  );
-  const showGroupToggle =
-    new Set(inbounds.map((i) => i.nodeId)).size > 1 ||
-    new Set(inbounds.map((i) => i.kernelType)).size > 1;
+      i.external ? EXTERNAL_LABEL : i.nodeName || `节点 ${i.nodeId}`,
+  ).sort((a, b) => Number(a.key === "external") - Number(b.key === "external"));
+  const grouped =
+    new Set(inbounds.map((i) => (i.external ? "external" : i.nodeId))).size > 1;
 
   const openCreate = () => {
     const firstKernelNode = kernels[0]?.nodeId;
@@ -522,6 +510,11 @@ export default function InboundPage() {
     }
   };
 
+  const listGridClass =
+    viewMode === "grid"
+      ? "grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
+      : "grid grid-cols-1 2xl:grid-cols-2 gap-2";
+
   const renderInbound = (item: InboundApiItem) => {
     const probe =
       item.external && !item.probe?.skipped ? item.probe : undefined;
@@ -532,17 +525,164 @@ export default function InboundPage() {
       (item.external || item.kernelStatus === "running");
     const kernelBad =
       item.enabled && !item.external && item.kernelStatus !== "running";
+    // The group header already names the server.
     const where = item.external
-      ? showGroupToggle
+      ? grouped
         ? item.listen
         : EXTERNAL_LABEL
-      : groupBy === "node" && showGroupToggle
+      : grouped
         ? (KERNEL_LABELS[item.kernelType] ?? item.kernelType)
         : item.nodeName;
 
     const selected = selectMode && selectedIds.has(item.id);
     const activate = () =>
       selectMode ? toggleSelect(item.id) : setSheetFor(item.id);
+    const dotClass = unreachable
+      ? "bg-danger"
+      : running
+        ? "bg-success"
+        : item.enabled
+          ? "bg-warning"
+          : "bg-default-300";
+    const stateText = unreachable
+      ? probe?.error || "连不上"
+      : running
+        ? probe
+          ? `可连接 · ${probe.latencyMs} ms`
+          : "运行中"
+        : item.enabled
+          ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
+          : "已停用";
+
+    if (viewMode === "grid") {
+      return (
+        <div
+          key={item.id}
+          aria-pressed={selectMode ? selected : undefined}
+          className={`flex cursor-pointer flex-col gap-3 rounded-2xl border p-4 text-left shadow-sm transition-colors ${
+            selected
+              ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
+              : "border-divider bg-content1 hover:bg-default-100"
+          }`}
+          role="button"
+          tabIndex={0}
+          onClick={activate}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              activate();
+            }
+          }}
+        >
+          <div className="flex items-start gap-2">
+            {selectMode && (
+              <div
+                className="flex shrink-0 pt-0.5"
+                role="presentation"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Checkbox
+                  aria-label={`选择 ${item.name}`}
+                  isSelected={selected}
+                  onValueChange={() => toggleSelect(item.id)}
+                />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-semibold">{item.name}</div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-xs text-default-500">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+                <span
+                  className={`truncate ${unreachable ? "text-danger" : kernelBad ? "text-warning" : ""}`}
+                >
+                  {stateText}
+                </span>
+              </div>
+            </div>
+            {!selectMode && (
+              <div
+                className="shrink-0"
+                role="presentation"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Switch
+                  aria-label={`${item.enabled ? "停用" : "启用"} ${item.name}`}
+                  isDisabled={toggling === item.id}
+                  isSelected={item.enabled}
+                  size="sm"
+                  onValueChange={() => handleToggle(item)}
+                />
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <Chip color="primary" size="sm" variant="flat">
+              {describeInbound(item)}
+            </Chip>
+            <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+              端口 {item.port}
+            </span>
+            {where && (
+              <span className="max-w-full truncate rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+                {where}
+              </span>
+            )}
+            {item.relayCount > 0 && (
+              <Chip color="secondary" size="sm" variant="flat">
+                {item.relayCount} 条中转
+              </Chip>
+            )}
+            {item.relayOnly && (
+              <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
+                仅中转
+              </span>
+            )}
+          </div>
+          {!item.external && (
+            <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs">
+              <div className="rounded-lg bg-default-100 py-1.5">
+                ↑ {formatTraffic(item.uploadBytes)}
+              </div>
+              <div className="rounded-lg bg-default-100 py-1.5">
+                ↓ {formatTraffic(item.downloadBytes)}
+              </div>
+            </div>
+          )}
+          {!selectMode && (
+            <div
+              className="grid grid-cols-3 gap-2"
+              role="presentation"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Button
+                color="primary"
+                size="sm"
+                variant="flat"
+                onPress={() => setSharing(item)}
+              >
+                分享
+              </Button>
+              <Button
+                color="secondary"
+                size="sm"
+                variant="flat"
+                onPress={() => setRelaying(item)}
+              >
+                中转
+              </Button>
+              <Button
+                size="sm"
+                variant="flat"
+                onPress={() => setSheetFor(item.id)}
+              >
+                更多
+              </Button>
+            </div>
+          )}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -699,7 +839,7 @@ export default function InboundPage() {
   ).length;
   const tabs: Array<{ key: PageTab; label: string; badge?: React.ReactNode }> =
     [
-      { key: "inbounds", label: "落地", badge: inbounds.length || undefined },
+      { key: "inbounds", label: "入站", badge: inbounds.length || undefined },
       {
         key: "kernels",
         label: "内核",
@@ -771,9 +911,6 @@ export default function InboundPage() {
                 ))}
               </select>
             )}
-            {showGroupToggle && (
-              <GroupToggle value={groupBy} onChange={setGroupBy} />
-            )}
             <div className="ml-auto flex gap-2">
               {hasExternal && (
                 <Button
@@ -787,6 +924,7 @@ export default function InboundPage() {
               )}
               {inbounds.length > 0 && (
                 <Button
+                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/45"
                   size="sm"
                   variant="flat"
                   onPress={() => setSelectMode(true)}
@@ -794,6 +932,21 @@ export default function InboundPage() {
                   多选
                 </Button>
               )}
+              <Button
+                isIconOnly
+                aria-label={viewMode === "list" ? "卡片视图" : "列表视图"}
+                size="sm"
+                variant="flat"
+                onPress={() =>
+                  setViewMode(viewMode === "list" ? "grid" : "list")
+                }
+              >
+                {viewMode === "list" ? (
+                  <LayoutGrid className="h-4 w-4" />
+                ) : (
+                  <List className="h-4 w-4" />
+                )}
+              </Button>
               <Button
                 size="sm"
                 variant="flat"
@@ -887,8 +1040,8 @@ export default function InboundPage() {
                 )}
               </CardBody>
             </Card>
-          ) : !showGroupToggle ? (
-            <StaggerList className="grid grid-cols-1 2xl:grid-cols-2 gap-2">
+          ) : !grouped ? (
+            <StaggerList className={listGridClass}>
               {filtered.map((i) => (
                 <StaggerItem key={i.id}>{renderInbound(i)}</StaggerItem>
               ))}
@@ -896,7 +1049,7 @@ export default function InboundPage() {
           ) : (
             <div className="space-y-1">
               {inboundGroups.map((g) => {
-                const id = `inbound:${groupBy}:${g.key}`;
+                const id = `inbound:node:${g.key}`;
                 const folded = isCollapsed(id);
                 const off = g.items.filter((i) => !i.enabled).length;
 
@@ -917,7 +1070,7 @@ export default function InboundPage() {
                       onToggle={() => toggleCollapsed(id)}
                     />
                     {!folded && (
-                      <div className="grid grid-cols-1 2xl:grid-cols-2 gap-2 pb-3">
+                      <div className={`${listGridClass} pb-3`}>
                         {g.items.map(renderInbound)}
                       </div>
                     )}

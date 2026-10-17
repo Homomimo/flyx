@@ -21,7 +21,7 @@ curl -L https://github.com/kure29/flvx/releases/latest/download/panel_install.sh
 ## 3. 搭建节点
 
 1. **落地** 页 → **内核** 标签 → **安装内核**，在落地机上安装 Xray
-2. **落地** 标签 → **新建入站** → 选落地机和 Xray → 点模板 **VLESS + Reality + Vision** → 保存
+2. **入站** 标签 → **新建入站** → 选落地机和 Xray → 点模板 **VLESS + Reality + Vision** → 保存
 
 详见 [搭建节点](./nodes.md)。
 
