@@ -662,6 +662,11 @@ export default function InboundPage() {
                   : `经 ${item.outboundName} 出站`}
               </Chip>
             )}
+            {item.splitRules?.length > 0 && (
+              <Chip color="primary" size="sm" variant="flat">
+                分流 {item.splitRules.length} 条
+              </Chip>
+            )}
             {item.relayOnly && (
               <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
                 仅中转
@@ -794,6 +799,16 @@ export default function InboundPage() {
                 variant="flat"
               >
                 {item.outboundMissing ? "出站已删除" : "链式"}
+              </Chip>
+            )}
+            {item.splitRules?.length > 0 && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color="primary"
+                size="sm"
+                variant="flat"
+              >
+                分流
               </Chip>
             )}
             {item.relayOnly && (
