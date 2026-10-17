@@ -23,7 +23,8 @@ import { AnnouncementBanner } from "@/pages/dashboard/components/announcement-ba
 import { AnnouncementModal } from "@/pages/dashboard/components/announcement-modal";
 import { FlowChartCard } from "@/pages/dashboard/components/flow-chart-card";
 import { MetricCard } from "@/pages/dashboard/components/metric-card";
-import { getSessionName } from "@/utils/session";
+import { getAdminFlag, getSessionName } from "@/utils/session";
+import { AdminOverview } from "@/pages/dashboard/admin-overview";
 import { safeLogout } from "@/utils/logout";
 import {
   formatTraffic,
@@ -49,7 +50,12 @@ interface AddressItem {
   copying: boolean;
 }
 
+/** Admins get the health overview; regular users their traffic and rules. */
 export default function DashboardPage() {
+  return getAdminFlag() ? <AdminOverview /> : <UserDashboard />;
+}
+
+function UserDashboard() {
   const navigate = useNavigate();
   const username = getSessionName() || "User";
 
