@@ -157,29 +157,36 @@ func isSubscriptionURL(text string) bool {
 // fetchSubscription downloads a subscription. The Mihomo user agent makes
 // most providers return a Clash profile, which carries every parameter.
 func fetchSubscription(ctx context.Context, rawURL string) (string, error) {
+	body, _, err := fetchSubscriptionInfo(ctx, rawURL)
+	return body, err
+}
+
+// fetchSubscriptionInfo is fetchSubscription plus the provider's
+// Subscription-Userinfo header (plan traffic and expiry).
+func fetchSubscriptionInfo(ctx context.Context, rawURL string) (string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("User-Agent", "clash.meta/1.19.0")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+		return "", "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBytes+1))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(body) > maxSubscriptionBytes {
-		return "", errors.New("订阅内容超过 5MB")
+		return "", "", errors.New("订阅内容超过 5MB")
 	}
-	return string(body), nil
+	return string(body), truncate(strings.TrimSpace(resp.Header.Get("Subscription-Userinfo")), 255), nil
 }
 
 // inboundExternalUpdate edits an imported node: its name, address and

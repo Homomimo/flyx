@@ -181,6 +181,23 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
   return rows;
 }
 
+/** Servers first, then hand-imported nodes, then each remote source. */
+function groupKeyOf(i: InboundApiItem): string {
+  if (!i.external) return String(i.nodeId);
+
+  return i.sourceId ? `source:${i.sourceId}` : "external";
+}
+
+function groupLabelOf(i: InboundApiItem): string {
+  if (!i.external) return i.nodeName || `节点 ${i.nodeId}`;
+
+  return i.sourceId ? `订阅源 · ${i.sourceName || i.sourceId}` : EXTERNAL_LABEL;
+}
+
+function groupRank(key: string): number {
+  return key.startsWith("source:") ? 2 : key === "external" ? 1 : 0;
+}
+
 export default function InboundPage() {
   const [loading, setLoading] = useState(true);
   const [caps, setCaps] = useState<KernelCapabilitiesApiData | null>(null);
@@ -283,10 +300,7 @@ export default function InboundPage() {
     const map = new Map<string, string>();
 
     for (const i of inbounds) {
-      map.set(
-        String(i.nodeId),
-        i.external ? EXTERNAL_LABEL : i.nodeName || `节点 ${i.nodeId}`,
-      );
+      map.set(groupKeyOf(i), groupLabelOf(i));
     }
 
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "zh-CN"));
@@ -297,7 +311,7 @@ export default function InboundPage() {
 
     return inbounds.filter(
       (i) =>
-        (!nodeFilter || String(i.nodeId) === nodeFilter) &&
+        (!nodeFilter || groupKeyOf(i) === nodeFilter) &&
         (!kw ||
           [i.name, i.nodeName, i.protocol, String(i.port), i.remark]
             .join(" ")
@@ -307,14 +321,10 @@ export default function InboundPage() {
   }, [inbounds, searchKeyword, nodeFilter]);
 
   // Grouped by server, imported nodes last; one group shows as a flat list.
-  const inboundGroups = groupItems(
-    filtered,
-    (i) => (i.external ? "external" : String(i.nodeId)),
-    (_key, i) =>
-      i.external ? EXTERNAL_LABEL : i.nodeName || `节点 ${i.nodeId}`,
-  ).sort((a, b) => Number(a.key === "external") - Number(b.key === "external"));
-  const grouped =
-    new Set(inbounds.map((i) => (i.external ? "external" : i.nodeId))).size > 1;
+  const inboundGroups = groupItems(filtered, groupKeyOf, (_key, i) =>
+    groupLabelOf(i),
+  ).sort((a, b) => groupRank(a.key) - groupRank(b.key));
+  const grouped = new Set(inbounds.map(groupKeyOf)).size > 1;
 
   const openCreate = () => {
     const firstKernelNode = kernels[0]?.nodeId;

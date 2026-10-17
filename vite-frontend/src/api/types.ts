@@ -743,6 +743,9 @@ export interface InboundApiItem {
   kernelStatus: string;
   /** Imported node: not deployed by the panel, only relayed and shared. */
   external: boolean;
+  /** Remote subscription the imported node came from. */
+  sourceId?: number;
+  sourceName?: string;
   /** Imported nodes: protocol summary and flattened parameters. */
   importedSummary?: string;
   importedParams?: [string, string][];

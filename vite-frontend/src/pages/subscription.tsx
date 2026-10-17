@@ -1,4 +1,5 @@
 import type {
+  RemoteSourceItem,
   SubPipeline,
   SubPreviewItem,
   SubscriptionDraft,
@@ -13,6 +14,7 @@ import { Copy, QrCode } from "lucide-react";
 import {
   deleteSubscription,
   getInboundList,
+  getRemoteSources,
   getSubscriptions,
   previewSubscription,
   resetSubscription,
@@ -42,6 +44,8 @@ import {
 } from "@/shadcn-bridge/heroui/modal";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { formatTraffic } from "@/utils/traffic";
+import { Segmented, ToggleRow } from "@/pages/subscription/controls";
+import { RemoteSourcesSection } from "@/pages/subscription/sources";
 
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
@@ -129,74 +133,6 @@ function Usage({ s, compact }: { s: SubscriptionItem; compact?: boolean }) {
           ↑ {formatTraffic(s.uploadBytes)} · ↓ {formatTraffic(s.downloadBytes)}
         </div>
       )}
-    </div>
-  );
-}
-
-function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: Array<[T, string]>;
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div
-      className="grid gap-1 rounded-xl bg-default-100 p-1 text-sm"
-      style={{
-        gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
-      }}
-    >
-      {options.map(([k, label]) => (
-        <button
-          key={k}
-          className={`rounded-lg px-2 py-1.5 transition-colors ${
-            value === k
-              ? "bg-background font-medium shadow-sm"
-              : "text-default-500"
-          }`}
-          type="button"
-          onClick={() => onChange(k)}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function ToggleRow({
-  id,
-  label,
-  hint,
-  value,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <Switch
-        aria-labelledby={`${id}-label`}
-        id={id}
-        isSelected={value}
-        size="sm"
-        onValueChange={onChange}
-      />
-      <label
-        className="flex cursor-pointer flex-col"
-        htmlFor={id}
-        id={`${id}-label`}
-      >
-        <span className="text-sm">{label}</span>
-        {hint && <span className="text-xs text-default-500">{hint}</span>}
-      </label>
     </div>
   );
 }
@@ -293,6 +229,7 @@ function draftFrom(s?: SubscriptionItem): Draft {
       kind: "own",
       sourceAll: true,
       inboundIds: [],
+      sourceIds: [],
       options: { ...EMPTY_PIPELINE },
       expireTime: 0,
       expire: "",
@@ -310,6 +247,7 @@ function draftFrom(s?: SubscriptionItem): Draft {
     kind: s.kind,
     sourceAll: s.sourceAll,
     inboundIds: s.inboundIds,
+    sourceIds: s.sourceIds ?? [],
     options: { ...EMPTY_PIPELINE, ...s.options },
     expireTime: s.expireTime,
     expire: toDateInput(s.expireTime),
@@ -339,6 +277,7 @@ function Editor({
   draft,
   setDraft,
   inbounds,
+  sources,
   regions,
   saving,
   onSave,
@@ -347,6 +286,7 @@ function Editor({
   draft: Draft;
   setDraft: (d: Draft) => void;
   inbounds: InboundApiItem[];
+  sources: RemoteSourceItem[];
   regions: string[];
   saving: boolean;
   onSave: () => void;
@@ -377,11 +317,15 @@ function Editor({
     [inbounds],
   );
   const selfBuilt = inbounds.filter((i) => !i.external);
-  const imported = inbounds.filter((i) => i.external);
+  // Nodes of a remote source are picked as the whole source.
+  const imported = inbounds.filter((i) => i.external && !i.sourceId);
   const sharedPicked = share
     ? inbounds.filter(
         (i) =>
-          (draft.sourceAll ? i.enabled : draft.inboundIds.includes(i.id)) &&
+          (draft.sourceAll
+            ? i.enabled
+            : draft.inboundIds.includes(i.id) ||
+              draft.sourceIds.includes(i.sourceId ?? 0)) &&
           (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
       ).length
     : 0;
@@ -568,6 +512,32 @@ function Editor({
             <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
               {pickList("自建", selfBuilt)}
               {pickList("导入", imported)}
+              {sources.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-default-500">
+                    订阅源（整个源，更新后的节点自动跟上）
+                  </p>
+                  {sources.map((src) => (
+                    <Checkbox
+                      key={src.id}
+                      className="w-full"
+                      isSelected={draft.sourceIds.includes(src.id)}
+                      onValueChange={(on) =>
+                        set({
+                          sourceIds: on
+                            ? [...draft.sourceIds, src.id]
+                            : draft.sourceIds.filter((x) => x !== src.id),
+                        })
+                      }
+                    >
+                      <span className="text-sm">{src.name}</span>
+                      <span className="ml-1 text-xs text-default-400">
+                        {src.nodeCount} 个节点
+                      </span>
+                    </Checkbox>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {sharedPicked > 0 && (
@@ -756,6 +726,7 @@ export default function SubscriptionPage() {
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
+  const [sources, setSources] = useState<RemoteSourceItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [detail, setDetail] = useState<SubscriptionItem | null>(null);
@@ -766,10 +737,13 @@ export default function SubscriptionPage() {
 
   const load = useCallback(async () => {
     try {
-      const [subRes, inRes] = await Promise.all([
+      const [subRes, inRes, srcRes] = await Promise.all([
         getSubscriptions(),
         getInboundList(),
+        getRemoteSources(),
       ]);
+
+      if (srcRes.code === 0) setSources(srcRes.data ?? []);
 
       if (subRes.code === 0 && subRes.data) {
         setSubs(subRes.data.items ?? []);
@@ -921,7 +895,14 @@ export default function SubscriptionPage() {
         <div className="truncate text-xs text-default-500">
           {s.nodeCount} 个节点
           {" · "}
-          {s.sourceAll ? "全部落地" : `${s.inboundIds.length} 个落地`}
+          {s.sourceAll
+            ? "全部落地"
+            : [
+                s.inboundIds.length ? `${s.inboundIds.length} 个落地` : "",
+                s.sourceIds?.length ? `${s.sourceIds.length} 个订阅源` : "",
+              ]
+                .filter(Boolean)
+                .join(" + ")}
           {s.kind === "share" ? ` · ${expiryLabel(s.expireTime)}` : ""}
           {s.remark ? ` · ${s.remark}` : ""}
         </div>
@@ -1013,6 +994,8 @@ export default function SubscriptionPage() {
           </div>
         )}
       </section>
+
+      <RemoteSourcesSection sources={sources} onChanged={load} />
 
       {/* Detail: links, QR and actions. */}
       <Modal
@@ -1161,6 +1144,7 @@ export default function SubscriptionPage() {
                 regions={regions}
                 saving={saving}
                 setDraft={setDraft}
+                sources={sources}
                 onClose={onClose}
                 onSave={save}
               />

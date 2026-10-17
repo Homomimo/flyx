@@ -677,6 +677,7 @@ export interface SubscriptionItem {
   path: string;
   sourceAll: boolean;
   inboundIds: number[];
+  sourceIds: number[];
   sharedIds: number[];
   options: SubPipeline;
   expireTime: number;
@@ -698,6 +699,7 @@ export interface SubscriptionDraft {
   kind: "own" | "share";
   sourceAll: boolean;
   inboundIds: number[];
+  sourceIds: number[];
   options: SubPipeline;
   expireTime: number;
   enabled?: boolean;
@@ -722,6 +724,48 @@ export const deleteSubscription = (id: number) =>
   Network.post("/subscription/delete", { id });
 export const resetSubscription = (id: number) =>
   Network.post<SubscriptionItem>("/subscription/reset", { id });
+export interface RemoteSourceItem {
+  id: number;
+  name: string;
+  url: string;
+  /** 0 = refresh by hand only. */
+  intervalHours: number;
+  relayOnly: boolean;
+  enabled: boolean;
+  lastFetch: number;
+  lastError: string;
+  nodeCount: number;
+  /** The provider's Subscription-Userinfo header. */
+  userinfo: string;
+}
+export interface RemoteSyncResult {
+  added: number;
+  updated: number;
+  removed: number;
+  kept: number;
+  errors: string[];
+}
+export const getRemoteSources = () =>
+  Network.post<RemoteSourceItem[]>("/subscription/source/list");
+export const saveRemoteSource = (data: {
+  id?: number;
+  name: string;
+  url: string;
+  intervalHours: number;
+  relayOnly: boolean;
+  enabled?: boolean;
+}) =>
+  Network.post<
+    RemoteSourceItem | { source: RemoteSourceItem; result: RemoteSyncResult }
+  >("/subscription/source/save", data, { timeout: 60000 });
+export const refreshRemoteSource = (id: number) =>
+  Network.post<{ source: RemoteSourceItem; result: RemoteSyncResult }>(
+    "/subscription/source/refresh",
+    { id },
+    { timeout: 60000 },
+  );
+export const deleteRemoteSource = (id: number, keepNodes: boolean) =>
+  Network.post("/subscription/source/delete", { id, keepNodes });
 export const resetSubscriptionTraffic = (id: number) =>
   Network.post<SubscriptionItem>("/subscription/reset-traffic", { id });
 export const previewSubscription = (data: SubscriptionDraft) =>

@@ -95,6 +95,9 @@ type inboundView struct {
 	UpdatedTime     int64              `json:"updatedTime"`
 	// Probe is the last reachability check of an imported node.
 	Probe *externalProbe `json:"probe,omitempty"`
+	// SourceID / SourceName: the remote subscription it came from.
+	SourceID   int64  `json:"sourceId,omitempty"`
+	SourceName string `json:"sourceName,omitempty"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -505,6 +508,12 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 		kernelByID[k.ID] = k
 	}
 	nodes := make(map[int64]*model.Node)
+	sourceNames := map[int64]string{}
+	if sources, err := h.repo.ListRemoteSources(); err == nil {
+		for _, s := range sources {
+			sourceNames[s.ID] = s.Name
+		}
+	}
 	views := make([]inboundView, 0, len(rows))
 	for _, row := range rows {
 		in, err := inboundFromModel(row)
@@ -545,6 +554,8 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			DownloadBytes:  row.DownloadBytes,
 			CreatedTime:    row.CreatedTime,
 			UpdatedTime:    row.UpdatedTime,
+			SourceID:       row.SourceID,
+			SourceName:     sourceNames[row.SourceID],
 		}
 		if node != nil {
 			v.NodeName = node.Name

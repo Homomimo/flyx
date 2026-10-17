@@ -195,6 +195,25 @@ func subInboundIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
 		}
 		return ids
 	}
+	ids := subExplicitIDs(s, rows)
+	picked := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		picked[id] = true
+	}
+	sources := map[int64]bool{}
+	for _, id := range parseIDList(s.SourceIDs) {
+		sources[id] = true
+	}
+	for _, r := range rows {
+		if r.SourceID != 0 && sources[r.SourceID] && !picked[r.ID] {
+			ids = append(ids, r.ID)
+		}
+	}
+	return ids
+}
+
+// subExplicitIDs are the inbounds picked one by one (still existing).
+func subExplicitIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
 	known := make(map[int64]bool, len(rows))
 	for _, r := range rows {
 		known[r.ID] = true
@@ -339,6 +358,7 @@ type subscriptionView struct {
 	Path       string  `json:"path"`
 	SourceAll  bool    `json:"sourceAll"`
 	InboundIDs []int64 `json:"inboundIds"`
+	SourceIDs  []int64 `json:"sourceIds"`
 	// SharedIDs are selected inbounds of a share subscription that can't
 	// carry per-user credentials (Snell, Shadowsocks, imported nodes).
 	SharedIDs  []int64     `json:"sharedIds"`
@@ -373,16 +393,16 @@ func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbou
 			}
 		}
 	}
-	selected := ids
-	if s.SourceAll == 1 {
-		selected = []int64{}
-	} else if selected == nil {
-		selected = []int64{}
+	selected := []int64{}
+	sourceIDs := []int64{}
+	if s.SourceAll != 1 {
+		selected = append(selected, subExplicitIDs(s, rows)...)
+		sourceIDs = append(sourceIDs, parseIDList(s.SourceIDs)...)
 	}
 	pipe := parsePipeline(s.Options)
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
-		SourceAll: s.SourceAll == 1, InboundIDs: selected, SharedIDs: shared, Options: pipe,
+		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), Remark: s.Remark,
 		NodeCount:   len(kernel.ApplySubOptions(h.subEndpoints(s, rows), pipe.options())),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
@@ -431,6 +451,7 @@ type subscriptionRequest struct {
 	Kind       string      `json:"kind"`
 	SourceAll  bool        `json:"sourceAll"`
 	InboundIDs []int64     `json:"inboundIds"`
+	SourceIDs  []int64     `json:"sourceIds"`
 	Options    subPipeline `json:"options"`
 	ExpireTime int64       `json:"expireTime"`
 	Enabled    *bool       `json:"enabled"`
@@ -474,8 +495,15 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 			ids = append(ids, id)
 		}
 	}
-	if !req.SourceAll && len(ids) == 0 {
-		return nil, errText("请至少选择一个入站，或选择全部")
+	var sources []int64
+	for _, id := range req.SourceIDs {
+		if id > 0 {
+			sources = append(sources, id)
+		}
+	}
+	req.SourceIDs = sources
+	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 {
+		return nil, errText("请至少选择一个入站或订阅源，或选择全部")
 	}
 	return ids, nil
 }
@@ -522,6 +550,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	s.SourceAll = boolToInt(req.SourceAll)
 	s.InboundIDs = formatIDList(ids)
+	s.SourceIDs = formatIDList(req.SourceIDs)
 	opts, _ := json.Marshal(req.Options)
 	s.Options = string(opts)
 	s.ExpireTime = req.ExpireTime
@@ -668,7 +697,7 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids)}
+	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs)}
 	source := h.subEndpoints(draft, rows)
 	result := kernel.ApplySubOptions(source, req.Options.options())
 	items := make([]subPreviewItem, 0, len(result))

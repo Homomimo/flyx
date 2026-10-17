@@ -21,7 +21,7 @@ func (h *Handler) StartBackgroundJobs() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.jobsCancel = cancel
 	h.jobsStarted = true
-	h.jobsWG.Add(12)
+	h.jobsWG.Add(13)
 	h.jobsMu.Unlock()
 
 	go h.runHourlyStatsLoop(ctx)
@@ -36,6 +36,7 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runExternalProbeLoop(ctx)
 	go h.runNotifyLoop(ctx)
 	go h.runSubscriptionLoop(ctx)
+	go h.runRemoteSourceLoop(ctx)
 }
 
 func (h *Handler) runFederationCleanupRetryLoop(ctx context.Context) {

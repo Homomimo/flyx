@@ -24,6 +24,9 @@ type Subscription struct {
 	// InboundIDs (comma separated) lists them.
 	SourceAll  int    `gorm:"column:source_all;not null;default:0"`
 	InboundIDs string `gorm:"column:inbound_ids;type:text;not null;default:''"`
+	// SourceIDs (comma separated) adds every node of these remote sources,
+	// including ones a later refresh brings.
+	SourceIDs string `gorm:"column:source_ids;type:text;not null;default:''"`
 	// Options is the JSON processing pipeline.
 	Options string `gorm:"type:text;not null;default:''"`
 	// ExpireTime is unix ms; 0 never expires.
