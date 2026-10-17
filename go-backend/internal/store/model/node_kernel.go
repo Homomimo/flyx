@@ -51,6 +51,10 @@ type NodeInbound struct {
 	// SourceID is the remote subscription an imported node came from (0 =
 	// imported by hand); the source's refresh keeps it up to date.
 	SourceID int64 `gorm:"column:source_id;not null;default:0;index"`
+	// OutboundID chains the inbound's traffic through another inbound (one
+	// of the panel's or an imported node) instead of leaving directly; 0 is
+	// direct.
+	OutboundID int64 `gorm:"column:outbound_id;not null;default:0;index"`
 }
 
 func (NodeInbound) TableName() string { return "node_inbound" }

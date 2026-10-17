@@ -65,6 +65,24 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 
 默认监听 `::`（同时支持 IPv4 和 IPv6）。如果节点在内核启动参数里完全禁用了 IPv6（`ipv6.disable=1`），部分内核会绑定失败，此时在高级选项里把监听地址改为 `0.0.0.0`。
 
+### 出站代理
+
+服务器侧的链式：客户端照常连本节点，由节点内核把流量转到下一跳。想在客户端订阅里组合“中转 → 落地”，见 [订阅的链式代理](./subscription.md#链式代理)。
+
+在入站的 **出站代理** 里选择另一个入站（其他节点上的入站，或导入的节点），这个入站收到的流量就不再从本节点直接出去，而是再经所选节点出去，网站看到的是所选节点的 IP。常见用法：
+
+- 线路好的节点接入，再从有解锁 IP 的节点（例如导入的机场节点）出去
+- A → B → C 多级：给 A 的入站选 B，再给 B 的入站选 C；每个节点只连下一跳
+
+注意事项：
+
+- Xray 能连接 VLESS / VMess / Trojan / Shadowsocks（不含插件和 ShadowTLS）/ SOCKS5 / HTTP；Hysteria2、TUIC、AnyTLS 等请用 sing-box 内核；Snell 内核不支持链式出站，也不能作为出站节点
+- 出站节点是本面板的自签证书入站时，Xray 用证书指纹校验；导入的节点如果跳过了证书验证，Xray 无法连接（新版 Xray 已移除 `allowInsecure`），请改用 sing-box
+- 开启了“获取真实客户端 IP”的入站只能经中转连接，不能作为出站节点；只监听本机的入站只能被同一节点上的入站选用
+- 出站节点开启了白名单时，会自动放行经它出站的节点
+- 被选作出站代理的入站不能直接删除，需先解除；订阅源刷新时也会保留这些节点。出站节点如果随内核或节点一起被删除，经它出站的入站会丢弃流量（不会改为直连），请重新选择
+- 用户流量统计照常按用户计算
+
 ## 分享与订阅
 
 - 点击入站 → **分享**（电脑上也可以直接点行内的“分享”按钮）：显示通用分享链接和二维码；Snell 没有通用链接，显示 Surge 配置行。Surge 用户请使用 Surge 订阅
@@ -75,7 +93,10 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 | 自动识别 | 按客户端 UA 返回对应格式 | |
 | Clash / Mihomo | Clash Verge、Stash、FlClash | XHTTP、Snell、NaïveProxy |
 | sing-box | SFA / SFI / SFM | XHTTP、Snell |
-| 通用 base64 | v2rayN、Shadowrocket、NekoBox | Snell |
+| Shadowrocket | Shadowrocket | XHTTP、Snell、NaïveProxy |
+| Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy |
+| Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy |
+| 通用 base64 | v2rayN、NekoBox | Snell |
 | Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy |
 
 ## 批量操作

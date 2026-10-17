@@ -1,9 +1,10 @@
 package model
 
 const (
-	// SubscriptionOwn is for the admin's own devices: owner credentials.
+	// SubscriptionOwn used the owner's credentials; such rows are converted
+	// to SubscriptionShare on startup.
 	SubscriptionOwn = "own"
-	// SubscriptionShare is for someone else: own credentials, cut off when
+	// SubscriptionShare (every subscription now): own credentials, cut off when
 	// disabled or expired.
 	SubscriptionShare = "share"
 )

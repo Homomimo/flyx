@@ -498,6 +498,7 @@ type InboundBackup struct {
 	Inx                 int    `json:"inx"`
 	CreatedTime         int64  `json:"createdTime"`
 	SourceID            int64  `json:"sourceId,omitempty"`
+	OutboundID          int64  `json:"outboundId,omitempty"`
 }
 
 type RemoteSourceBackup struct {

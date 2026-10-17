@@ -9,7 +9,7 @@ import type { InboundApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy, QrCode } from "lucide-react";
+import { ChevronDown, Copy } from "lucide-react";
 
 import {
   deleteSubscription,
@@ -24,12 +24,7 @@ import {
 import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
 import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
-import {
-  QrImage,
-  SUB_FORMATS,
-  copyText,
-  panelOrigin,
-} from "@/pages/inbound/share";
+import { copyText, panelOrigin } from "@/pages/inbound/share";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
@@ -44,8 +39,8 @@ import {
 } from "@/shadcn-bridge/heroui/modal";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { formatTraffic } from "@/utils/traffic";
+import { SUB_CLIENTS } from "@/pages/subscription/clients";
 import { Segmented, ToggleRow } from "@/pages/subscription/controls";
-import { RemoteSourcesSection } from "@/pages/subscription/sources";
 
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
@@ -73,6 +68,8 @@ const EMPTY_PIPELINE: SubPipeline = {
   dedupe: false,
   sort: "",
   regionGroups: false,
+  chainLanding: "",
+  chainRelay: "",
 };
 
 function toDateInput(ms: number): string {
@@ -100,7 +97,7 @@ function expiryLabel(ms: number): string {
   return `${toDateInput(ms)} 到期 · 剩 ${days} 天`;
 }
 
-/** Used / limit of a share subscription, with a bar when it has a limit. */
+/** Used / limit of a subscription, with a bar when it has a limit. */
 function Usage({ s, compact }: { s: SubscriptionItem; compact?: boolean }) {
   const used = s.uploadBytes + s.downloadBytes;
   const pct = s.trafficLimit ? Math.min(100, (used / s.trafficLimit) * 100) : 0;
@@ -190,21 +187,77 @@ function ChipPicker({
 function Section({
   title,
   hint,
+  summary,
+  collapsible,
+  defaultOpen = true,
   children,
 }: {
   title: string;
   hint?: string;
+  /** Shown next to the title while collapsed. */
+  summary?: string;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const shown = !collapsible || open;
+
   return (
     <section className="space-y-3 border-t border-divider pt-4 first:border-t-0 first:pt-0">
-      <div>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        {hint && <p className="text-xs text-default-500">{hint}</p>}
-      </div>
-      {children}
+      {collapsible ? (
+        <button
+          aria-expanded={open}
+          className="flex w-full items-start gap-2 text-left"
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+        >
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-semibold">
+              {title}
+              {!open && summary && (
+                <span className="ml-2 text-xs font-normal text-primary">
+                  {summary}
+                </span>
+              )}
+            </h3>
+            {open && hint && <p className="text-xs text-default-500">{hint}</p>}
+          </div>
+          <ChevronDown
+            className={`mt-0.5 h-4 w-4 shrink-0 text-default-400 transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+      ) : (
+        <div>
+          <h3 className="text-sm font-semibold">{title}</h3>
+          {hint && <p className="text-xs text-default-500">{hint}</p>}
+        </div>
+      )}
+      {shown && children}
     </section>
   );
+}
+
+/** Names the processing steps a pipeline turns on, e.g. "过滤、改名". */
+function pipelineSummary(o: SubPipeline): string {
+  const steps: string[] = [];
+
+  if (
+    o.lines ||
+    o.regions.length ||
+    o.protocols.length ||
+    o.include ||
+    o.exclude
+  )
+    steps.push("过滤");
+  if (o.rename.trim()) steps.push("改名");
+  if (o.addFlag) steps.push("国旗");
+  if (o.prefix) steps.push("前缀");
+  if (o.dedupe) steps.push("去重");
+  if (o.sort) steps.push("排序");
+  if (o.regionGroups) steps.push("地区分组");
+
+  return steps.join("、");
 }
 
 interface Draft extends SubscriptionDraft {
@@ -226,7 +279,9 @@ function draftFrom(s?: SubscriptionItem): Draft {
   if (!s) {
     return {
       name: "",
-      kind: "own",
+      // New subscriptions get their own credentials, so any of them can
+      // expire, be capped or cut off; older own-credential ones keep working.
+      kind: "share",
       sourceAll: true,
       inboundIds: [],
       sourceIds: [],
@@ -262,14 +317,14 @@ function draftFrom(s?: SubscriptionItem): Draft {
 /** The API payload: the backend rejects unknown fields like `expire`. */
 function toPayload(d: Draft): SubscriptionDraft {
   const { expire, limitGB, ...rest } = d;
-  const share = d.kind === "share";
   const gb = Number(limitGB);
 
   return {
     ...rest,
-    expireTime: share ? fromDateInput(expire) : 0,
-    trafficLimit: share && gb > 0 ? Math.round(gb * GB) : 0,
-    resetDay: share ? d.resetDay : 0,
+    kind: "share",
+    expireTime: fromDateInput(expire),
+    trafficLimit: gb > 0 ? Math.round(gb * GB) : 0,
+    resetDay: d.resetDay,
   };
 }
 
@@ -308,7 +363,6 @@ function Editor({
     setPreview(null);
   };
 
-  const share = draft.kind === "share";
   const protocols = useMemo(
     () =>
       [...new Set(inbounds.map((i) => i.protocol))].map(
@@ -319,16 +373,14 @@ function Editor({
   const selfBuilt = inbounds.filter((i) => !i.external);
   // Nodes of a remote source are picked as the whole source.
   const imported = inbounds.filter((i) => i.external && !i.sourceId);
-  const sharedPicked = share
-    ? inbounds.filter(
-        (i) =>
-          (draft.sourceAll
-            ? i.enabled
-            : draft.inboundIds.includes(i.id) ||
-              draft.sourceIds.includes(i.sourceId ?? 0)) &&
-          (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
-      ).length
-    : 0;
+  const sharedPicked = inbounds.filter(
+    (i) =>
+      (draft.sourceAll
+        ? i.enabled
+        : draft.inboundIds.includes(i.id) ||
+          draft.sourceIds.includes(i.sourceId ?? 0)) &&
+      (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
+  ).length;
 
   const runPreview = async () => {
     setPreviewing(true);
@@ -367,7 +419,7 @@ function Editor({
             {!i.enabled && (
               <span className="ml-1 text-xs text-default-400">已停用</span>
             )}
-            {share && (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)) && (
+            {(i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)) && (
               <span className="ml-1 text-xs text-warning">共用凭据</span>
             )}
           </Checkbox>
@@ -391,108 +443,95 @@ function Editor({
             variant="bordered"
             onChange={(e) => set({ name: e.target.value })}
           />
-          <Segmented
-            options={[
-              ["own", "自用"],
-              ["share", "分享给他人"],
-            ]}
-            value={draft.kind}
-            onChange={(kind) => set({ kind })}
-          />
           <p className="text-xs text-default-500">
-            {share
-              ? "对方拿到独立的 UUID / 密码，到期或停用后从节点上删除，已导入的配置也连不上"
-              : "用你自己的凭据，适合自己的设备；可以建多个，各自筛选不同的节点"}
+            有独立的 UUID /
+            密码：停用、到期或流量用完后从节点上删除，已导入的配置也连不上
           </p>
-          {share && (
-            <div className="space-y-1">
-              <label className="text-sm font-medium" htmlFor="sub-expire">
-                到期日期
-              </label>
-              <div className="flex gap-2">
-                <input
-                  className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-background px-2 text-sm"
-                  id="sub-expire"
-                  type="date"
-                  value={draft.expire}
-                  onChange={(e) => set({ expire: e.target.value })}
-                />
-                {[30, 90, 365].map((d) => (
-                  <Button
-                    key={d}
-                    className="min-w-0 px-2"
-                    size="sm"
-                    variant="flat"
-                    onPress={() =>
-                      set({ expire: toDateInput(Date.now() + d * 86400000) })
-                    }
-                  >
-                    {d === 365 ? "1年" : `${d}天`}
-                  </Button>
-                ))}
-              </div>
-              <p className="text-xs text-default-500">
-                {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
-              </p>
-            </div>
-          )}
-          {share && (
-            <div className="space-y-1">
-              <label className="text-sm font-medium" htmlFor="sub-limit">
-                流量上限
-              </label>
-              <div className="flex gap-2">
-                <div className="relative min-w-0 flex-1">
-                  <input
-                    className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
-                    id="sub-limit"
-                    inputMode="decimal"
-                    placeholder="不限"
-                    value={draft.limitGB}
-                    onChange={(e) =>
-                      set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
-                    }
-                  />
-                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-default-500">
-                    GB
-                  </span>
-                </div>
-                {[50, 100, 500].map((g) => (
-                  <Button
-                    key={g}
-                    className="min-w-0 px-2"
-                    size="sm"
-                    variant="flat"
-                    onPress={() => set({ limitGB: String(g) })}
-                  >
-                    {g}G
-                  </Button>
-                ))}
-              </div>
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <label className="text-sm" htmlFor="sub-reset-day">
-                  每月重置
-                </label>
-                <select
-                  className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
-                  id="sub-reset-day"
-                  value={draft.resetDay}
-                  onChange={(e) => set({ resetDay: Number(e.target.value) })}
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="sub-expire">
+              到期日期
+            </label>
+            <div className="flex gap-2">
+              <input
+                className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-background px-2 text-sm"
+                id="sub-expire"
+                type="date"
+                value={draft.expire}
+                onChange={(e) => set({ expire: e.target.value })}
+              />
+              {[30, 90, 365].map((d) => (
+                <Button
+                  key={d}
+                  className="min-w-0 px-2"
+                  size="sm"
+                  variant="flat"
+                  onPress={() =>
+                    set({ expire: toDateInput(Date.now() + d * 86400000) })
+                  }
                 >
-                  <option value={0}>不重置</option>
-                  {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
-                    <option key={d} value={d}>
-                      每月 {d} 号
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <p className="text-xs text-default-500">
-                上传 +
-                下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
-              </p>
+                  {d === 365 ? "1年" : `${d}天`}
+                </Button>
+              ))}
             </div>
-          )}
+            <p className="text-xs text-default-500">
+              {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
+            </p>
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="sub-limit">
+              流量上限
+            </label>
+            <div className="flex gap-2">
+              <div className="relative min-w-0 flex-1">
+                <input
+                  className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
+                  id="sub-limit"
+                  inputMode="decimal"
+                  placeholder="不限"
+                  value={draft.limitGB}
+                  onChange={(e) =>
+                    set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
+                  }
+                />
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-default-500">
+                  GB
+                </span>
+              </div>
+              {[50, 100, 500].map((g) => (
+                <Button
+                  key={g}
+                  className="min-w-0 px-2"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => set({ limitGB: String(g) })}
+                >
+                  {g}G
+                </Button>
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <label className="text-sm" htmlFor="sub-reset-day">
+                每月重置
+              </label>
+              <select
+                className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
+                id="sub-reset-day"
+                value={draft.resetDay}
+                onChange={(e) => set({ resetDay: Number(e.target.value) })}
+              >
+                <option value={0}>不重置</option>
+                {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={d}>
+                    每月 {d} 号
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="text-xs text-default-500">
+              上传 +
+              下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
+            </p>
+          </div>
         </Section>
 
         <Section hint="中转线路会跟着它的落地一起出现" title="来源">
@@ -549,7 +588,10 @@ function Editor({
         </Section>
 
         <Section
+          collapsible
+          defaultOpen={Boolean(pipelineSummary(o))}
           hint="按顺序执行：过滤 → 改名 → 国旗 → 前缀 → 去重 → 排序"
+          summary={pipelineSummary(o) || "未设置"}
           title="处理"
         >
           <div className="space-y-1.5">
@@ -657,6 +699,33 @@ function Editor({
           />
         </Section>
 
+        <Section
+          collapsible
+          defaultOpen={Boolean(o.chainLanding || o.chainRelay)}
+          hint="客户端先连中转节点，再经它连落地节点，网站看到的是落地节点的 IP。落地节点会挂到「中转节点」组上，在「落地节点」里选出口、在「中转节点」里选中转。两项都填且都匹配到节点才生效；通用分享链接（Base64）无法表达链式"
+          summary={o.chainLanding && o.chainRelay ? "已开启" : "未开启"}
+          title="链式代理"
+        >
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Input
+              description="多个关键词用 | 分隔，或 /正则/"
+              label="落地节点"
+              placeholder="例如 美国|家宽"
+              value={o.chainLanding}
+              variant="bordered"
+              onChange={(e) => setOpts({ chainLanding: e.target.value })}
+            />
+            <Input
+              description="同时匹配两项的节点算作落地"
+              label="中转节点"
+              placeholder="例如 香港|IEPL"
+              value={o.chainRelay}
+              variant="bordered"
+              onChange={(e) => setOpts({ chainRelay: e.target.value })}
+            />
+          </div>
+        </Section>
+
         <Section title="预览">
           <Button
             className="w-full"
@@ -690,6 +759,13 @@ function Editor({
                           </span>
                         )}
                       </span>
+                      {p.chain && (
+                        <span
+                          className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "bg-warning-100 text-warning-700 dark:bg-warning-500/20" : "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20"}`}
+                        >
+                          {p.chain === "landing" ? "落地" : "中转"}
+                        </span>
+                      )}
                       <span className="shrink-0 text-default-500">
                         {p.line === "relay" ? "中转" : "直连"}
                       </span>
@@ -730,7 +806,6 @@ export default function SubscriptionPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [detail, setDetail] = useState<SubscriptionItem | null>(null);
-  const [showQr, setShowQr] = useState(false);
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
   const [resettingTraffic, setResettingTraffic] = useState(false);
@@ -853,19 +928,13 @@ export default function SubscriptionPage() {
 
   if (loading) return <PageLoadingState message="正在加载..." />;
 
-  const own = subs.filter((s) => s.kind === "own");
-  const shared = subs.filter((s) => s.kind === "share");
-
   const card = (s: SubscriptionItem) => (
     <div
       key={s.id}
       className="flex cursor-pointer items-center gap-3 rounded-xl border border-divider bg-content1 px-3 py-2.5 shadow-sm transition-colors hover:bg-default-100"
       role="button"
       tabIndex={0}
-      onClick={() => {
-        setShowQr(false);
-        setDetail(s);
-      }}
+      onClick={() => setDetail(s)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
@@ -903,14 +972,12 @@ export default function SubscriptionPage() {
               ]
                 .filter(Boolean)
                 .join(" + ")}
-          {s.kind === "share" ? ` · ${expiryLabel(s.expireTime)}` : ""}
+          {s.expireTime ? ` · ${expiryLabel(s.expireTime)}` : ""}
           {s.remark ? ` · ${s.remark}` : ""}
         </div>
-        {s.kind === "share" && (
-          <div className="mt-1.5">
-            <Usage compact s={s} />
-          </div>
-        )}
+        <div className="mt-1.5">
+          <Usage compact s={s} />
+        </div>
       </div>
       <div
         className="flex shrink-0 items-center gap-2"
@@ -964,40 +1031,17 @@ export default function SubscriptionPage() {
         </Card>
       )}
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-semibold text-default-600">自用</h2>
+      {subs.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs text-default-500">
+          每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开
+        </p>
+      ) : (
         <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
-          {own.map(card)}
+          {subs.map(card)}
         </div>
-      </section>
+      )}
 
-      <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-default-600">分享给他人</h2>
-          <Button
-            size="sm"
-            variant="light"
-            onPress={() =>
-              setDraft({ ...draftFrom(), kind: "share", sourceAll: false })
-            }
-          >
-            添加
-          </Button>
-        </div>
-        {shared.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-divider py-4 text-center text-xs text-default-500">
-            给朋友单独的订阅和凭据，到期或停用后自动断开
-          </p>
-        ) : (
-          <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
-            {shared.map(card)}
-          </div>
-        )}
-      </section>
-
-      <RemoteSourcesSection sources={sources} onChanged={load} />
-
-      {/* Detail: links, QR and actions. */}
+      {/* Detail: import into a client, copy links, actions. */}
       <Modal
         backdrop="blur"
         classNames={{ base: modalBase }}
@@ -1013,37 +1057,34 @@ export default function SubscriptionPage() {
                 <ModalHeader className="flex flex-col gap-1">
                   <h2 className="text-lg font-bold break-all">{detail.name}</h2>
                   <p className="text-small font-normal text-default-500">
-                    {detail.kind === "share" ? "分享" : "自用"} ·{" "}
                     {detail.nodeCount} 个节点
-                    {detail.kind === "share"
+                    {detail.expireTime
                       ? ` · ${expiryLabel(detail.expireTime)}`
                       : ""}
                   </p>
                 </ModalHeader>
                 <ModalBody className="space-y-3">
-                  {detail.kind === "share" && (
-                    <div className="space-y-2 rounded-xl bg-default-100 p-3">
-                      <Usage s={detail} />
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-default-500">
-                          {detail.overQuota
-                            ? "流量已用完，已从节点上断开"
-                            : "上传 + 下载合计"}
-                        </span>
-                        <Button
-                          isDisabled={
-                            detail.uploadBytes + detail.downloadBytes === 0
-                          }
-                          isLoading={resettingTraffic}
-                          size="sm"
-                          variant="flat"
-                          onPress={resetTraffic}
-                        >
-                          重置流量
-                        </Button>
-                      </div>
+                  <div className="space-y-2 rounded-xl bg-default-100 p-3">
+                    <Usage s={detail} />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-default-500">
+                        {detail.overQuota
+                          ? "流量已用完，已从节点上断开"
+                          : "上传 + 下载合计"}
+                      </span>
+                      <Button
+                        isDisabled={
+                          detail.uploadBytes + detail.downloadBytes === 0
+                        }
+                        isLoading={resettingTraffic}
+                        size="sm"
+                        variant="flat"
+                        onPress={resetTraffic}
+                      >
+                        重置流量
+                      </Button>
                     </div>
-                  )}
+                  </div>
                   <Button
                     className="w-full"
                     color="primary"
@@ -1053,37 +1094,50 @@ export default function SubscriptionPage() {
                   >
                     复制订阅链接（自动识别客户端）
                   </Button>
-                  <div className="grid grid-cols-2 gap-2">
-                    {SUB_FORMATS.filter((f) => f.key).map((f) => (
-                      <button
-                        key={f.key}
-                        className="rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-default-100"
-                        type="button"
-                        onClick={() =>
-                          copyText(url(detail, f.key), `${f.label} 订阅已复制`)
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {SUB_CLIENTS.map((c) => {
+                      const link = url(detail, c.format);
+                      const open = () => {
+                        if (c.importURL) {
+                          window.location.href = c.importURL(link, detail.name);
+                        } else {
+                          copyText(link, `${c.label}订阅已复制`);
                         }
-                      >
-                        <div className="text-sm font-medium">{f.label}</div>
-                        <div className="truncate text-xs text-default-500">
-                          {f.hint}
+                      };
+
+                      return (
+                        <div
+                          key={c.key}
+                          className="relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-default-100"
+                        >
+                          <button
+                            className="h-full min-w-0 flex-1 truncate pl-3 pr-9 text-left text-sm font-medium"
+                            title={
+                              c.importURL ? `导入到 ${c.label}` : "复制通用订阅"
+                            }
+                            type="button"
+                            onClick={open}
+                          >
+                            {c.label}
+                          </button>
+                          <button
+                            aria-label={`复制 ${c.label} 订阅链接`}
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-default-400 hover:bg-default-200 hover:text-default-600"
+                            type="button"
+                            onClick={() =>
+                              copyText(link, `${c.label} 订阅已复制`)
+                            }
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
                         </div>
-                      </button>
-                    ))}
+                      );
+                    })}
                   </div>
-                  <Button
-                    size="sm"
-                    startContent={<QrCode className="h-4 w-4" />}
-                    variant="light"
-                    onPress={() => setShowQr((v) => !v)}
-                  >
-                    {showQr ? "收起二维码" : "二维码"}
-                  </Button>
-                  {showQr && (
-                    <div className="flex justify-center">
-                      <QrImage text={url(detail)} />
-                    </div>
-                  )}
-                  {detail.kind === "share" && detail.sharedIds.length > 0 && (
+                  <p className="text-center text-xs text-default-400">
+                    点客户端直接导入，右侧按钮复制链接
+                  </p>
+                  {detail.sharedIds.length > 0 && (
                     <p className="text-xs text-warning">
                       其中 {detail.sharedIds.length}{" "}
                       个落地用的是共用凭据，停用后已导入的配置仍能连接
@@ -1105,7 +1159,7 @@ export default function SubscriptionPage() {
                     variant="light"
                     onPress={() => setConfirm("reset")}
                   >
-                    {detail.kind === "share" ? "重置链接和凭据" : "重置链接"}
+                    重置链接和凭据
                   </Button>
                   <Button
                     color="primary"
@@ -1173,9 +1227,7 @@ export default function SubscriptionPage() {
               <ModalBody>
                 <p className="text-sm text-default-600">
                   {confirm === "reset"
-                    ? detail?.kind === "share"
-                      ? "旧链接和对方已导入的配置会立即失效，需要把新链接发给对方重新导入。"
-                      : "旧链接立即失效，需要在客户端里换成新链接。"
+                    ? "旧链接和已导入的配置会立即失效，需要用新链接重新导入。"
                     : "订阅链接立即失效，无法恢复。"}
                 </p>
               </ModalBody>

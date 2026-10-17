@@ -1,9 +1,12 @@
+import type { RemoteSyncResult } from "@/api";
 import type { InboundApiItem } from "@/api/types";
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
-import { importInbounds, updateExternalInbound } from "@/api";
+import { importInbounds, saveRemoteSource, updateExternalInbound } from "@/api";
+import { INTERVALS, syncText } from "@/pages/inbound/sources";
+import { Segmented } from "@/pages/subscription/controls";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
@@ -15,6 +18,7 @@ import {
   ModalHeader,
 } from "@/shadcn-bridge/heroui/modal";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
+import { Switch } from "@/shadcn-bridge/heroui/switch";
 
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
@@ -22,29 +26,86 @@ const modalBase =
 /** Label shown where a panel-managed inbound shows its node or kernel. */
 export const EXTERNAL_LABEL = "导入的节点";
 
+/** A lone http(s) URL: a subscription that can be kept in sync. */
+function subscriptionURL(text: string): URL | null {
+  const t = text.trim();
+
+  if (!/^https?:\/\/\S+$/i.test(t)) return null;
+  try {
+    return new URL(t);
+  } catch {
+    return null;
+  }
+}
+
 export function ImportModal({
   isOpen,
   onClose,
   onImported,
+  onSourceAdded,
 }: {
   isOpen: boolean;
   onClose: () => void;
   onImported: () => void;
+  /** A subscription URL was saved as a synced source. */
+  onSourceAdded: () => void;
 }) {
   const [links, setLinks] = useState("");
   const [relayOnly, setRelayOnly] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [sync, setSync] = useState(true);
+  const [sourceName, setSourceName] = useState("");
+  const [intervalHours, setIntervalHours] = useState("12");
 
   useEffect(() => {
     if (isOpen) {
       setLinks("");
       setRelayOnly(false);
       setErrors([]);
+      setSync(true);
+      setSourceName("");
+      setIntervalHours("12");
     }
   }, [isOpen]);
 
+  const subURL = subscriptionURL(links);
+  const syncing = Boolean(subURL) && sync;
+
+  const addSource = async () => {
+    if (!subURL) return;
+    setSaving(true);
+    try {
+      const res = await saveRemoteSource({
+        name: sourceName.trim() || subURL.hostname,
+        url: subURL.toString(),
+        intervalHours: Number(intervalHours),
+        relayOnly,
+      });
+      const result = (res.data as { result?: RemoteSyncResult } | null)?.result;
+
+      // A source whose first fetch failed is still saved.
+      if (res.code !== 0 && !res.data) {
+        toast.error(res.msg || "添加失败");
+
+        return;
+      }
+      if (res.code !== 0)
+        toast(res.msg || "已保存，但更新失败", { icon: "⚠️" });
+      else toast.success(result ? `已添加：${syncText(result)}` : "已添加");
+      onSourceAdded();
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const submit = async () => {
+    if (syncing) {
+      await addSource();
+
+      return;
+    }
     setSaving(true);
     try {
       const res = await importInbounds(links, relayOnly);
@@ -89,7 +150,7 @@ export function ImportModal({
         </ModalHeader>
         <ModalBody>
           <Textarea
-            description="支持：分享链接（ss / vmess / vless / trojan / hysteria2 / tuic / anytls / socks5，每行一个）、base64 订阅、Clash / Mihomo 配置、sing-box 配置、Surge / Loon 节点行，或直接填订阅地址（https://...，只导入一次；要定时更新请到“订阅 → 订阅源”添加）"
+            description="支持：分享链接（ss / vmess / vless / trojan / hysteria2 / tuic / anytls / socks5，每行一个）、base64 订阅、Clash / Mihomo 配置、sing-box 配置、Surge / Loon 节点行，或直接填订阅地址（https://...）"
             label="节点或订阅"
             minRows={5}
             placeholder={"vless://...\nss://...\n或 https://订阅地址"}
@@ -97,6 +158,38 @@ export function ImportModal({
             variant="bordered"
             onChange={(e) => setLinks(e.target.value)}
           />
+          {subURL && (
+            <div className="space-y-3 rounded-xl border border-divider p-3">
+              <div className="flex items-start gap-2">
+                <Switch isSelected={sync} size="sm" onValueChange={setSync} />
+                <div>
+                  <p className="text-sm">定时同步</p>
+                  <p className="text-xs text-default-500">
+                    {sync
+                      ? "存为订阅源：按时重新拉取，节点增删改自动跟上"
+                      : "只导入一次，之后不再更新"}
+                  </p>
+                </div>
+              </div>
+              {sync && (
+                <>
+                  <Input
+                    label="名称"
+                    placeholder={subURL.hostname}
+                    size="sm"
+                    value={sourceName}
+                    variant="bordered"
+                    onChange={(e) => setSourceName(e.target.value)}
+                  />
+                  <Segmented
+                    options={INTERVALS}
+                    value={intervalHours}
+                    onChange={setIntervalHours}
+                  />
+                </>
+              )}
+            </div>
+          )}
           <Checkbox isSelected={relayOnly} onValueChange={setRelayOnly}>
             <span className="text-sm">订阅里只保留中转线路，不含直连</span>
           </Checkbox>
@@ -120,7 +213,7 @@ export function ImportModal({
             isLoading={saving}
             onPress={submit}
           >
-            导入
+            {syncing ? "添加并同步" : "导入"}
           </Button>
         </ModalFooter>
       </ModalContent>

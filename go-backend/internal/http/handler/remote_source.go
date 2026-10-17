@@ -162,6 +162,9 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 				res.Errors = append(res.Errors, row.Name+"："+p)
 			}
 		}
+		for _, p := range h.applyChainReferrers(row.ID) {
+			res.Errors = append(res.Errors, row.Name+"："+p)
+		}
 	}
 
 	for _, row := range mine {
@@ -169,6 +172,10 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource)
 			continue
 		}
 		if relays, err := h.repo.ListInboundRelays(row.ID); err == nil && len(relays) > 0 {
+			res.Kept++
+			continue
+		}
+		if len(h.chainReferrers(row.ID)) > 0 {
 			res.Kept++
 			continue
 		}
@@ -358,6 +365,15 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if rows, err := h.repo.ListNodeInbounds(); err == nil {
+		for i := range rows {
+			if rows[i].SourceID != req.ID {
+				continue
+			}
+			if msg := h.chainInUseMessage(&rows[i]); msg != "" {
+				response.WriteJSON(w, response.ErrDefault(msg+"，或删除时保留节点"))
+				return
+			}
+		}
 		for _, row := range rows {
 			if row.SourceID != req.ID {
 				continue

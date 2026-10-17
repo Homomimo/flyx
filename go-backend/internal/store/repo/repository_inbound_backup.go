@@ -37,7 +37,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
-			CreatedTime: i.CreatedTime, SourceID: i.SourceID,
+			CreatedTime: i.CreatedTime, SourceID: i.SourceID, OutboundID: i.OutboundID,
 		})
 	}
 
@@ -144,7 +144,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
-			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID,
+			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -152,7 +152,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 				"kernel_id", "node_id", "name", "protocol", "listen", "port", "transport", "security",
 				"settings", "extra", "share_host", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
-				"inx", "updated_time", "source_id",
+				"inx", "updated_time", "source_id", "outbound_id",
 			}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
@@ -217,8 +217,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
 			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime,
 		}
-		if item.Kind != model.SubscriptionShare {
-			item.Kind = model.SubscriptionOwn
+		// Every subscription has its own credentials (older backups may
+		// carry owner-credential ones).
+		item.Kind = model.SubscriptionShare
+		if item.UUID == "" || item.Password == "" {
+			item.UUID, item.Password = subscriptionCredentials()
 		}
 		if res.RowsAffected > 0 {
 			item.ID = existing.ID

@@ -295,6 +295,11 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但部分中转更新失败: " + strings.Join(problems, "；"), TS: row.UpdatedTime})
 		return
 	}
+	// So do kernels chained through the node.
+	if warnings := h.applyChainReferrers(row.ID); len(warnings) > 0 {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: row.UpdatedTime})
+		return
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 

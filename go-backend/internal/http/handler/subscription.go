@@ -39,13 +39,15 @@ type subPipeline struct {
 	Dedupe       bool     `json:"dedupe"`
 	Sort         string   `json:"sort"`
 	RegionGroups bool     `json:"regionGroups"`
+	ChainLanding string   `json:"chainLanding"`
+	ChainRelay   string   `json:"chainRelay"`
 }
 
 func (p subPipeline) options() kernel.SubOptions {
 	return kernel.SubOptions{
 		Lines: p.Lines, Regions: p.Regions, Protocols: p.Protocols, Include: p.Include, Exclude: p.Exclude,
 		Rename: p.Rename, AddFlag: p.AddFlag, Prefix: p.Prefix, Dedupe: p.Dedupe, Sort: p.Sort,
-		RegionGroups: p.RegionGroups,
+		RegionGroups: p.RegionGroups, ChainLanding: p.ChainLanding, ChainRelay: p.ChainRelay,
 	}
 }
 
@@ -53,7 +55,10 @@ func (p *subPipeline) normalize() error {
 	p.Rename = strings.TrimSpace(strings.ReplaceAll(p.Rename, "\r\n", "\n"))
 	p.Include = strings.TrimSpace(p.Include)
 	p.Exclude = strings.TrimSpace(p.Exclude)
-	if len(p.Rename) > 10000 || len(p.Include) > 1000 || len(p.Exclude) > 1000 {
+	p.ChainLanding = strings.TrimSpace(p.ChainLanding)
+	p.ChainRelay = strings.TrimSpace(p.ChainRelay)
+	if len(p.Rename) > 10000 || len(p.Include) > 1000 || len(p.Exclude) > 1000 ||
+		len(p.ChainLanding) > 1000 || len(p.ChainRelay) > 1000 {
 		return errText("规则太长")
 	}
 	if len([]rune(p.Prefix)) > 50 {
@@ -467,20 +472,16 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
 		return nil, errText("请填写名称（最多 100 个字）")
 	}
-	if req.Kind != model.SubscriptionShare {
-		req.Kind = model.SubscriptionOwn
-	}
+	// Every subscription has its own credentials.
+	req.Kind = model.SubscriptionShare
 	if req.ExpireTime < 0 {
 		req.ExpireTime = 0
 	}
-	if req.TrafficLimit < 0 || req.Kind != model.SubscriptionShare {
+	if req.TrafficLimit < 0 {
 		req.TrafficLimit = 0
 	}
 	if req.ResetDay < 0 || req.ResetDay > 28 {
 		return nil, errText("每月重置日只能是 1–28 号")
-	}
-	if req.Kind != model.SubscriptionShare {
-		req.ResetDay = 0
 	}
 	if err := req.Options.normalize(); err != nil {
 		return nil, err
@@ -670,6 +671,8 @@ type subPreviewItem struct {
 	Region   string `json:"region"`
 	Protocol string `json:"protocol"`
 	Line     string `json:"line"` // "direct" or "relay"
+	// Chain is "landing" or "relay" when the subscription chains proxies.
+	Chain string `json:"chain,omitempty"`
 }
 
 // subscriptionPreview runs an (unsaved) subscription's pipeline and lists
@@ -707,7 +710,7 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 			line = "direct"
 		}
 		items = append(items, subPreviewItem{Name: e.Name, Original: e.Original, Region: kernel.RegionOf(e.Name),
-			Protocol: kernel.EndpointProtocol(e), Line: line})
+			Protocol: kernel.EndpointProtocol(e), Line: line, Chain: e.ChainRole})
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"items":   items,

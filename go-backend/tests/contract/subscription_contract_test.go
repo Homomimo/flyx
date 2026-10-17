@@ -35,10 +35,11 @@ func TestSubscriptionContract(t *testing.T) {
 		return resp.Code, string(body), resp.Header().Get("Subscription-Userinfo")
 	}
 
-	// A default own subscription always exists and is what the old API returns.
+	// A default subscription (with its own credentials) always exists and is
+	// what the old API returns.
 	list := kernelContractPost(t, router, admin, "/api/v1/subscription/list", `{}`).Data.(map[string]interface{})
 	items := list["items"].([]interface{})
-	if len(items) != 1 || items[0].(map[string]interface{})["kind"] != "own" || len(list["regions"].([]interface{})) < 10 {
+	if len(items) != 1 || items[0].(map[string]interface{})["kind"] != "share" || len(list["regions"].([]interface{})) < 10 {
 		t.Fatalf("default subscription: %v", list)
 	}
 	def := items[0].(map[string]interface{})

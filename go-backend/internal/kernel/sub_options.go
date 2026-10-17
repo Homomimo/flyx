@@ -34,6 +34,10 @@ type SubOptions struct {
 	Sort string
 	// RegionGroups adds one auto-select group per detected region.
 	RegionGroups bool
+	// ChainLanding / ChainRelay match names (like Include): landing nodes
+	// are dialed through the relay group (see markChain).
+	ChainLanding string
+	ChainRelay   string
 }
 
 // RegionOther is the filter value for names without a recognized region.
@@ -118,6 +122,12 @@ func (o SubOptions) Validate() error {
 	}
 	if _, err := ParseMatcher(o.Exclude); err != nil {
 		return fmt.Errorf("排除：%v", err)
+	}
+	if _, err := ParseMatcher(o.ChainLanding); err != nil {
+		return fmt.Errorf("落地节点：%v", err)
+	}
+	if _, err := ParseMatcher(o.ChainRelay); err != nil {
+		return fmt.Errorf("中转节点：%v", err)
 	}
 	return nil
 }
@@ -233,6 +243,7 @@ func ApplySubOptions(endpoints []Endpoint, opts SubOptions) []Endpoint {
 	if opts.Sort == "name" {
 		sort.SliceStable(out, func(i, j int) bool { return NaturalLess(out[i].Name, out[j].Name) })
 	}
+	markChain(out, opts)
 	return out
 }
 

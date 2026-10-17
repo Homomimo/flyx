@@ -98,6 +98,11 @@ type inboundView struct {
 	// SourceID / SourceName: the remote subscription it came from.
 	SourceID   int64  `json:"sourceId,omitempty"`
 	SourceName string `json:"sourceName,omitempty"`
+	// OutboundID is the inbound this one's traffic is chained through (0 =
+	// direct); OutboundMissing flags a target that was deleted.
+	OutboundID      int64  `json:"outboundId"`
+	OutboundName    string `json:"outboundName,omitempty"`
+	OutboundMissing bool   `json:"outboundMissing,omitempty"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -129,6 +134,7 @@ type inboundRequest struct {
 	AcceptProxyProtocol bool             `json:"acceptProxyProtocol"`
 	RelayWhitelist      bool             `json:"relayWhitelist"`
 	WhitelistExtra      string           `json:"whitelistExtra"`
+	OutboundID          int64            `json:"outboundId"`
 	Enabled             *bool            `json:"enabled"`
 }
 
@@ -514,6 +520,10 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			sourceNames[s.ID] = s.Name
 		}
 	}
+	names := make(map[int64]string, len(rows))
+	for _, row := range rows {
+		names[row.ID] = row.Name
+	}
 	views := make([]inboundView, 0, len(rows))
 	for _, row := range rows {
 		in, err := inboundFromModel(row)
@@ -556,6 +566,11 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			UpdatedTime:    row.UpdatedTime,
 			SourceID:       row.SourceID,
 			SourceName:     sourceNames[row.SourceID],
+			OutboundID:     row.OutboundID,
+		}
+		if row.OutboundID != 0 {
+			name, ok := names[row.OutboundID]
+			v.OutboundName, v.OutboundMissing = name, !ok
 		}
 		if node != nil {
 			v.NodeName = node.Name
@@ -685,6 +700,15 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("自动申请证书需要 sing-box 1.14 及以上，节点安装的是 %s", k.Version)))
 		return
 	}
+	prevOutboundID := row.OutboundID
+	row.OutboundID = req.OutboundID
+	if req.OutboundID < 0 {
+		row.OutboundID = 0
+	}
+	if err := h.validateChain(row, k.KernelType); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	if in.Protocol == kernel.ProtocolSnell {
 		if major := snellMajor(k.Version); in.Settings.SnellVersion > major {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点安装的是 Snell %s，不支持 v%d 客户端", k.Version, in.Settings.SnellVersion)))
@@ -736,6 +760,13 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	}
 	if err := h.applyKernel(k.ID, false); err != nil {
 		warnings = append([]string{"下发到节点失败: " + err.Error()}, warnings...)
+	}
+	if update {
+		warnings = append(warnings, h.applyChainReferrers(row.ID)...)
+	}
+	if prevOutboundID != row.OutboundID {
+		warnings = append(warnings, h.applyWhitelistedTarget(prevOutboundID)...)
+		warnings = append(warnings, h.applyWhitelistedTarget(row.OutboundID)...)
 	}
 	if len(warnings) > 0 {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"id": row.ID}})
@@ -854,11 +885,16 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("节点服务不存在"))
 		return
 	}
+	if msg := h.chainInUseMessage(row); msg != "" {
+		response.WriteJSON(w, response.ErrDefault(msg))
+		return
+	}
 	h.removeInboundRelays(id)
 	if err := h.repo.DeleteNodeInbound(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	h.applyWhitelistedTarget(row.OutboundID)
 	if isExternalInbound(row) {
 		response.WriteJSON(w, response.OKEmpty())
 		return
@@ -880,6 +916,7 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 	s := 0
 	f := 0
 	failures := make([]batchFailureDetail, 0)
+	var targetIDs []int64
 	kernelIDs := make([]int64, 0)
 	seenKernel := make(map[int64]bool)
 	for _, id := range ids {
@@ -887,6 +924,11 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		if err != nil || row == nil {
 			f++
 			failures = appendBatchFailureReason(failures, id, "", "节点服务不存在")
+			continue
+		}
+		if msg := h.chainInUseMessage(row); msg != "" && !batchDeletesReferrers(ids, h.chainReferrers(id)) {
+			f++
+			failures = appendBatchFailureReason(failures, id, row.Name, msg)
 			continue
 		}
 		h.removeInboundRelays(id)
@@ -900,12 +942,18 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 			seenKernel[row.KernelID] = true
 			kernelIDs = append(kernelIDs, row.KernelID)
 		}
+		if row.OutboundID != 0 {
+			targetIDs = append(targetIDs, row.OutboundID)
+		}
 	}
 	msg := "操作成功"
 	for _, kernelID := range kernelIDs {
 		if err := h.applyKernel(kernelID, false); err != nil {
 			msg = "已删除，但下发到节点失败: " + err.Error()
 		}
+	}
+	for _, targetID := range targetIDs {
+		h.applyWhitelistedTarget(targetID)
 	}
 	response.WriteJSON(w, response.R{
 		Code: 0,
@@ -1066,6 +1114,10 @@ func (h *Handler) inboundRegenerate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已重新生成，但下发到节点失败: " + err.Error(), TS: row.UpdatedTime})
 		return
 	}
+	if warnings := h.applyChainReferrers(row.ID); len(warnings) > 0 {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已重新生成，但" + strings.Join(warnings, "；"), TS: row.UpdatedTime})
+		return
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -1138,6 +1190,9 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		}
 		if in.SupportsUsers() {
 			in.Users = users[in.ID]
+		}
+		if in.Via, err = h.inboundVia(row); err != nil {
+			return nil, "", err
 		}
 		inbounds = append(inbounds, in)
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}

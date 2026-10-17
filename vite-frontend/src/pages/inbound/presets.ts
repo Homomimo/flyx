@@ -106,6 +106,8 @@ export interface InboundForm {
   acceptProxyProtocol: boolean;
   relayWhitelist: boolean;
   whitelistExtra: string;
+  /** Chained outbound inbound id; "" leaves directly. */
+  outboundId: string;
   enabled: boolean;
 }
 
@@ -299,6 +301,7 @@ export function emptyForm(
     acceptProxyProtocol: false,
     relayWhitelist: false,
     whitelistExtra: "",
+    outboundId: "",
     enabled: true,
   };
 }
@@ -393,6 +396,7 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     acceptProxyProtocol: item.acceptProxyProtocol,
     relayWhitelist: item.relayWhitelist,
     whitelistExtra: item.whitelistExtra,
+    outboundId: item.outboundId ? String(item.outboundId) : "",
     enabled: item.enabled,
   };
 }
@@ -505,6 +509,7 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     acceptProxyProtocol: form.acceptProxyProtocol,
     relayWhitelist: form.relayWhitelist,
     whitelistExtra: form.relayWhitelist ? form.whitelistExtra.trim() : "",
+    outboundId: Number(form.outboundId) || 0,
     enabled: form.enabled,
   };
 }

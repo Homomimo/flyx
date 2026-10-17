@@ -27,11 +27,57 @@ func randomToken() string {
 	return hex.EncodeToString(b)
 }
 
-// migrateSubscriptions makes sure there is at least one subscription. On
-// upgrade the old single subscription (token and naming settings) becomes
-// the default one and shared users become share subscriptions, keeping
-// their links and credentials.
+// subscriptionCredentials returns a fresh UUID and password for a
+// subscription's own credentials.
+func subscriptionCredentials() (string, string) {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	h := hex.EncodeToString(b)
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], randomToken()
+}
+
+// newDefaultSubscription is "我的订阅", with its own credentials like every
+// subscription.
+func newDefaultSubscription(token, options string, now int64) model.Subscription {
+	id, pw := subscriptionCredentials()
+	return model.Subscription{
+		Name: "我的订阅", Kind: model.SubscriptionShare, Token: token, UUID: id, Password: pw, SourceAll: 1,
+		Options: options, Enabled: 1, CreatedTime: now, UpdatedTime: now,
+	}
+}
+
+// shareOwnSubscriptions gives subscriptions that used the owner's
+// credentials ("own", before every subscription had its own) their own
+// credentials. AppliedActive stays 0, so the sync loop pushes them to the
+// kernels; the link (token) is kept.
+func shareOwnSubscriptions(db *gorm.DB) error {
+	var own []model.Subscription
+	if err := db.Where("kind <> ?", model.SubscriptionShare).Find(&own).Error; err != nil {
+		return err
+	}
+	for _, s := range own {
+		fields := map[string]interface{}{"kind": model.SubscriptionShare, "applied_active": 0}
+		if s.UUID == "" || s.Password == "" {
+			fields["uuid"], fields["password"] = subscriptionCredentials()
+		}
+		if err := db.Model(&model.Subscription{}).Where("id = ?", s.ID).Updates(fields).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateSubscriptions makes sure there is at least one subscription and
+// that every subscription has its own credentials. On upgrade the old
+// single subscription (token and naming settings) becomes the default one
+// and shared users become subscriptions, keeping their links and
+// credentials.
 func migrateSubscriptions(db *gorm.DB, now int64) error {
+	if err := shareOwnSubscriptions(db); err != nil {
+		return err
+	}
 	var count int64
 	if err := db.Model(&model.Subscription{}).Count(&count).Error; err != nil {
 		return err
@@ -59,10 +105,7 @@ func migrateSubscriptions(db *gorm.DB, now int64) error {
 		if len(token) < 32 {
 			token = randomToken()
 		}
-		def := model.Subscription{
-			Name: "我的订阅", Kind: model.SubscriptionOwn, Token: token, SourceAll: 1,
-			Options: string(opts), Enabled: 1, CreatedTime: now, UpdatedTime: now,
-		}
+		def := newDefaultSubscription(token, string(opts), now)
 		if err := tx.Create(&def).Error; err != nil {
 			return err
 		}
@@ -123,22 +166,21 @@ func (r *Repository) GetSubscriptionByToken(token string) (*model.Subscription, 
 	return &s, nil
 }
 
-// DefaultSubscription is the first own subscription (the one the old
+// DefaultSubscription is the first subscription (the one the old
 // single-subscription API refers to), created if none exists.
 func (r *Repository) DefaultSubscription(now int64) (*model.Subscription, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
 	var s model.Subscription
-	res := r.db.Where("kind = ?", model.SubscriptionOwn).Order("inx ASC, id ASC").Limit(1).Find(&s)
+	res := r.db.Order("inx ASC, id ASC").Limit(1).Find(&s)
 	if res.Error != nil {
 		return nil, res.Error
 	}
 	if res.RowsAffected > 0 {
 		return &s, nil
 	}
-	s = model.Subscription{Name: "我的订阅", Kind: model.SubscriptionOwn, Token: randomToken(), SourceAll: 1,
-		Enabled: 1, CreatedTime: now, UpdatedTime: now}
+	s = newDefaultSubscription(randomToken(), "", now)
 	return &s, r.db.Create(&s).Error
 }
 
