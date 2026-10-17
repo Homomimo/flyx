@@ -643,6 +643,18 @@ export default function InboundPage() {
                 {item.relayCount} 条中转
               </Chip>
             )}
+            {item.outboundId > 0 && (
+              <Chip
+                className="max-w-full"
+                color={item.outboundMissing ? "danger" : "warning"}
+                size="sm"
+                variant="flat"
+              >
+                {item.outboundMissing
+                  ? "出站节点已删除"
+                  : `经 ${item.outboundName} 出站`}
+              </Chip>
+            )}
             {item.relayOnly && (
               <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
                 仅中转
@@ -760,6 +772,21 @@ export default function InboundPage() {
                 variant="flat"
               >
                 {item.relayCount} 中转
+              </Chip>
+            )}
+            {item.outboundId > 0 && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color={item.outboundMissing ? "danger" : "warning"}
+                size="sm"
+                title={
+                  item.outboundMissing
+                    ? "出站节点已删除"
+                    : `经 ${item.outboundName} 出站`
+                }
+                variant="flat"
+              >
+                {item.outboundMissing ? "出站已删除" : "链式"}
               </Chip>
             )}
             {item.relayOnly && (
@@ -1251,6 +1278,7 @@ export default function InboundPage() {
 
       <InboundFormModal
         caps={caps}
+        inbounds={inbounds}
         initial={formInitial}
         isOpen={formOpen}
         kernels={kernels}

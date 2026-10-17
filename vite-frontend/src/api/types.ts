@@ -775,6 +775,11 @@ export interface InboundApiItem {
   updatedTime: number;
   /** Last reachability check of an imported node, from the panel. */
   probe?: InboundProbe;
+  /** Inbound this one's traffic is chained through; 0 leaves directly. */
+  outboundId: number;
+  outboundName?: string;
+  /** The chain target was deleted; traffic is dropped until changed. */
+  outboundMissing?: boolean;
 }
 
 export interface InboundMutationPayload {
@@ -795,6 +800,7 @@ export interface InboundMutationPayload {
   acceptProxyProtocol: boolean;
   relayWhitelist: boolean;
   whitelistExtra: string;
+  outboundId: number;
   enabled?: boolean;
 }
 

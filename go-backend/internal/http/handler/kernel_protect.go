@@ -21,7 +21,8 @@ var loopbackAllow = []string{"127.0.0.0/8", "::1/128"}
 // inboundAllowList computes the sources allowed to reach a whitelisted
 // inbound: loopback (tunnel exits dial locally), every address of the nodes
 // that dial the landing node (entry nodes of port forwards, exit nodes of
-// tunnel forwards), and the user's extra entries.
+// tunnel forwards), the nodes of kernels chained through it, and the user's
+// extra entries.
 func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 	set := make(map[string]bool)
 	for _, c := range loopbackAllow {
@@ -59,6 +60,23 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) []string {
 				for _, c := range resolveAllowHost(host) {
 					set[c] = true
 				}
+			}
+		}
+	}
+
+	// Kernels chained through the inbound dial it from their own node.
+	for _, nodeID := range h.chainDialerNodeIDs(row.ID) {
+		if seenNodes[nodeID] {
+			continue
+		}
+		seenNodes[nodeID] = true
+		node, err := h.repo.GetNodeByID(nodeID)
+		if err != nil || node == nil {
+			continue
+		}
+		for _, host := range nodeAddresses(node) {
+			for _, c := range resolveAllowHost(host) {
+				set[c] = true
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -19,6 +20,9 @@ func renderSnell(inbounds []Inbound) (Rendered, error) {
 	for _, in := range inbounds {
 		if in.Protocol != ProtocolSnell {
 			return Rendered{}, fmt.Errorf("Snell 内核不支持协议 %s", in.Protocol)
+		}
+		if in.Via != nil {
+			return Rendered{}, errors.New("Snell 内核不支持链式出站")
 		}
 		name := fmt.Sprintf("snell-%d", in.ID)
 		listen := net.JoinHostPort(in.Listen, strconv.Itoa(in.Port))

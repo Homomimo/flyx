@@ -1,4 +1,5 @@
 import type {
+  InboundApiItem,
   KernelApiItem,
   KernelCapabilitiesApiData,
   NodeApiItem,
@@ -44,6 +45,8 @@ interface Props {
   caps: KernelCapabilitiesApiData | null;
   nodes: NodeApiItem[];
   kernels: KernelApiItem[];
+  /** All inbounds, offered as chained outbounds. */
+  inbounds: InboundApiItem[];
   initial: InboundForm;
   onSaved: () => void;
   onInstallKernel: (nodeId: number, kernelType: string) => void;
@@ -63,6 +66,7 @@ export function InboundFormModal({
   caps,
   nodes,
   kernels,
+  inbounds,
   initial,
   onSaved,
   onInstallKernel,
@@ -288,6 +292,14 @@ export function InboundFormModal({
   };
 
   const nodeOptions = eligibleNodes(nodes);
+  // Any other inbound can carry this one's traffic; the backend rejects
+  // loops and protocols the kernel cannot dial.
+  const outboundOptions = inbounds.filter((i) => i.id !== form.id);
+  const outboundMissing =
+    form.outboundId !== "" &&
+    !outboundOptions.some((i) => String(i.id) === form.outboundId);
+  const outboundLabel = (i: InboundApiItem) =>
+    `${i.name} · ${i.external ? "导入" : i.nodeName || "节点"}`;
 
   return (
     <Modal
@@ -837,6 +849,47 @@ export function InboundFormModal({
                         />
                       )}
                   </div>
+                )}
+
+                {form.kernelType !== "snell" && (
+                  <Select
+                    description={
+                      outboundMissing
+                        ? "原出站节点已被删除，该入站的流量会被丢弃，请重新选择"
+                        : "链式代理：该入站收到的流量再经所选节点出去（落地 IP 变为所选节点的 IP）；选直连则从本节点出去"
+                    }
+                    label="出站代理"
+                    selectedKeys={[form.outboundId || "direct"]}
+                    onSelectionChange={(keys) => {
+                      const key = String(Array.from(keys)[0] ?? "direct");
+
+                      set("outboundId", key === "direct" ? "" : key);
+                    }}
+                  >
+                    {[
+                      <SelectItem key="direct" textValue="直连">
+                        直连
+                      </SelectItem>,
+                      ...(outboundMissing
+                        ? [
+                            <SelectItem
+                              key={form.outboundId}
+                              textValue="已删除的节点"
+                            >
+                              已删除的节点
+                            </SelectItem>,
+                          ]
+                        : []),
+                      ...outboundOptions.map((i) => (
+                        <SelectItem
+                          key={String(i.id)}
+                          textValue={outboundLabel(i)}
+                        >
+                          {outboundLabel(i)}
+                        </SelectItem>
+                      )),
+                    ]}
+                  </Select>
                 )}
 
                 <button
