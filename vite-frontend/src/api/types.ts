@@ -647,9 +647,26 @@ export interface KernelInfo {
   certModes?: string[];
 }
 
+/** A preset 分流 category (geosite list, China IPs, BT). */
+export interface SplitCategory {
+  key: string;
+  label: string;
+  group: string;
+}
+
+/** A 分流 rule as stored on an inbound. */
+export interface SplitRule {
+  categories?: string[];
+  domains?: string[];
+  ips?: string[];
+  action: "direct" | "block" | "proxy";
+  outboundId?: number;
+}
+
 export interface KernelCapabilitiesApiData {
   kernels: KernelInfo[];
   ssMethods: string[];
+  splitCategories?: SplitCategory[];
   defaults: {
     realitySni: string;
     fingerprint: string;
@@ -780,6 +797,8 @@ export interface InboundApiItem {
   outboundName?: string;
   /** The chain target was deleted; traffic is dropped until changed. */
   outboundMissing?: boolean;
+  /** 分流 rules, tried in order before the default exit. */
+  splitRules: SplitRule[];
 }
 
 export interface InboundMutationPayload {
@@ -801,6 +820,7 @@ export interface InboundMutationPayload {
   relayWhitelist: boolean;
   whitelistExtra: string;
   outboundId: number;
+  splitRules: SplitRule[];
   enabled?: boolean;
 }
 

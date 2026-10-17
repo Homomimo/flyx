@@ -499,6 +499,7 @@ type InboundBackup struct {
 	CreatedTime         int64  `json:"createdTime"`
 	SourceID            int64  `json:"sourceId,omitempty"`
 	OutboundID          int64  `json:"outboundId,omitempty"`
+	SplitRules          string `json:"splitRules,omitempty"`
 }
 
 type RemoteSourceBackup struct {

@@ -25,6 +25,7 @@ import {
   uuidProtocols,
   visionAllowed,
 } from "./presets";
+import { SplitRulesEditor } from "./split-rules";
 
 import { createInbound, updateInbound } from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -852,44 +853,59 @@ export function InboundFormModal({
                 )}
 
                 {form.kernelType !== "snell" && (
-                  <Select
-                    description={
-                      outboundMissing
-                        ? "原出站节点已被删除，该入站的流量会被丢弃，请重新选择"
-                        : "链式代理：该入站收到的流量再经所选节点出去（落地 IP 变为所选节点的 IP）；选直连则从本节点出去"
-                    }
-                    label="出站代理"
-                    selectedKeys={[form.outboundId || "direct"]}
-                    onSelectionChange={(keys) => {
-                      const key = String(Array.from(keys)[0] ?? "direct");
+                  <div className="space-y-3 rounded-xl border border-divider p-3">
+                    <div>
+                      <p className="text-sm font-medium">分流</p>
+                      <p className="text-xs text-default-500">
+                        规则从上到下匹配，先命中先生效；都不命中的流量走默认出口
+                      </p>
+                    </div>
+                    <Select
+                      description={
+                        outboundMissing
+                          ? "原出站节点已被删除，该入站的流量会被丢弃，请重新选择"
+                          : "直连：从本节点出去；选节点：再经该节点出去（链式代理，落地 IP 变为它的 IP）"
+                      }
+                      label="默认出口"
+                      selectedKeys={[form.outboundId || "direct"]}
+                      onSelectionChange={(keys) => {
+                        const key = String(Array.from(keys)[0] ?? "direct");
 
-                      set("outboundId", key === "direct" ? "" : key);
-                    }}
-                  >
-                    {[
-                      <SelectItem key="direct" textValue="直连">
-                        直连
-                      </SelectItem>,
-                      ...(outboundMissing
-                        ? [
-                            <SelectItem
-                              key={form.outboundId}
-                              textValue="已删除的节点"
-                            >
-                              已删除的节点
-                            </SelectItem>,
-                          ]
-                        : []),
-                      ...outboundOptions.map((i) => (
-                        <SelectItem
-                          key={String(i.id)}
-                          textValue={outboundLabel(i)}
-                        >
-                          {outboundLabel(i)}
-                        </SelectItem>
-                      )),
-                    ]}
-                  </Select>
+                        set("outboundId", key === "direct" ? "" : key);
+                      }}
+                    >
+                      {[
+                        <SelectItem key="direct" textValue="直连">
+                          直连
+                        </SelectItem>,
+                        ...(outboundMissing
+                          ? [
+                              <SelectItem
+                                key={form.outboundId}
+                                textValue="已删除的节点"
+                              >
+                                已删除的节点
+                              </SelectItem>,
+                            ]
+                          : []),
+                        ...outboundOptions.map((i) => (
+                          <SelectItem
+                            key={String(i.id)}
+                            textValue={outboundLabel(i)}
+                          >
+                            {outboundLabel(i)}
+                          </SelectItem>
+                        )),
+                      ]}
+                    </Select>
+                    <SplitRulesEditor
+                      categories={caps?.splitCategories ?? []}
+                      rules={form.splitRules}
+                      targetLabel={outboundLabel}
+                      targets={outboundOptions}
+                      onChange={(splitRules) => set("splitRules", splitRules)}
+                    />
+                  </div>
                 )}
 
                 <button

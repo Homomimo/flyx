@@ -76,7 +76,10 @@ func (m *Manager) binDir(t, version string) string {
 // Restore relaunches the kernels recorded by the last Apply so they come back
 // after an agent restart even while the panel is unreachable.
 func (m *Manager) Restore() {
-	m.restoreOnce.Do(m.restore)
+	m.restoreOnce.Do(func() {
+		m.restore()
+		m.startGeoUpdater()
+	})
 }
 
 func (m *Manager) restore() {

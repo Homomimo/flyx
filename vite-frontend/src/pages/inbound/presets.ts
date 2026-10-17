@@ -1,3 +1,4 @@
+import type { SplitRuleForm } from "./split-rules";
 import type {
   InboundApiItem,
   InboundMutationPayload,
@@ -108,6 +109,7 @@ export interface InboundForm {
   whitelistExtra: string;
   /** Chained outbound inbound id; "" leaves directly. */
   outboundId: string;
+  splitRules: SplitRuleForm[];
   enabled: boolean;
 }
 
@@ -302,6 +304,7 @@ export function emptyForm(
     relayWhitelist: false,
     whitelistExtra: "",
     outboundId: "",
+    splitRules: [],
     enabled: true,
   };
 }
@@ -397,6 +400,13 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     relayWhitelist: item.relayWhitelist,
     whitelistExtra: item.whitelistExtra,
     outboundId: item.outboundId ? String(item.outboundId) : "",
+    splitRules: (item.splitRules ?? []).map((r) => ({
+      categories: r.categories ?? [],
+      domains: (r.domains ?? []).join(", "),
+      ips: (r.ips ?? []).join(", "),
+      action: r.action,
+      outboundId: r.outboundId ? String(r.outboundId) : "",
+    })),
     enabled: item.enabled,
   };
 }
@@ -510,6 +520,13 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     relayWhitelist: form.relayWhitelist,
     whitelistExtra: form.relayWhitelist ? form.whitelistExtra.trim() : "",
     outboundId: Number(form.outboundId) || 0,
+    splitRules: form.splitRules.map((r) => ({
+      categories: r.categories,
+      domains: splitList(r.domains),
+      ips: splitList(r.ips),
+      action: r.action,
+      outboundId: r.action === "proxy" ? Number(r.outboundId) || 0 : undefined,
+    })),
     enabled: form.enabled,
   };
 }

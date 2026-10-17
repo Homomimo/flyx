@@ -87,15 +87,28 @@ func singboxInboundTags(in Inbound) []string {
 	return []string{in.Tag()}
 }
 
-// singboxChainRoutes returns the outbounds and route rules of the chained
-// inbounds. The rules must precede the per-user direct rules.
-func singboxChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, error) {
+// singboxChainRoutes returns the outbounds, route rules and rule-set tags of
+// the chained and split-routed inbounds. The rules must precede the per-user
+// direct rules.
+func singboxChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, []string, error) {
 	var outbounds, rules []interface{}
+	var sets []string
 	for _, in := range inbounds {
-		if in.Via == nil {
+		if !in.routed() {
 			continue
 		}
 		tags := singboxInboundTags(in)
+		if in.splitRequiresSniff() {
+			rules = append(rules, obj{"inbound": tags, "action": "sniff"})
+		}
+		obs, rs, ss, err := singboxSplitRoutes(in)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		outbounds, rules, sets = append(outbounds, obs...), append(rules, rs...), append(sets, ss...)
+		if in.Via == nil {
+			continue
+		}
 		if in.chainBlocked() {
 			rules = append(rules, obj{"inbound": tags, "action": "reject"})
 			continue
@@ -104,20 +117,20 @@ func singboxChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, error
 			tag := chainUserTag(in, id)
 			obs, err := singboxChainOutbounds(*in.Via, tag, UserMark(id))
 			if err != nil {
-				return nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
+				return nil, nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 			}
 			outbounds = append(outbounds, obs...)
 			rules = append(rules, obj{"inbound": tags, "auth_user": []string{User{ID: id}.Name()}, "outbound": tag})
 		}
 		tag := chainTag(in)
-		obs, err := singboxChainOutbounds(*in.Via, tag, 0)
+		obs, err = singboxChainOutbounds(*in.Via, tag, 0)
 		if err != nil {
-			return nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
+			return nil, nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 		}
 		outbounds = append(outbounds, obs...)
 		rules = append(rules, obj{"inbound": tags, "outbound": tag})
 	}
-	return outbounds, rules, nil
+	return outbounds, rules, sets, nil
 }
 
 // ---- Xray ----
@@ -126,6 +139,14 @@ func singboxChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, error
 func xrayChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, error) {
 	var outbounds, rules []interface{}
 	for _, in := range inbounds {
+		if !in.routed() {
+			continue
+		}
+		obs, rs, err := xraySplitRoutes(in)
+		if err != nil {
+			return nil, nil, err
+		}
+		outbounds, rules = append(outbounds, obs...), append(rules, rs...)
 		if in.Via == nil {
 			continue
 		}

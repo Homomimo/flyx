@@ -122,6 +122,9 @@ type Inbound struct {
 	// target was deleted) drops the traffic. Filled in when building a
 	// kernel config.
 	Via *Endpoint `json:"-"`
+	// Split are the inbound's 分流 rules, tried before its default exit;
+	// targets resolved. Filled in when building a kernel config.
+	Split []SplitRule `json:"-"`
 }
 
 func (in Inbound) Tag() string {

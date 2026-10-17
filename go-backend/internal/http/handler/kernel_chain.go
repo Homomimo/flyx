@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -12,9 +13,10 @@ import (
 )
 
 // Chained outbounds: an inbound with OutboundID set leaves through another
-// inbound (of this panel, or an imported node) instead of from its own node.
-// Each kernel dials only the next hop, so A -> B -> C is A chained to B and
-// B chained to C.
+// inbound (of this panel, or an imported node) instead of from its own node,
+// and its 分流 rules can send part of the traffic through others. Each
+// kernel dials only the next hop, so A -> B -> C is A chained to B and B
+// chained to C.
 
 // maxChainHops bounds the walk that looks for loops.
 const maxChainHops = 32
@@ -58,79 +60,170 @@ func (h *Handler) chainEndpoint(target *model.NodeInbound, fromNodeID int64) (ke
 	return e, nil
 }
 
-// inboundVia resolves the chained outbound of an inbound for rendering. A
-// deleted target yields an empty endpoint, which drops the traffic.
-func (h *Handler) inboundVia(row model.NodeInbound) (*kernel.Endpoint, error) {
-	if row.OutboundID == 0 {
-		return nil, nil
+// rowSplitRules returns an inbound's stored 分流 rules.
+func rowSplitRules(row model.NodeInbound) []kernel.SplitRule {
+	if strings.TrimSpace(row.SplitRules) == "" {
+		return nil
 	}
-	target, err := h.repo.GetNodeInbound(row.OutboundID)
+	var rules []kernel.SplitRule
+	if err := json.Unmarshal([]byte(row.SplitRules), &rules); err != nil {
+		log.Printf("kernel: inbound %d split rules damaged: %v", row.ID, err)
+		return nil
+	}
+	return rules
+}
+
+// outboundTargets lists the inbounds an inbound sends traffic through: its
+// chained outbound and the targets of its 分流 rules.
+func outboundTargets(row model.NodeInbound) []int64 {
+	var ids []int64
+	if row.OutboundID != 0 {
+		ids = append(ids, row.OutboundID)
+	}
+	for _, r := range rowSplitRules(row) {
+		if r.Action == kernel.SplitProxy && r.OutboundID != 0 {
+			ids = append(ids, r.OutboundID)
+		}
+	}
+	return ids
+}
+
+// resolveTarget resolves an outbound target of an inbound for rendering. A
+// deleted target yields an empty endpoint, which drops the traffic.
+func (h *Handler) resolveTarget(row model.NodeInbound, targetID int64, what string) (*kernel.Endpoint, error) {
+	target, err := h.repo.GetNodeInbound(targetID)
 	if err != nil {
 		return nil, err
 	}
 	if target == nil {
-		log.Printf("kernel: inbound %d chains through missing inbound %d, dropping its traffic", row.ID, row.OutboundID)
+		log.Printf("kernel: inbound %d sends traffic through missing inbound %d, dropping it", row.ID, targetID)
 		return &kernel.Endpoint{}, nil
 	}
 	e, err := h.chainEndpoint(target, row.NodeID)
 	if err != nil {
-		return nil, fmt.Errorf("入站「%s」的出站代理: %v", row.Name, err)
+		return nil, fmt.Errorf("入站「%s」的%s: %v", row.Name, what, err)
 	}
 	return &e, nil
 }
 
-// validateChain checks the chained outbound of an inbound about to be saved.
-func (h *Handler) validateChain(row model.NodeInbound, kernelType string) error {
+// inboundVia resolves the chained outbound of an inbound for rendering.
+func (h *Handler) inboundVia(row model.NodeInbound) (*kernel.Endpoint, error) {
 	if row.OutboundID == 0 {
-		return nil
+		return nil, nil
 	}
-	if row.OutboundID == row.ID {
-		return errors.New("出站代理不能选择自己")
-	}
-	target, err := h.repo.GetNodeInbound(row.OutboundID)
-	if err != nil {
-		return err
-	}
-	if target == nil {
-		return errors.New("所选的出站代理节点不存在")
-	}
-	if row.ID != 0 && h.chainReaches(target, row.ID) {
-		return errors.New("出站代理形成了循环，请检查链路")
-	}
-	e, err := h.chainEndpoint(target, row.NodeID)
-	if err != nil {
-		return err
-	}
-	return kernel.CheckChain(kernelType, e)
+	return h.resolveTarget(row, row.OutboundID, "出站代理")
 }
 
-// chainReaches reports whether following the chain from start arrives at id.
+// inboundSplit returns an inbound's 分流 rules with their targets resolved.
+func (h *Handler) inboundSplit(row model.NodeInbound) ([]kernel.SplitRule, error) {
+	rules := rowSplitRules(row)
+	for i := range rules {
+		if rules[i].Action != kernel.SplitProxy {
+			continue
+		}
+		via, err := h.resolveTarget(row, rules[i].OutboundID, fmt.Sprintf("第 %d 条分流", i+1))
+		if err != nil {
+			return nil, err
+		}
+		rules[i].Via = via
+	}
+	return rules, nil
+}
+
+// validateChain checks the outbound targets (chained outbound and 分流
+// targets) of an inbound about to be saved.
+func (h *Handler) validateChain(row model.NodeInbound, kernelType string) error {
+	check := func(targetID int64, what string) error {
+		if targetID == row.ID {
+			return fmt.Errorf("%s不能选择自己", what)
+		}
+		target, err := h.repo.GetNodeInbound(targetID)
+		if err != nil {
+			return err
+		}
+		if target == nil {
+			return fmt.Errorf("%s所选的节点不存在", what)
+		}
+		if row.ID != 0 && h.chainReaches(target, row.ID) {
+			return fmt.Errorf("%s形成了循环，请检查链路", what)
+		}
+		e, err := h.chainEndpoint(target, row.NodeID)
+		if err != nil {
+			return fmt.Errorf("%s：%v", what, err)
+		}
+		if err := kernel.CheckChain(kernelType, e); err != nil {
+			return fmt.Errorf("%s：%v", what, err)
+		}
+		return nil
+	}
+	if row.OutboundID != 0 {
+		if err := check(row.OutboundID, "出站代理"); err != nil {
+			return err
+		}
+	}
+	for i, r := range rowSplitRules(row) {
+		if r.Action != kernel.SplitProxy {
+			continue
+		}
+		if err := check(r.OutboundID, fmt.Sprintf("第 %d 条分流", i+1)); err != nil {
+			return err
+		}
+	}
+	if kernelType == kernel.TypeSnell && strings.TrimSpace(row.SplitRules) != "" {
+		return errors.New("Snell 内核不支持分流")
+	}
+	return nil
+}
+
+// chainReaches reports whether traffic sent through start can arrive at id,
+// following chained outbounds and 分流 targets.
 func (h *Handler) chainReaches(start *model.NodeInbound, id int64) bool {
-	row := start
-	for i := 0; i < maxChainHops && row != nil; i++ {
+	seen := map[int64]bool{}
+	queue := []*model.NodeInbound{start}
+	for len(queue) > 0 {
+		row := queue[0]
+		queue = queue[1:]
 		if row.ID == id {
 			return true
 		}
-		if row.OutboundID == 0 {
-			return false
+		if seen[row.ID] {
+			continue
 		}
-		next, err := h.repo.GetNodeInbound(row.OutboundID)
-		if err != nil {
+		seen[row.ID] = true
+		if len(seen) > maxChainHops {
 			return true
 		}
-		row = next
+		for _, next := range outboundTargets(*row) {
+			n, err := h.repo.GetNodeInbound(next)
+			if err != nil {
+				return true
+			}
+			if n != nil {
+				queue = append(queue, n)
+			}
+		}
 	}
-	return row != nil
+	return false
 }
 
-// chainReferrers returns the inbounds chained through the given one.
+// chainReferrers returns the inbounds that send traffic through the given
+// one, as their chained outbound or a 分流 target.
 func (h *Handler) chainReferrers(targetID int64) []model.NodeInbound {
-	rows, err := h.repo.ListInboundsByOutbound(targetID)
+	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
 		log.Printf("chain referrer lookup failed inbound_id=%d err=%v", targetID, err)
 		return nil
 	}
-	return rows
+	var out []model.NodeInbound
+	for _, row := range rows {
+		for _, id := range outboundTargets(row) {
+			if id == targetID {
+				out = append(out, row)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // chainInUseMessage explains why an inbound cannot be removed, or "" when
@@ -144,7 +237,7 @@ func (h *Handler) chainInUseMessage(target *model.NodeInbound) string {
 	for _, r := range refs {
 		names = append(names, "「"+r.Name+"」")
 	}
-	return fmt.Sprintf("「%s」正被 %s 用作出站代理，请先解除", target.Name, strings.Join(names, "、"))
+	return fmt.Sprintf("「%s」正被 %s 用作出站代理或分流出口，请先解除", target.Name, strings.Join(names, "、"))
 }
 
 // applyChainReferrers re-applies the kernels of inbounds chained through the
@@ -205,4 +298,24 @@ func batchDeletesReferrers(ids []int64, refs []model.NodeInbound) bool {
 		}
 	}
 	return true
+}
+
+// changedTargets lists the targets in only one of before and after, once
+// each.
+func changedTargets(before, after []int64) []int64 {
+	count := map[int64]int{}
+	for _, id := range before {
+		count[id] |= 1
+	}
+	for _, id := range after {
+		count[id] |= 2
+	}
+	var out []int64
+	for _, id := range append(append([]int64{}, before...), after...) {
+		if c, ok := count[id]; ok && c != 3 {
+			out = append(out, id)
+			delete(count, id)
+		}
+	}
+	return out
 }
