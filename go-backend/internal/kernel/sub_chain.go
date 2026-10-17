@@ -7,9 +7,9 @@ package kernel
 
 const (
 	// ChainLandingGroup holds the exit nodes; it heads the node selection.
-	ChainLandingGroup = "落地选择"
+	ChainLandingGroup = "落地节点"
 	// ChainRelayGroup holds the nodes landing nodes are dialed through.
-	ChainRelayGroup = "中转选择"
+	ChainRelayGroup = "中转节点"
 
 	ChainRoleLanding = "landing"
 	ChainRoleRelay   = "relay"

@@ -21,14 +21,14 @@ func TestSubscriptionChainClash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(clash, `dialer-proxy: "中转选择"`) != 2 {
+	if strings.Count(clash, `dialer-proxy: "中转节点"`) != 2 {
 		t.Fatalf("both landing nodes dial through the relay group:\n%s", clash)
 	}
 	for _, want := range []string{
-		"- name: \"落地选择\"\n    type: \"select\"\n    proxies:\n      - \"美国 落地 01\"\n      - \"美国 落地 02\"\n",
+		"- name: \"落地节点\"\n    type: \"select\"\n    proxies:\n      - \"美国 落地 01\"\n      - \"美国 落地 02\"\n",
 		// A landing node never relays for itself, though it matches both.
-		"- name: \"中转选择\"\n    type: \"select\"\n    proxies:\n      - \"香港 中转\"\n",
-		"- name: \"节点选择\"\n    type: \"select\"\n    proxies:\n      - \"落地选择\"\n      - \"自动选择\"\n",
+		"- name: \"中转节点\"\n    type: \"select\"\n    proxies:\n      - \"香港 中转\"\n",
+		"- name: \"节点选择\"\n    type: \"select\"\n    proxies:\n      - \"落地节点\"\n      - \"自动选择\"\n",
 	} {
 		if !strings.Contains(clash, want) {
 			t.Fatalf("missing %q:\n%s", want, clash)
@@ -62,8 +62,8 @@ func TestSubscriptionChainSingboxAndSurge(t *testing.T) {
 	}
 
 	surge, _, _ := Subscription(FormatSurge, chainEndpoints(), chainOpts)
-	if !strings.Contains(surge, "美国 落地 01 = ss, 203.0.113.1, 8388, encrypt-method=aes-256-gcm, password=pw, udp-relay=true, underlying-proxy=中转选择") ||
-		!strings.Contains(surge, "中转选择 = select, 香港 中转") || !strings.Contains(surge, "节点选择 = select, 落地选择, ") {
+	if !strings.Contains(surge, "美国 落地 01 = ss, 203.0.113.1, 8388, encrypt-method=aes-256-gcm, password=pw, udp-relay=true, underlying-proxy=中转节点") ||
+		!strings.Contains(surge, "中转节点 = select, 香港 中转") || !strings.Contains(surge, "节点选择 = select, 落地节点, ") {
 		t.Fatalf("surge chain:\n%s", surge)
 	}
 }
