@@ -43,7 +43,7 @@ func TestMigrateLegacySubscriptions(t *testing.T) {
 	def, share := subs[0], subs[1]
 	var opts map[string]interface{}
 	_ = json.Unmarshal([]byte(def.Options), &opts)
-	if def.Kind != model.SubscriptionOwn || def.Token != token || def.SourceAll != 1 || opts["rename"] != "a => b" || opts["regionGroups"] != true {
+	if def.Kind != model.SubscriptionShare || def.UUID == "" || def.Token != token || def.SourceAll != 1 || opts["rename"] != "a => b" || opts["regionGroups"] != true {
 		t.Fatalf("default keeps the old link and settings: %+v", def)
 	}
 	if share.Kind != model.SubscriptionShare || share.Token != "fedcba9876543210fedcba9876543210" || share.UUID != "u-1" ||

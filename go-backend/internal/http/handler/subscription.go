@@ -472,20 +472,16 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
 		return nil, errText("请填写名称（最多 100 个字）")
 	}
-	if req.Kind != model.SubscriptionShare {
-		req.Kind = model.SubscriptionOwn
-	}
+	// Every subscription has its own credentials.
+	req.Kind = model.SubscriptionShare
 	if req.ExpireTime < 0 {
 		req.ExpireTime = 0
 	}
-	if req.TrafficLimit < 0 || req.Kind != model.SubscriptionShare {
+	if req.TrafficLimit < 0 {
 		req.TrafficLimit = 0
 	}
 	if req.ResetDay < 0 || req.ResetDay > 28 {
 		return nil, errText("每月重置日只能是 1–28 号")
-	}
-	if req.Kind != model.SubscriptionShare {
-		req.ResetDay = 0
 	}
 	if err := req.Options.normalize(); err != nil {
 		return nil, err

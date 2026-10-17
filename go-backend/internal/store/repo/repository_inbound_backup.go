@@ -217,8 +217,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
 			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime,
 		}
-		if item.Kind != model.SubscriptionShare {
-			item.Kind = model.SubscriptionOwn
+		// Every subscription has its own credentials (older backups may
+		// carry owner-credential ones).
+		item.Kind = model.SubscriptionShare
+		if item.UUID == "" || item.Password == "" {
+			item.UUID, item.Password = subscriptionCredentials()
 		}
 		if res.RowsAffected > 0 {
 			item.ID = existing.ID

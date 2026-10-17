@@ -97,7 +97,7 @@ function expiryLabel(ms: number): string {
   return `${toDateInput(ms)} 到期 · 剩 ${days} 天`;
 }
 
-/** Used / limit of a share subscription, with a bar when it has a limit. */
+/** Used / limit of a subscription, with a bar when it has a limit. */
 function Usage({ s, compact }: { s: SubscriptionItem; compact?: boolean }) {
   const used = s.uploadBytes + s.downloadBytes;
   const pct = s.trafficLimit ? Math.min(100, (used / s.trafficLimit) * 100) : 0;
@@ -317,14 +317,14 @@ function draftFrom(s?: SubscriptionItem): Draft {
 /** The API payload: the backend rejects unknown fields like `expire`. */
 function toPayload(d: Draft): SubscriptionDraft {
   const { expire, limitGB, ...rest } = d;
-  const share = d.kind === "share";
   const gb = Number(limitGB);
 
   return {
     ...rest,
-    expireTime: share ? fromDateInput(expire) : 0,
-    trafficLimit: share && gb > 0 ? Math.round(gb * GB) : 0,
-    resetDay: share ? d.resetDay : 0,
+    kind: "share",
+    expireTime: fromDateInput(expire),
+    trafficLimit: gb > 0 ? Math.round(gb * GB) : 0,
+    resetDay: d.resetDay,
   };
 }
 
@@ -363,7 +363,6 @@ function Editor({
     setPreview(null);
   };
 
-  const share = draft.kind === "share";
   const protocols = useMemo(
     () =>
       [...new Set(inbounds.map((i) => i.protocol))].map(
@@ -374,16 +373,14 @@ function Editor({
   const selfBuilt = inbounds.filter((i) => !i.external);
   // Nodes of a remote source are picked as the whole source.
   const imported = inbounds.filter((i) => i.external && !i.sourceId);
-  const sharedPicked = share
-    ? inbounds.filter(
-        (i) =>
-          (draft.sourceAll
-            ? i.enabled
-            : draft.inboundIds.includes(i.id) ||
-              draft.sourceIds.includes(i.sourceId ?? 0)) &&
-          (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
-      ).length
-    : 0;
+  const sharedPicked = inbounds.filter(
+    (i) =>
+      (draft.sourceAll
+        ? i.enabled
+        : draft.inboundIds.includes(i.id) ||
+          draft.sourceIds.includes(i.sourceId ?? 0)) &&
+      (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
+  ).length;
 
   const runPreview = async () => {
     setPreviewing(true);
@@ -422,7 +419,7 @@ function Editor({
             {!i.enabled && (
               <span className="ml-1 text-xs text-default-400">已停用</span>
             )}
-            {share && (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)) && (
+            {(i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)) && (
               <span className="ml-1 text-xs text-warning">共用凭据</span>
             )}
           </Checkbox>
@@ -446,101 +443,95 @@ function Editor({
             variant="bordered"
             onChange={(e) => set({ name: e.target.value })}
           />
-          {share && (
-            <p className="text-xs text-default-500">
-              有独立的 UUID /
-              密码：停用、到期或流量用完后从节点上删除，已导入的配置也连不上
-            </p>
-          )}
-          {share && (
-            <div className="space-y-1">
-              <label className="text-sm font-medium" htmlFor="sub-expire">
-                到期日期
-              </label>
-              <div className="flex gap-2">
-                <input
-                  className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-background px-2 text-sm"
-                  id="sub-expire"
-                  type="date"
-                  value={draft.expire}
-                  onChange={(e) => set({ expire: e.target.value })}
-                />
-                {[30, 90, 365].map((d) => (
-                  <Button
-                    key={d}
-                    className="min-w-0 px-2"
-                    size="sm"
-                    variant="flat"
-                    onPress={() =>
-                      set({ expire: toDateInput(Date.now() + d * 86400000) })
-                    }
-                  >
-                    {d === 365 ? "1年" : `${d}天`}
-                  </Button>
-                ))}
-              </div>
-              <p className="text-xs text-default-500">
-                {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
-              </p>
-            </div>
-          )}
-          {share && (
-            <div className="space-y-1">
-              <label className="text-sm font-medium" htmlFor="sub-limit">
-                流量上限
-              </label>
-              <div className="flex gap-2">
-                <div className="relative min-w-0 flex-1">
-                  <input
-                    className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
-                    id="sub-limit"
-                    inputMode="decimal"
-                    placeholder="不限"
-                    value={draft.limitGB}
-                    onChange={(e) =>
-                      set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
-                    }
-                  />
-                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-default-500">
-                    GB
-                  </span>
-                </div>
-                {[50, 100, 500].map((g) => (
-                  <Button
-                    key={g}
-                    className="min-w-0 px-2"
-                    size="sm"
-                    variant="flat"
-                    onPress={() => set({ limitGB: String(g) })}
-                  >
-                    {g}G
-                  </Button>
-                ))}
-              </div>
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <label className="text-sm" htmlFor="sub-reset-day">
-                  每月重置
-                </label>
-                <select
-                  className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
-                  id="sub-reset-day"
-                  value={draft.resetDay}
-                  onChange={(e) => set({ resetDay: Number(e.target.value) })}
+          <p className="text-xs text-default-500">
+            有独立的 UUID /
+            密码：停用、到期或流量用完后从节点上删除，已导入的配置也连不上
+          </p>
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="sub-expire">
+              到期日期
+            </label>
+            <div className="flex gap-2">
+              <input
+                className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-background px-2 text-sm"
+                id="sub-expire"
+                type="date"
+                value={draft.expire}
+                onChange={(e) => set({ expire: e.target.value })}
+              />
+              {[30, 90, 365].map((d) => (
+                <Button
+                  key={d}
+                  className="min-w-0 px-2"
+                  size="sm"
+                  variant="flat"
+                  onPress={() =>
+                    set({ expire: toDateInput(Date.now() + d * 86400000) })
+                  }
                 >
-                  <option value={0}>不重置</option>
-                  {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
-                    <option key={d} value={d}>
-                      每月 {d} 号
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <p className="text-xs text-default-500">
-                上传 +
-                下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
-              </p>
+                  {d === 365 ? "1年" : `${d}天`}
+                </Button>
+              ))}
             </div>
-          )}
+            <p className="text-xs text-default-500">
+              {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
+            </p>
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="sub-limit">
+              流量上限
+            </label>
+            <div className="flex gap-2">
+              <div className="relative min-w-0 flex-1">
+                <input
+                  className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
+                  id="sub-limit"
+                  inputMode="decimal"
+                  placeholder="不限"
+                  value={draft.limitGB}
+                  onChange={(e) =>
+                    set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
+                  }
+                />
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-default-500">
+                  GB
+                </span>
+              </div>
+              {[50, 100, 500].map((g) => (
+                <Button
+                  key={g}
+                  className="min-w-0 px-2"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => set({ limitGB: String(g) })}
+                >
+                  {g}G
+                </Button>
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <label className="text-sm" htmlFor="sub-reset-day">
+                每月重置
+              </label>
+              <select
+                className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
+                id="sub-reset-day"
+                value={draft.resetDay}
+                onChange={(e) => set({ resetDay: Number(e.target.value) })}
+              >
+                <option value={0}>不重置</option>
+                {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={d}>
+                    每月 {d} 号
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="text-xs text-default-500">
+              上传 +
+              下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
+            </p>
+          </div>
         </Section>
 
         <Section hint="中转线路会跟着它的落地一起出现" title="来源">
@@ -981,14 +972,12 @@ export default function SubscriptionPage() {
               ]
                 .filter(Boolean)
                 .join(" + ")}
-          {s.kind === "share" ? ` · ${expiryLabel(s.expireTime)}` : ""}
+          {s.expireTime ? ` · ${expiryLabel(s.expireTime)}` : ""}
           {s.remark ? ` · ${s.remark}` : ""}
         </div>
-        {s.kind === "share" && (
-          <div className="mt-1.5">
-            <Usage compact s={s} />
-          </div>
-        )}
+        <div className="mt-1.5">
+          <Usage compact s={s} />
+        </div>
       </div>
       <div
         className="flex shrink-0 items-center gap-2"
@@ -1069,35 +1058,33 @@ export default function SubscriptionPage() {
                   <h2 className="text-lg font-bold break-all">{detail.name}</h2>
                   <p className="text-small font-normal text-default-500">
                     {detail.nodeCount} 个节点
-                    {detail.kind === "share"
+                    {detail.expireTime
                       ? ` · ${expiryLabel(detail.expireTime)}`
                       : ""}
                   </p>
                 </ModalHeader>
                 <ModalBody className="space-y-3">
-                  {detail.kind === "share" && (
-                    <div className="space-y-2 rounded-xl bg-default-100 p-3">
-                      <Usage s={detail} />
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-default-500">
-                          {detail.overQuota
-                            ? "流量已用完，已从节点上断开"
-                            : "上传 + 下载合计"}
-                        </span>
-                        <Button
-                          isDisabled={
-                            detail.uploadBytes + detail.downloadBytes === 0
-                          }
-                          isLoading={resettingTraffic}
-                          size="sm"
-                          variant="flat"
-                          onPress={resetTraffic}
-                        >
-                          重置流量
-                        </Button>
-                      </div>
+                  <div className="space-y-2 rounded-xl bg-default-100 p-3">
+                    <Usage s={detail} />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-default-500">
+                        {detail.overQuota
+                          ? "流量已用完，已从节点上断开"
+                          : "上传 + 下载合计"}
+                      </span>
+                      <Button
+                        isDisabled={
+                          detail.uploadBytes + detail.downloadBytes === 0
+                        }
+                        isLoading={resettingTraffic}
+                        size="sm"
+                        variant="flat"
+                        onPress={resetTraffic}
+                      >
+                        重置流量
+                      </Button>
                     </div>
-                  )}
+                  </div>
                   <Button
                     className="w-full"
                     color="primary"
@@ -1150,7 +1137,7 @@ export default function SubscriptionPage() {
                   <p className="text-center text-xs text-default-400">
                     点客户端直接导入，右侧按钮复制链接
                   </p>
-                  {detail.kind === "share" && detail.sharedIds.length > 0 && (
+                  {detail.sharedIds.length > 0 && (
                     <p className="text-xs text-warning">
                       其中 {detail.sharedIds.length}{" "}
                       个落地用的是共用凭据，停用后已导入的配置仍能连接
@@ -1172,7 +1159,7 @@ export default function SubscriptionPage() {
                     variant="light"
                     onPress={() => setConfirm("reset")}
                   >
-                    {detail.kind === "share" ? "重置链接和凭据" : "重置链接"}
+                    重置链接和凭据
                   </Button>
                   <Button
                     color="primary"
@@ -1240,9 +1227,7 @@ export default function SubscriptionPage() {
               <ModalBody>
                 <p className="text-sm text-default-600">
                   {confirm === "reset"
-                    ? detail?.kind === "share"
-                      ? "旧链接和对方已导入的配置会立即失效，需要把新链接发给对方重新导入。"
-                      : "旧链接立即失效，需要在客户端里换成新链接。"
+                    ? "旧链接和已导入的配置会立即失效，需要用新链接重新导入。"
                     : "订阅链接立即失效，无法恢复。"}
                 </p>
               </ModalBody>

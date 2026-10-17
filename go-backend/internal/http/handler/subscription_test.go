@@ -56,7 +56,10 @@ func TestKernelPayloadCarriesActiveShareSubscriptions(t *testing.T) {
 		t.Fatalf("active share subscription must be in the config, own ones not: %s", c)
 	}
 	k, _ := r.GetNodeKernel(kernelID)
-	if payload, _, _ := h.buildKernelApplyPayload(k); len(payload["userMarks"].([]int64)) != 1 || payload["userMarks"].([]int64)[0] != s.ID {
+	// The default subscription ("我的订阅", own credentials too) and s are
+	// counted; a leftover owner-credential row is not.
+	if payload, _, _ := h.buildKernelApplyPayload(k); !containsInt64(payload["userMarks"].([]int64), s.ID) ||
+		containsInt64(payload["userMarks"].([]int64), own.ID) {
 		t.Fatalf("share users must be counted: %v", payload["userMarks"])
 	}
 
@@ -118,4 +121,13 @@ func TestMonthlyReset(t *testing.T) {
 	if !subDueReset(s, at("2026-03-01 08:00")) || subDueReset(s, at("2026-02-27 08:00")) {
 		t.Fatal("due on the reset day, not before")
 	}
+}
+
+func containsInt64(list []int64, v int64) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
