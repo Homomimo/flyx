@@ -33,7 +33,7 @@ import { PageLoadingState } from "@/components/page-state";
 import { SearchBar } from "@/components/search-bar";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
-import { ActionSheet } from "@/pages/inbound/action-sheet";
+import { ActionSheet } from "@/components/action-sheet";
 import { SplitModal } from "@/pages/inbound/split-modal";
 import {
   EXTERNAL_LABEL,

@@ -17,20 +17,10 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { LayoutGrid, List } from "lucide-react";
+import { GripVertical } from "lucide-react";
 
-import { SearchBar } from "@/components/search-bar";
 import { formatTraffic } from "@/utils/traffic";
 import { AnimatedPage } from "@/components/animated-page";
-import {
-  Table,
-  TableHeader,
-  TableColumn,
-  TableBody,
-  TableRow,
-  TableCell,
-} from "@/shadcn-bridge/heroui/table";
-import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import { Textarea } from "@/shadcn-bridge/heroui/input";
@@ -48,7 +38,6 @@ import { Alert } from "@/shadcn-bridge/heroui/alert";
 import { Progress } from "@/shadcn-bridge/heroui/progress";
 import { Accordion, AccordionItem } from "@/shadcn-bridge/heroui/accordion";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
-import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import {
   createNode,
   getNodeList,
@@ -65,7 +54,16 @@ import {
   dismissNodeExpiryReminder,
   type ReleaseChannel,
 } from "@/api";
-import { PageEmptyState, PageLoadingState } from "@/components/page-state";
+import { PageLoadingState } from "@/components/page-state";
+import { ActionSheet } from "@/components/action-sheet";
+import {
+  EmptyHint,
+  ListRow,
+  PageHeader,
+  PageTabs,
+  PageToolbar,
+  SelectionBar,
+} from "@/components/page-kit";
 import {
   getConnectionStatusMeta,
   getRemoteSyncErrorMessage,
@@ -323,10 +321,6 @@ export default function NodePage() {
     "node-active-tab",
     "local",
   );
-  const [viewMode, setViewMode] = useLocalStorageState<"list" | "grid">(
-    "node-view-mode",
-    "grid",
-  );
 
   // Backward-compat: older versions stored extra tab values.
   useEffect(() => {
@@ -339,7 +333,6 @@ export default function NodePage() {
   >({});
   const [nodeFilterMode, setNodeFilterMode, resetNodeFilterMode] =
     useLocalStorageState<NodeFilterMode>("node-expiry-filter-mode", "all");
-  const [isSearchVisible, setIsSearchVisible] = useState(false);
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [dialogVisible, setDialogVisible] = useState(false);
   const [dialogTitle, setDialogTitle] = useState("");
@@ -387,6 +380,7 @@ export default function NodePage() {
     : protocolDisabledReason || "等待节点上线后再设置";
 
   const [selectMode, setSelectMode] = useState(false);
+  const [sheetNodeId, setSheetNodeId] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
@@ -421,41 +415,6 @@ export default function NodePage() {
   const [upgradeProgress, setUpgradeProgress] = useState<
     Record<number, { stage: string; percent: number; message: string }>
   >({});
-
-  const [infoPopoverPlacement, setInfoPopoverPlacement] = useState<
-    Record<number, "left" | "bottom">
-  >({});
-
-  const updateInfoPopoverPlacement = useCallback(
-    (nodeId: number, triggerElement: HTMLElement | null) => {
-      if (!triggerElement) {
-        return;
-      }
-
-      const rect = triggerElement.getBoundingClientRect();
-      const cardElement = triggerElement.closest("[data-node-card='true']");
-      const cardRect =
-        cardElement instanceof HTMLElement
-          ? cardElement.getBoundingClientRect()
-          : null;
-      const estimatedPanelWidth = 288;
-      const containerPadding = 16;
-      const availableLeftSpace = cardRect
-        ? rect.left - cardRect.left
-        : rect.left;
-      const nextPlacement: "left" | "bottom" =
-        availableLeftSpace >= estimatedPanelWidth + containerPadding
-          ? "left"
-          : "bottom";
-
-      setInfoPopoverPlacement((prev) =>
-        prev[nodeId] === nextPlacement
-          ? prev
-          : { ...prev, [nodeId]: nextPlacement },
-      );
-    },
-    [],
-  );
 
   const handleNodeOffline = useCallback((nodeId: number) => {
     setNodeList((prev) =>
@@ -733,20 +692,6 @@ export default function NodePage() {
 
   const formatFlow = (bytes: number): string => {
     return formatTraffic(bytes);
-  };
-
-  const formatChainType = (chainType: number, hopInx: number) => {
-    if (chainType === 1) {
-      return "入口节点";
-    }
-    if (chainType === 2) {
-      return `中继跳点 #${hopInx}`;
-    }
-    if (chainType === 3) {
-      return "出口节点";
-    }
-
-    return "未知链路";
   };
 
   // IPv4/IPv6 格式验证（仅用于判定地址族）
@@ -1601,208 +1546,84 @@ export default function NodePage() {
   );
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8">
-      <div className="mb-6 space-y-3">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          <Button
-            className="shrink-0"
-            color={activeTab === "local" ? "primary" : "default"}
-            size="sm"
-            variant={activeTab === "local" ? "solid" : "flat"}
-            onPress={() => setActiveTab("local")}
-          >
-            本地节点
-            <Chip
-              className="ml-1 shrink-0 whitespace-nowrap"
+    <AnimatedPage className="px-3 lg:px-6 py-6">
+      <PageHeader
+        description="装了 agent 的服务器，用来搭建落地和中转"
+        primary={{ key: "add", label: "新建节点", onPress: handleAdd }}
+        title="节点"
+      />
+      {remoteNodes.length > 0 && (
+        <PageTabs
+          tabs={[
+            { key: "local", label: "本地节点", badge: localNodes.length },
+            { key: "remote", label: "远程节点", badge: remoteNodes.length },
+          ]}
+          value={activeTab}
+          onChange={setActiveTab}
+        />
+      )}
+
+      {selectMode ? (
+        <SelectionBar
+          actions={[
+            {
+              key: "upgrade",
+              label: "升级",
+              disabled: !canBatchUpgrade || batchUpgradeLoading,
+              onPress: () => openUpgradeModal("batch"),
+            },
+            {
+              key: "delete",
+              label: "删除",
+              danger: true,
+              onPress: () => setBatchDeleteModalOpen(true),
+            },
+          ]}
+          allSelected={
+            displayNodes.length > 0 &&
+            displayNodes.every((n) => selectedIds.has(n.id))
+          }
+          count={selectedIds.size}
+          onExit={toggleSelectMode}
+          onToggleAll={() =>
+            displayNodes.every((n) => selectedIds.has(n.id))
+              ? deselectAll()
+              : selectAll()
+          }
+        />
+      ) : (
+        <PageToolbar
+          more={[
+            {
+              key: "batch",
+              label: "批量操作",
+              disabled: displayNodes.length === 0,
+              onPress: toggleSelectMode,
+            },
+          ]}
+          placeholder={
+            activeTab === "remote" ? "搜索远程节点名称或 IP" : "搜索名称或 IP"
+          }
+          search={currentSearchKeyword}
+          onSearch={setCurrentSearchKeyword}
+        >
+          {canUseExpiryFilter && (
+            <Button
+              className="shrink-0"
+              color={nodeFilterMode !== "all" ? "primary" : "default"}
               size="sm"
               variant="flat"
+              onPress={() => setIsFilterModalOpen(true)}
             >
-              {localNodes.length}
-            </Chip>
-          </Button>
-          <Button
-            className="shrink-0"
-            color={activeTab === "remote" ? "primary" : "default"}
-            size="sm"
-            variant={activeTab === "remote" ? "solid" : "flat"}
-            onPress={() => setActiveTab("remote")}
-          >
-            远程节点
-            <Chip
-              className="ml-1 shrink-0 whitespace-nowrap"
-              size="sm"
-              variant="flat"
-            >
-              {remoteNodes.length}
-            </Chip>
-          </Button>
-        </div>
-
-        <div className="flex flex-row items-center justify-between gap-3 overflow-x-auto pb-1">
-          <div
-            className={`flex-1 max-w-sm flex items-center gap-2 shrink-0 ${
-              isSearchVisible ? "min-w-[200px]" : "min-w-0"
-            }`}
-          >
-            <SearchBar
-              isVisible={isSearchVisible}
-              placeholder={
-                activeTab === "remote"
-                  ? "搜索远程节点名称或IP"
-                  : "搜索本地节点名称或IP"
-              }
-              value={currentSearchKeyword}
-              onChange={setCurrentSearchKeyword}
-              onClose={() => setIsSearchVisible(false)}
-              onOpen={() => {
-                setIsSearchVisible(true);
-                setTimeout(() => {
-                  // 精准抓取带有“搜索”字样的输入框并强制聚焦
-                  const searchInput = document.querySelector(
-                    'input[placeholder*="搜索"]',
-                  );
-
-                  if (searchInput) (searchInput as HTMLElement).focus();
-                }, 150); // 150ms 刚好是 CSS 展开动画的时间
-              }}
-            />
-          </div>
-
-          <div className="flex h-8 items-center justify-end gap-2 whitespace-nowrap shrink-0">
-            {selectMode ? (
-              <>
-                <span className="text-sm text-default-600 shrink-0">
-                  已选择 {selectedIds.size} 项
-                </span>
-                <Button
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={selectAll}
-                >
-                  全选
-                </Button>
-                <Button
-                  color="secondary"
-                  size="sm"
-                  variant="flat"
-                  onPress={deselectAll}
-                >
-                  清空
-                </Button>
-                <Button
-                  color="warning"
-                  isDisabled={selectedIds.size === 0 || !canBatchUpgrade}
-                  isLoading={batchUpgradeLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => openUpgradeModal("batch")}
-                >
-                  升级
-                </Button>
-                <Button
-                  color="danger"
-                  isDisabled={selectedIds.size === 0}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => setBatchDeleteModalOpen(true)}
-                >
-                  删除
-                </Button>
-                <Button
-                  color="secondary"
-                  size="sm"
-                  variant="solid"
-                  onPress={toggleSelectMode}
-                >
-                  退出
-                </Button>
-              </>
-            ) : (
-              <>
-                {/* 视图切换按钮 */}
-                <Button
-                  isIconOnly
-                  className="text-default-600 hidden sm:flex"
-                  size="sm"
-                  variant="flat"
-                  onPress={() =>
-                    setViewMode(viewMode === "list" ? "grid" : "list")
-                  }
-                >
-                  {viewMode === "list" ? (
-                    <LayoutGrid className="w-4 h-4" />
-                  ) : (
-                    <List className="w-4 h-4" />
-                  )}
-                </Button>
-
-                {/* 筛选按钮 */}
-                <Button
-                  isIconOnly
-                  aria-label="筛选条件"
-                  className={
-                    canUseExpiryFilter && nodeFilterMode !== "all"
-                      ? "bg-primary/20 text-primary relative"
-                      : "text-default-600 relative"
-                  }
-                  color={
-                    canUseExpiryFilter && nodeFilterMode !== "all"
-                      ? "primary"
-                      : "default"
-                  }
-                  isDisabled={!canUseExpiryFilter}
-                  size="sm"
-                  title={
-                    canUseExpiryFilter ? "筛选条件" : "远程节点不支持到期筛选"
-                  }
-                  variant="flat"
-                  onPress={() => setIsFilterModalOpen(true)}
-                >
-                  <svg
-                    aria-hidden="true"
-                    className="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                    />
-                  </svg>
-                  {canUseExpiryFilter && nodeFilterMode !== "all" && (
-                    <span className="absolute top-1.5 right-1.5 flex h-1.5 w-1.5 rounded-full bg-primary" />
-                  )}
-                </Button>
-                <Button
-                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/45"
-                  color="default"
-                  size="sm"
-                  variant="flat"
-                  onPress={toggleSelectMode}
-                >
-                  批量
-                </Button>
-                <Button
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={handleAdd}
-                >
-                  新增
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
+              {nodeFilterMode !== "all" ? "已筛选" : "筛选"}
+            </Button>
+          )}
+        </PageToolbar>
+      )}
 
       {!wsConnected && (
         <Alert
-          className="mb-4"
+          className="mb-3"
           color="warning"
           description={
             wsConnecting
@@ -1815,683 +1636,111 @@ export default function NodePage() {
         />
       )}
 
-      {/* 节点列表 */}
       {loading ? (
         <PageLoadingState message="正在加载..." />
       ) : nodeList.length === 0 ? (
-        <PageEmptyState
-          className="h-64"
-          message="暂无节点配置，点击上方按钮开始创建"
+        <EmptyHint
+          action={{ key: "add", label: "新建节点", onPress: handleAdd }}
+          text="还没有节点。新建后在服务器上运行安装命令，节点就会连上面板"
         />
       ) : displayNodes.length === 0 ? (
-        <PageEmptyState
-          className="h-64"
-          message={
+        <EmptyHint
+          text={
             isDisplayFiltered
-              ? activeTab === "remote"
-                ? "未找到匹配的远程节点"
-                : "未找到匹配的本地节点"
+              ? "没有匹配的节点"
               : activeTab === "remote"
                 ? "暂无远程节点"
-                : "暂无本地节点，点击上方按钮开始创建"
+                : "暂无本地节点"
           }
         />
-      ) : viewMode === "list" ? (
-        <Card>
-          <Table
-            aria-label="节点列表"
-            className="overflow-x-auto min-w-full"
-            classNames={{
-              wrapper:
-                "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-              th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
-              td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-              tr: "hover:bg-white/10 dark:hover:bg-white/5 transition-colors",
-            }}
-          >
-            <TableHeader>
-              <TableColumn className="w-12 px-4 whitespace-nowrap overflow-hidden">
-                <Checkbox
-                  isSelected={
-                    selectMode &&
-                    selectedIds.size === displayNodes.length &&
-                    displayNodes.length > 0
-                  }
-                  onValueChange={(checked) => {
-                    if (checked) {
-                      selectAll();
-                      setSelectMode(true);
-                    } else {
-                      deselectAll();
-                      setSelectMode(false);
-                    }
-                  }}
-                />
-              </TableColumn>
-              <TableColumn>节点名称</TableColumn>
-              <TableColumn>地址</TableColumn>
-              <TableColumn>版本</TableColumn>
-              <TableColumn>操作</TableColumn>
-            </TableHeader>
-            <TableBody items={displayNodes}>
-              {(node) => {
-                const isRemoteNode = node.isRemote === 1;
-                const hasRemark = Boolean(node.remark?.trim());
-
-                return (
-                  <TableRow key={node.id}>
-                    <TableCell className="px-4">
-                      <Checkbox
-                        isSelected={selectedIds.has(node.id)}
-                        onValueChange={(checked) => {
-                          if (checked) {
-                            setSelectMode(true);
-                            setSelectedIds(
-                              (prev) => new Set([...prev, node.id]),
-                            );
-                          } else {
-                            setSelectedIds((prev) => {
-                              const next = new Set(prev);
-
-                              next.delete(node.id);
-                              if (next.size === 0) setSelectMode(false);
-
-                              return next;
-                            });
-                          }
-                        }}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <div
-                          className={`shrink-0 w-2 h-2 rounded-full ${
-                            node.connectionStatus === "online"
-                              ? "bg-success"
-                              : node.syncError
-                                ? "bg-danger"
-                                : "bg-default-400"
-                          } ${node.systemInfo && node.connectionStatus === "online" ? "animate-pulse" : ""}`}
-                        />
-                        <span className="font-medium text-foreground text-sm">
-                          {node.name}
-                        </span>
-                        {hasRemark && (
-                          <Chip
-                            className="h-4 px-1 text-[10px]"
-                            size="sm"
-                            variant="flat"
-                          >
-                            {node.remark}
-                          </Chip>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm font-mono text-default-600">
-                        {isRemoteNode
-                          ? new URL(node.remoteUrl || "").hostname
-                          : node.serverIp}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-default-500">
-                        {node.version || "-"}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap items-center gap-1.5 min-w-max">
-                        {!isRemoteNode && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400"
-                            isLoading={node.copyLoading}
-                            size="sm"
-                            variant="flat"
-                            onPress={() => openInstallSelector(node)}
-                          >
-                            安装
-                          </Button>
-                        )}
-                        {!isRemoteNode && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-400"
-                            isDisabled={node.connectionStatus !== "online"}
-                            isLoading={node.upgradeLoading}
-                            size="sm"
-                            variant="flat"
-                            onPress={() => {
-                              setUpgradeTargetNodeId(node.id);
-                              openUpgradeModal("single");
-                            }}
-                          >
-                            升级
-                          </Button>
-                        )}
-                        {!isRemoteNode && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/30 dark:text-blue-400"
-                            isDisabled={node.connectionStatus !== "online"}
-                            isLoading={node.rollbackLoading}
-                            size="sm"
-                            variant="flat"
-                            onPress={() => handleRollbackNode(node)}
-                          >
-                            回退
-                          </Button>
-                        )}
-                        {!isRemoteNode && (
-                          <Button
-                            className="h-6 px-2 min-w-0 text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950/30 dark:text-indigo-400"
-                            size="sm"
-                            variant="flat"
-                            onPress={() => handleEdit(node)}
-                          >
-                            编辑
-                          </Button>
-                        )}
-                        <Button
-                          className="h-6 px-2 min-w-0 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/30 dark:text-rose-400"
-                          size="sm"
-                          variant="flat"
-                          onPress={() => handleDelete(node)}
-                        >
-                          删除
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              }}
-            </TableBody>
-          </Table>
-        </Card>
       ) : (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
           <SortableContext
             items={sortableNodeIds}
             strategy={rectSortingStrategy}
           >
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
               {displayNodes.map((node) => {
                 const isRemoteNode = node.isRemote === 1;
-                const remoteUsage = isRemoteNode
-                  ? remoteUsageMap[node.id]
-                  : null;
+                const online = node.connectionStatus === "online";
                 const expiryMeta = getNodeExpiryMeta(
                   node.expiryTime,
                   node.renewalCycle,
                 );
-                const connectionStatusMeta = getConnectionStatusMeta(
-                  node.connectionStatus,
-                );
-                const hasRemark = Boolean(node.remark?.trim());
-                const hasExpiryInfo = Boolean(
+                const showExpiry = Boolean(
                   node.expiryTime &&
                     node.expiryTime > 0 &&
                     node.renewalCycle &&
-                    !node.expiryReminderDismissed,
+                    !node.expiryReminderDismissed &&
+                    expiryMeta.isHighlighted,
                 );
-                const hasInfoTrigger = hasRemark || hasExpiryInfo;
-                const infoCount = Number(hasExpiryInfo) + Number(hasRemark);
-                const infoPlacement = infoPopoverPlacement[node.id] ?? "left";
+                const progress = upgradeProgress[node.id];
+                const upgrading = progress && progress.percent < 100;
+                const address =
+                  node.serverIpV4?.trim() ||
+                  node.serverIpV6?.trim() ||
+                  node.serverIp.trim();
+                const meta = isRemoteNode
+                  ? [address, node.syncError ? "同步失败" : ""]
+                  : [
+                      address,
+                      upgrading
+                        ? `升级中 ${progress.percent}%`
+                        : node.version || "未连接过",
+                      online && node.systemInfo
+                        ? `已运行 ${formatUptime(node.systemInfo.uptime)}`
+                        : "",
+                    ];
 
                 return (
                   <SortableItem key={node.id} id={node.id}>
                     {(listeners) => (
-                      <Card
-                        key={node.id}
-                        className={`group relative overflow-visible h-full flex flex-col ${node.expiryReminderDismissed ? "" : expiryMeta.accentClassName}`}
-                        data-node-card="true"
-                      >
-                        <CardHeader className="pb-3 md:pb-3">
-                          <div className="flex justify-between items-start w-full gap-3">
-                            <div className="flex items-start gap-2 flex-1 min-w-0">
-                              <div
-                                className="cursor-grab active:cursor-grabbing p-2 -ml-2 -mt-1 text-default-400 hover:text-default-600 transition-colors touch-manipulation opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex-shrink-0"
-                                {...listeners}
-                                style={{ touchAction: "none" }}
-                                title="拖拽排序"
+                      <ListRow
+                        badges={
+                          <>
+                            {isRemoteNode && (
+                              <Chip
+                                className="shrink-0"
+                                size="sm"
+                                variant="flat"
                               >
-                                <svg
-                                  aria-hidden="true"
-                                  className="w-4 h-4"
-                                  fill="currentColor"
-                                  viewBox="0 0 20 20"
-                                >
-                                  <path d="M7 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 2zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 14zm6-8a2 2 0 1 1-.001-4.001A2 2 0 0 1 13 6zm0 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 14z" />
-                                </svg>
-                              </div>
-                              {selectMode && (
-                                <Checkbox
-                                  className="mt-0.5"
-                                  isSelected={selectedIds.has(node.id)}
-                                  onValueChange={() => toggleSelect(node.id)}
-                                />
-                              )}
-                              <div className="min-w-0 flex-1 pt-0.5">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <h3 className="font-semibold text-foreground truncate text-lg leading-5">
-                                    {node.name}
-                                  </h3>
-                                  <div
-                                    className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0
-                                      ${connectionStatusMeta.color === "success" ? "bg-emerald-500/20 text-emerald-600" : "bg-rose-500/20 text-rose-600"}
-                                    `}
-                                    title={connectionStatusMeta.text}
-                                  >
-                                    <span
-                                      className={`h-1.5 w-1.5 rounded-full ${connectionStatusMeta.color === "success" ? "bg-emerald-500" : "bg-rose-500"}`}
-                                    />
-                                    {connectionStatusMeta.text}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="ml-2 flex-shrink-0 self-start">
-                              {hasInfoTrigger && (
-                                <div className="group/info relative">
-                                  <button
-                                    aria-label={`查看节点信息，共 ${infoCount} 项`}
-                                    className="relative flex h-7 w-7 items-center justify-center rounded-full border border-divider/80 bg-background/95 text-default-500 shadow-sm transition hover:border-default-300 hover:text-foreground focus-visible:border-default-300 focus-visible:text-foreground focus-visible:outline-none"
-                                    type="button"
-                                    onFocus={(event) =>
-                                      updateInfoPopoverPlacement(
-                                        node.id,
-                                        event.currentTarget,
-                                      )
-                                    }
-                                    onMouseEnter={(event) =>
-                                      updateInfoPopoverPlacement(
-                                        node.id,
-                                        event.currentTarget,
-                                      )
-                                    }
-                                  >
-                                    <svg
-                                      aria-hidden="true"
-                                      className="h-3.5 w-3.5"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
-                                    >
-                                      <path
-                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={1.8}
-                                      />
-                                    </svg>
-                                    {hasRemark && (
-                                      <span className="absolute -right-1 -top-1 flex h-2.5 w-2.5 rounded-full border border-background bg-default-300 shadow-sm dark:bg-default-500" />
-                                    )}
-                                  </button>
-                                  <div
-                                    className={`pointer-events-none invisible absolute z-[60] w-72 max-w-[min(18rem,calc(100vw-4rem))] rounded-xl border border-divider/80 bg-background/98 p-3 opacity-0 shadow-xl backdrop-blur transition-all duration-150 group-hover/info:visible group-hover/info:pointer-events-auto group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within/info:pointer-events-auto group-focus-within/info:opacity-100 ${
-                                      infoPlacement === "bottom"
-                                        ? "right-0 top-[calc(100%+0.75rem)] translate-y-1 group-hover/info:translate-y-0 group-focus-within/info:translate-y-0"
-                                        : "right-[calc(100%+0.75rem)] top-1/2 -translate-y-1/2 translate-x-1 group-hover/info:translate-x-0 group-focus-within/info:translate-x-0"
-                                    }`}
-                                  >
-                                    <div className="space-y-3">
-                                      {hasExpiryInfo && (
-                                        <div className="space-y-2">
-                                          <div className="flex items-center justify-between">
-                                            <div className="text-[11px] font-medium text-default-500">
-                                              到期提醒
-                                            </div>
-                                            <button
-                                              className="text-[10px] text-default-400 hover:text-default-600 transition-colors"
-                                              type="button"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleDismissExpiryReminder(
-                                                  node.id,
-                                                );
-                                              }}
-                                            >
-                                              关闭提醒
-                                            </button>
-                                          </div>
-                                          <div className="flex flex-wrap gap-1.5">
-                                            <Chip
-                                              className="text-[10px] h-5 px-1 flex-shrink-0"
-                                              color={expiryMeta.tone}
-                                              size="sm"
-                                              title={`${formatNodeRenewalTime(expiryMeta.nextDueTime)} (${getNodeRenewalCycleLabel(node.renewalCycle)})`}
-                                              variant="flat"
-                                            >
-                                              {expiryMeta.label}
-                                            </Chip>
-                                          </div>
-                                          <div className="rounded-lg border border-divider/80 bg-default-50/80 px-3 py-2 text-xs leading-5 text-default-700">
-                                            {formatNodeRenewalTime(
-                                              expiryMeta.nextDueTime,
-                                            )}
-                                          </div>
-                                        </div>
-                                      )}
-
-                                      {hasRemark && (
-                                        <div className="space-y-2">
-                                          <div className="text-[11px] font-medium text-default-500">
-                                            备注
-                                          </div>
-                                          <div
-                                            className="max-h-32 overflow-y-auto rounded-lg border border-divider/80 bg-default-50/80 px-3 py-2 text-xs leading-5 text-default-700 break-all [scrollbar-width:thin]"
-                                            title={node.remark?.trim()}
-                                          >
-                                            {node.remark?.trim()}
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </CardHeader>
-
-                        <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3 flex-1 flex flex-col">
-                          {isRemoteNode && node.syncError && (
-                            <div className="mb-3 px-2 py-1.5 rounded-md bg-warning-50 dark:bg-warning-100/10 text-warning-700 dark:text-warning-400 text-xs">
-                              {getRemoteSyncErrorMessage(node.syncError)}
-                            </div>
-                          )}
-                          {/* 基础信息 */}
-                          <div className="space-y-2 mb-4">
-                            {node.expiryTime &&
-                              node.expiryTime > 0 &&
-                              node.renewalCycle && <div className="hidden" />}
-                            <div className="flex justify-between items-center text-sm min-w-0">
-                              <span className="text-default-600 flex-shrink-0">
-                                IP
-                              </span>
-                              <div className="text-right text-xs min-w-0 flex-1 ml-2 min-h-[2.125rem]">
-                                {node.serverIpV4?.trim() ||
-                                node.serverIpV6?.trim() ? (
-                                  <div className="space-y-0.5">
-                                    {node.serverIpV4?.trim() && (
-                                      <span
-                                        className="font-mono truncate block"
-                                        title={node.serverIpV4.trim()}
-                                      >
-                                        {node.serverIpV4.trim()}
-                                      </span>
-                                    )}
-                                    {node.serverIpV6?.trim() && (
-                                      <span
-                                        className="font-mono truncate block"
-                                        title={node.serverIpV6.trim()}
-                                      >
-                                        {node.serverIpV6.trim()}
-                                      </span>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <span
-                                    className="font-mono truncate block"
-                                    title={node.serverIp.trim()}
-                                  >
-                                    {node.serverIp.trim()}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            {!isRemoteNode && (
-                              <>
-                                <div className="flex justify-between text-sm">
-                                  <span className="text-default-600">版本</span>
-                                  <span className="text-xs">
-                                    {node.version || "未知"}
-                                  </span>
-                                </div>
-                                {upgradeProgress[node.id] &&
-                                  upgradeProgress[node.id].percent < 100 && (
-                                    <div className="mt-1">
-                                      <Progress
-                                        showValueLabel
-                                        aria-label="升级进度"
-                                        color="warning"
-                                        label={upgradeProgress[node.id].message}
-                                        size="sm"
-                                        value={upgradeProgress[node.id].percent}
-                                      />
-                                    </div>
-                                  )}
-                                <div className="flex justify-between text-sm">
-                                  <span className="text-default-600">
-                                    开机时间
-                                  </span>
-                                  <span className="text-xs">
-                                    {node.connectionStatus === "online" &&
-                                    node.systemInfo
-                                      ? formatUptime(node.systemInfo.uptime)
-                                      : "-"}
-                                  </span>
-                                </div>
-                              </>
+                                远程
+                              </Chip>
                             )}
-                          </div>
-
-                          {isRemoteNode && (
-                            <div className="space-y-3 mb-4">
-                              {remoteUsage ? (
-                                <>
-                                  <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5 space-y-2">
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-default-500">
-                                        远程地址
-                                      </span>
-                                      <span
-                                        className="font-mono text-right truncate"
-                                        title={
-                                          remoteUsage.remoteUrl ||
-                                          node.remoteUrl ||
-                                          "-"
-                                        }
-                                      >
-                                        {remoteUsage.remoteUrl ||
-                                          node.remoteUrl ||
-                                          "-"}
-                                      </span>
-                                    </div>
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-default-500">
-                                        共享ID
-                                      </span>
-                                      <span className="font-mono">
-                                        #{remoteUsage.shareId}
-                                      </span>
-                                    </div>
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-default-500">
-                                        流量
-                                      </span>
-                                      <span className="font-mono">
-                                        {formatFlow(remoteUsage.currentFlow)}
-                                      </span>
-                                    </div>
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-default-500">
-                                        带宽上限
-                                      </span>
-                                      <span className="font-mono">
-                                        {remoteUsage.maxBandwidth > 0
-                                          ? formatSpeed(
-                                              remoteUsage.maxBandwidth,
-                                            )
-                                          : "不限"}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5">
-                                    <div className="flex items-center justify-between mb-2">
-                                      <span className="text-default-500">
-                                        占用端口
-                                      </span>
-                                      <span className="font-mono text-default-700 dark:text-default-300">
-                                        {remoteUsage.usedPorts.length}/
-                                        {Math.max(
-                                          remoteUsage.portRangeEnd -
-                                            remoteUsage.portRangeStart +
-                                            1,
-                                          0,
-                                        )}
-                                      </span>
-                                    </div>
-                                    <div className="max-h-20 overflow-y-auto rounded bg-white/10 dark:bg-black/10 p-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
-                                      {remoteUsage.usedPorts.length > 0 ? (
-                                        <div className="flex flex-wrap gap-1">
-                                          {remoteUsage.usedPorts.map((port) => (
-                                            <Chip
-                                              key={`${node.id}-port-${port}`}
-                                              className="font-mono shrink-0 whitespace-nowrap"
-                                              size="sm"
-                                              variant="flat"
-                                            >
-                                              {port}
-                                            </Chip>
-                                          ))}
-                                        </div>
-                                      ) : (
-                                        <div className="text-default-400">
-                                          暂无占用端口
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5">
-                                    <div className="flex items-center justify-between mb-2">
-                                      <span className="text-default-500">
-                                        绑定明细
-                                      </span>
-                                      <span className="font-mono text-default-700 dark:text-default-300">
-                                        {remoteUsage.activeBindingNum}
-                                      </span>
-                                    </div>
-                                    <div className="max-h-32 overflow-y-auto space-y-1.5 pr-1 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
-                                      {remoteUsage.bindings.length > 0 ? (
-                                        remoteUsage.bindings.map((binding) => (
-                                          <div
-                                            key={binding.bindingId}
-                                            className="rounded border border-default-200 dark:border-default-100/30 bg-white/10 dark:bg-black/10 p-2"
-                                          >
-                                            <div className="flex items-center justify-between gap-2">
-                                              <span
-                                                className="font-medium truncate"
-                                                title={binding.tunnelName}
-                                              >
-                                                {binding.tunnelName}
-                                              </span>
-                                              <span className="font-mono text-[11px]">
-                                                #{binding.tunnelId}
-                                              </span>
-                                            </div>
-                                            <div className="mt-1 text-[11px] text-default-500 flex items-center justify-between gap-2">
-                                              <span>
-                                                {formatChainType(
-                                                  binding.chainType,
-                                                  binding.hopInx,
-                                                )}
-                                              </span>
-                                              <span className="font-mono">
-                                                端口 {binding.allocatedPort}
-                                              </span>
-                                            </div>
-                                          </div>
-                                        ))
-                                      ) : (
-                                        <div className="text-default-400">
-                                          暂无绑定明细
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </>
-                              ) : (
-                                <div className="text-xs rounded-md border border-default-200 dark:border-default-100/30 bg-default-50 dark:bg-default-100/20 p-2.5 text-default-500">
-                                  暂未获取到远程占用数据
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="mt-auto space-y-3">
-                            {/* 操作按钮 */}
-                            <div className="space-y-1.5">
-                              {!isRemoteNode && (
-                                <div className="grid grid-cols-3 gap-1.5">
-                                  <Button
-                                    className="min-h-8"
-                                    color="success"
-                                    isLoading={node.copyLoading}
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() => openInstallSelector(node)}
-                                  >
-                                    安装
-                                  </Button>
-                                  <Button
-                                    className="min-h-8"
-                                    color="warning"
-                                    isDisabled={
-                                      node.connectionStatus !== "online"
-                                    }
-                                    isLoading={node.upgradeLoading}
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() =>
-                                      openUpgradeModal("single", node.id)
-                                    }
-                                  >
-                                    升级
-                                  </Button>
-                                  <Button
-                                    className="min-h-8"
-                                    color="secondary"
-                                    isDisabled={
-                                      node.connectionStatus !== "online"
-                                    }
-                                    isLoading={node.rollbackLoading}
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() => handleRollbackNode(node)}
-                                  >
-                                    回退
-                                  </Button>
-                                </div>
-                              )}
-                              <div
-                                className={`grid gap-1.5 ${isRemoteNode ? "grid-cols-1" : "grid-cols-2"}`}
+                            {showExpiry && (
+                              <Chip
+                                className="shrink-0"
+                                color={expiryMeta.tone}
+                                size="sm"
+                                variant="flat"
                               >
-                                {!isRemoteNode && (
-                                  <Button
-                                    className="min-h-8"
-                                    color="primary"
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() => handleEdit(node)}
-                                  >
-                                    编辑
-                                  </Button>
-                                )}
-                                <Button
-                                  className="min-h-8"
-                                  color="danger"
-                                  size="sm"
-                                  variant="flat"
-                                  onPress={() => handleDelete(node)}
-                                >
-                                  删除
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        </CardBody>
-                      </Card>
+                                {expiryMeta.label}
+                              </Chip>
+                            )}
+                          </>
+                        }
+                        meta={meta.filter(Boolean).join(" · ")}
+                        right={
+                          !isDisplayFiltered && (
+                            <span
+                              className="cursor-grab touch-none p-1 text-default-300 hover:text-default-500 active:cursor-grabbing"
+                              title="拖动排序"
+                              {...listeners}
+                            >
+                              <GripVertical className="h-4 w-4" />
+                            </span>
+                          )
+                        }
+                        selectMode={selectMode}
+                        selected={selectedIds.has(node.id)}
+                        status={upgrading ? "warn" : online ? "ok" : "bad"}
+                        statusTitle={
+                          getConnectionStatusMeta(node.connectionStatus).text
+                        }
+                        title={node.name}
+                        onPress={() => setSheetNodeId(node.id)}
+                        onSelect={() => toggleSelect(node.id)}
+                      />
                     )}
                   </SortableItem>
                 );
@@ -2500,6 +1749,173 @@ export default function NodePage() {
           </SortableContext>
         </DndContext>
       )}
+
+      {(() => {
+        const node = nodeList.find((n) => n.id === sheetNodeId) ?? null;
+        const isRemoteNode = node?.isRemote === 1;
+        const online = node?.connectionStatus === "online";
+        const usage = node ? remoteUsageMap[node.id] : undefined;
+        const progress = node ? upgradeProgress[node.id] : undefined;
+        const expiryMeta = node
+          ? getNodeExpiryMeta(node.expiryTime, node.renewalCycle)
+          : null;
+        const close = () => setSheetNodeId(null);
+        const rows: Array<[string, React.ReactNode]> = node
+          ? isRemoteNode
+            ? [
+                ["地址", usage?.remoteUrl || node.remoteUrl || "-"],
+                ...(usage
+                  ? ([
+                      ["流量", formatFlow(usage.currentFlow)],
+                      [
+                        "带宽上限",
+                        usage.maxBandwidth > 0
+                          ? formatSpeed(usage.maxBandwidth)
+                          : "不限",
+                      ],
+                      [
+                        "占用端口",
+                        `${usage.usedPorts.length} / ${Math.max(
+                          usage.portRangeEnd - usage.portRangeStart + 1,
+                          0,
+                        )}`,
+                      ],
+                      ["绑定", `${usage.activeBindingNum} 条`],
+                    ] as Array<[string, React.ReactNode]>)
+                  : []),
+              ]
+            : [
+                [
+                  "IP",
+                  [node.serverIpV4?.trim(), node.serverIpV6?.trim()]
+                    .filter(Boolean)
+                    .join(" / ") || node.serverIp.trim(),
+                ],
+                ["版本", node.version || "未知"],
+                ...(online && node.systemInfo
+                  ? ([
+                      ["已运行", formatUptime(node.systemInfo.uptime)],
+                    ] as Array<[string, React.ReactNode]>)
+                  : []),
+                ...(node.expiryTime && node.renewalCycle && expiryMeta
+                  ? ([
+                      [
+                        "续费",
+                        `${expiryMeta.label} · ${formatNodeRenewalTime(
+                          expiryMeta.nextDueTime,
+                        )}（${getNodeRenewalCycleLabel(node.renewalCycle)}）`,
+                      ],
+                    ] as Array<[string, React.ReactNode]>)
+                  : []),
+              ]
+          : [];
+
+        return (
+          <ActionSheet
+            actions={
+              !node
+                ? []
+                : isRemoteNode
+                  ? [
+                      {
+                        key: "delete",
+                        label: "删除",
+                        color: "danger" as const,
+                        onPress: () => handleDelete(node),
+                      },
+                    ]
+                  : [
+                      {
+                        key: "install",
+                        label: "安装命令",
+                        color: "primary" as const,
+                        onPress: () => openInstallSelector(node),
+                      },
+                      {
+                        key: "edit",
+                        label: "编辑",
+                        onPress: () => handleEdit(node),
+                      },
+                      {
+                        key: "upgrade",
+                        label: "升级",
+                        disabled: !online,
+                        onPress: () => openUpgradeModal("single", node.id),
+                      },
+                      {
+                        key: "rollback",
+                        label: "回退",
+                        disabled: !online,
+                        onPress: () => handleRollbackNode(node),
+                      },
+                      ...(node.expiryTime &&
+                      node.renewalCycle &&
+                      !node.expiryReminderDismissed &&
+                      expiryMeta?.isHighlighted
+                        ? [
+                            {
+                              key: "dismiss",
+                              label: "关闭到期提醒",
+                              onPress: () =>
+                                handleDismissExpiryReminder(node.id),
+                            },
+                          ]
+                        : []),
+                      {
+                        key: "delete",
+                        label: "删除",
+                        color: "danger" as const,
+                        onPress: () => handleDelete(node),
+                      },
+                    ]
+            }
+            isOpen={Boolean(node)}
+            subtitle={
+              node &&
+              (isRemoteNode
+                ? "远程节点"
+                : online
+                  ? "在线"
+                  : "离线 · agent 没有连上面板")
+            }
+            title={node?.name ?? ""}
+            onClose={close}
+          >
+            {node && (
+              <div className="space-y-2 text-sm">
+                {isRemoteNode && node.syncError && (
+                  <p className="rounded-lg bg-warning-50 px-2 py-1.5 text-xs text-warning-700 dark:bg-warning-100/10 dark:text-warning-400">
+                    {getRemoteSyncErrorMessage(node.syncError)}
+                  </p>
+                )}
+                {rows.map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-3">
+                    <span className="shrink-0 text-default-500">{k}</span>
+                    <span className="min-w-0 break-all text-right font-mono text-xs leading-5">
+                      {v}
+                    </span>
+                  </div>
+                ))}
+                {progress && progress.percent < 100 && (
+                  <Progress
+                    showValueLabel
+                    aria-label="升级进度"
+                    color="warning"
+                    label={progress.message}
+                    size="sm"
+                    value={progress.percent}
+                  />
+                )}
+                {node.remark?.trim() && (
+                  <p className="whitespace-pre-wrap break-all text-xs text-default-500">
+                    {node.remark.trim()}
+                  </p>
+                )}
+              </div>
+            )}
+          </ActionSheet>
+        );
+      })()}
       {/* 新增/编辑节点对话框 */}
       <Modal
         backdrop="blur"
