@@ -39,13 +39,15 @@ type subPipeline struct {
 	Dedupe       bool     `json:"dedupe"`
 	Sort         string   `json:"sort"`
 	RegionGroups bool     `json:"regionGroups"`
+	ChainLanding string   `json:"chainLanding"`
+	ChainRelay   string   `json:"chainRelay"`
 }
 
 func (p subPipeline) options() kernel.SubOptions {
 	return kernel.SubOptions{
 		Lines: p.Lines, Regions: p.Regions, Protocols: p.Protocols, Include: p.Include, Exclude: p.Exclude,
 		Rename: p.Rename, AddFlag: p.AddFlag, Prefix: p.Prefix, Dedupe: p.Dedupe, Sort: p.Sort,
-		RegionGroups: p.RegionGroups,
+		RegionGroups: p.RegionGroups, ChainLanding: p.ChainLanding, ChainRelay: p.ChainRelay,
 	}
 }
 
@@ -53,7 +55,10 @@ func (p *subPipeline) normalize() error {
 	p.Rename = strings.TrimSpace(strings.ReplaceAll(p.Rename, "\r\n", "\n"))
 	p.Include = strings.TrimSpace(p.Include)
 	p.Exclude = strings.TrimSpace(p.Exclude)
-	if len(p.Rename) > 10000 || len(p.Include) > 1000 || len(p.Exclude) > 1000 {
+	p.ChainLanding = strings.TrimSpace(p.ChainLanding)
+	p.ChainRelay = strings.TrimSpace(p.ChainRelay)
+	if len(p.Rename) > 10000 || len(p.Include) > 1000 || len(p.Exclude) > 1000 ||
+		len(p.ChainLanding) > 1000 || len(p.ChainRelay) > 1000 {
 		return errText("规则太长")
 	}
 	if len([]rune(p.Prefix)) > 50 {
@@ -670,6 +675,8 @@ type subPreviewItem struct {
 	Region   string `json:"region"`
 	Protocol string `json:"protocol"`
 	Line     string `json:"line"` // "direct" or "relay"
+	// Chain is "landing" or "relay" when the subscription chains proxies.
+	Chain string `json:"chain,omitempty"`
 }
 
 // subscriptionPreview runs an (unsaved) subscription's pipeline and lists
@@ -707,7 +714,7 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 			line = "direct"
 		}
 		items = append(items, subPreviewItem{Name: e.Name, Original: e.Original, Region: kernel.RegionOf(e.Name),
-			Protocol: kernel.EndpointProtocol(e), Line: line})
+			Protocol: kernel.EndpointProtocol(e), Line: line, Chain: e.ChainRole})
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"items":   items,

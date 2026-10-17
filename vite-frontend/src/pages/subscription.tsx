@@ -73,6 +73,8 @@ const EMPTY_PIPELINE: SubPipeline = {
   dedupe: false,
   sort: "",
   regionGroups: false,
+  chainLanding: "",
+  chainRelay: "",
 };
 
 function toDateInput(ms: number): string {
@@ -657,6 +659,30 @@ function Editor({
           />
         </Section>
 
+        <Section
+          hint="客户端先连中转节点，再经它连落地节点，网站看到的是落地节点的 IP。落地节点会挂到「中转选择」组上，在「落地选择」里选出口、在「中转选择」里选中转。两项都填且都匹配到节点才生效；通用分享链接（Base64）无法表达链式"
+          title="链式代理"
+        >
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Input
+              description="多个关键词用 | 分隔，或 /正则/"
+              label="落地节点"
+              placeholder="例如 美国|家宽"
+              value={o.chainLanding}
+              variant="bordered"
+              onChange={(e) => setOpts({ chainLanding: e.target.value })}
+            />
+            <Input
+              description="同时匹配两项的节点算作落地"
+              label="中转节点"
+              placeholder="例如 香港|IEPL"
+              value={o.chainRelay}
+              variant="bordered"
+              onChange={(e) => setOpts({ chainRelay: e.target.value })}
+            />
+          </div>
+        </Section>
+
         <Section title="预览">
           <Button
             className="w-full"
@@ -690,6 +716,13 @@ function Editor({
                           </span>
                         )}
                       </span>
+                      {p.chain && (
+                        <span
+                          className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "bg-warning-100 text-warning-700 dark:bg-warning-500/20" : "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20"}`}
+                        >
+                          {p.chain === "landing" ? "落地" : "中转"}
+                        </span>
+                      )}
                       <span className="shrink-0 text-default-500">
                         {p.line === "relay" ? "中转" : "直连"}
                       </span>

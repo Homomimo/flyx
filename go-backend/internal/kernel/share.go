@@ -24,6 +24,9 @@ type Endpoint struct {
 	Proxy Proxy
 	// Original is the name before ApplySubOptions renamed it.
 	Original string
+	// ChainRole is ChainRoleLanding / ChainRoleRelay when the subscription
+	// chains proxies (set by ApplySubOptions).
+	ChainRole string
 }
 
 // hopRange is the port-hopping range clients may use for this endpoint.
@@ -541,11 +544,22 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 	case FormatSurge:
 		lines := []string{"[Proxy]"}
 		names := []string{}
+		var rendered []Endpoint
+		var proxyLines []string
 		for _, e := range endpoints {
 			if line, ok := SurgeLine(e); ok {
-				lines = append(lines, line)
-				names = append(names, strings.SplitN(line, " = ", 2)[0])
+				proxyLines = append(proxyLines, line)
+				e.Name = strings.SplitN(line, " = ", 2)[0]
+				rendered = append(rendered, e)
+				names = append(names, e.Name)
 			}
+		}
+		landing, relay, chain := chainGroups(rendered)
+		for i, line := range proxyLines {
+			if chain && rendered[i].ChainRole == ChainRoleLanding {
+				line += ", underlying-proxy=" + ChainRelayGroup
+			}
+			lines = append(lines, line)
 		}
 		lines = append(lines, "", "[Proxy Group]")
 		var regionLines []string
@@ -559,10 +573,17 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 			}
 			choices = append(regionNames, names...)
 		}
+		if chain {
+			choices = append([]string{ChainLandingGroup}, choices...)
+		}
 		if len(choices) > 0 {
 			lines = append(lines, "节点选择 = select, "+strings.Join(choices, ", "))
 		} else {
 			lines = append(lines, "节点选择 = select, DIRECT")
+		}
+		if chain {
+			lines = append(lines, ChainLandingGroup+" = select, "+strings.Join(landing, ", "),
+				ChainRelayGroup+" = select, "+strings.Join(relay, ", "))
 		}
 		lines = append(lines, regionLines...)
 		lines = append(lines, "", "[Rule]", "GEOIP,LAN,DIRECT", "FINAL,节点选择", "")
@@ -572,14 +593,32 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 }
 
 func clashProfile(endpoints []Endpoint, withRegions bool) string {
+	var rendered []Endpoint
+	var nodes []yamlNode
+	for _, e := range endpoints {
+		if p, ok := ClashProxy(e); ok {
+			rendered = append(rendered, e)
+			nodes = append(nodes, p)
+		}
+	}
+	landing, relay, chain := chainGroups(rendered)
 	proxies := []interface{}{}
 	names := []interface{}{}
 	var plain []string
-	for _, e := range endpoints {
-		if p, ok := ClashProxy(e); ok {
-			proxies = append(proxies, p)
-			names = append(names, e.Name)
-			plain = append(plain, e.Name)
+	for i, e := range rendered {
+		p := nodes[i]
+		if chain && e.ChainRole == ChainRoleLanding {
+			p = append(p, yamlField{"dialer-proxy", ChainRelayGroup})
+		}
+		proxies = append(proxies, p)
+		names = append(names, e.Name)
+		plain = append(plain, e.Name)
+	}
+	var chainNodes []interface{}
+	if chain {
+		chainNodes = []interface{}{
+			yamlNode{{"name", ChainLandingGroup}, {"type", "select"}, {"proxies", toInterfaces(landing)}},
+			yamlNode{{"name", ChainRelayGroup}, {"type", "select"}, {"proxies", toInterfaces(relay)}},
 		}
 	}
 	selectList := append([]interface{}{"自动选择"}, names...)
@@ -598,6 +637,9 @@ func clashProfile(endpoints []Endpoint, withRegions bool) string {
 		}
 		selectList = append(append([]interface{}{"自动选择"}, regionNames...), names...)
 	}
+	if chain {
+		selectList = append([]interface{}{ChainLandingGroup}, selectList...)
+	}
 	if len(names) == 0 {
 		selectList = []interface{}{"DIRECT"}
 		autoList = []interface{}{"DIRECT"}
@@ -612,23 +654,42 @@ func clashProfile(endpoints []Endpoint, withRegions bool) string {
 			yamlNode{{"name", "节点选择"}, {"type", "select"}, {"proxies", selectList}},
 			yamlNode{{"name", "自动选择"}, {"type", "url-test"}, {"url", "https://www.gstatic.com/generate_204"},
 				{"interval", 300}, {"proxies", autoList}},
-		}, regionNodes...)},
+		}, append(chainNodes, regionNodes...)...)},
 		{"rules", []interface{}{"GEOIP,LAN,DIRECT,no-resolve", "MATCH,节点选择"}},
 	}
 	return marshalYAML(profile)
 }
 
 func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
+	var rendered []Endpoint
+	var obsList [][]map[string]interface{}
+	for _, e := range endpoints {
+		if obs, ok := SingboxOutbounds(e); ok {
+			rendered = append(rendered, e)
+			obsList = append(obsList, obs)
+		}
+	}
+	landing, relay, chain := chainGroups(rendered)
 	outbounds := []interface{}{}
 	names := []interface{}{}
 	var plain []string
-	for _, e := range endpoints {
-		if obs, ok := SingboxOutbounds(e); ok {
-			for _, o := range obs {
-				outbounds = append(outbounds, o)
+	for i, e := range rendered {
+		for _, o := range obsList[i] {
+			// The outbound that opens the connection dials through the relay
+			// group; a ShadowTLS pair's inner one already detours.
+			if _, detour := o["detour"]; chain && e.ChainRole == ChainRoleLanding && !detour {
+				o["detour"] = ChainRelayGroup
 			}
-			names = append(names, e.Name)
-			plain = append(plain, e.Name)
+			outbounds = append(outbounds, o)
+		}
+		names = append(names, e.Name)
+		plain = append(plain, e.Name)
+	}
+	var chainOutbounds []interface{}
+	if chain {
+		chainOutbounds = []interface{}{
+			map[string]interface{}{"type": "selector", "tag": ChainLandingGroup, "outbounds": landing},
+			map[string]interface{}{"type": "selector", "tag": ChainRelayGroup, "outbounds": relay},
 		}
 	}
 	selectList := append([]interface{}{"自动选择"}, names...)
@@ -643,6 +704,9 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 		}
 		selectList = append(append([]interface{}{"自动选择"}, regionNames...), names...)
 	}
+	if chain {
+		selectList = append([]interface{}{ChainLandingGroup}, selectList...)
+	}
 	if len(names) == 0 {
 		selectList = []interface{}{"direct"}
 		autoList = []interface{}{"direct"}
@@ -651,7 +715,7 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 		map[string]interface{}{"type": "selector", "tag": "节点选择", "outbounds": selectList},
 		map[string]interface{}{"type": "urltest", "tag": "自动选择", "outbounds": autoList,
 			"url": "https://www.gstatic.com/generate_204", "interval": "5m"},
-	}, regionOutbounds...)
+	}, append(chainOutbounds, regionOutbounds...)...)
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{"level": "warn"},
 		"inbounds": []interface{}{
@@ -681,7 +745,8 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 // sing-box tags must be unique or the whole profile is rejected.
 func uniqueNames(endpoints []Endpoint) []Endpoint {
 	out := make([]Endpoint, len(endpoints))
-	seen := map[string]bool{"节点选择": true, "自动选择": true, "direct": true, "DIRECT": true, "REJECT": true}
+	seen := map[string]bool{"节点选择": true, "自动选择": true, "direct": true, "DIRECT": true, "REJECT": true,
+		ChainLandingGroup: true, ChainRelayGroup: true}
 	for _, r := range regions {
 		seen[r.name] = true
 	}

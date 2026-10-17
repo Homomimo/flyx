@@ -668,6 +668,9 @@ export interface SubPipeline {
   dedupe: boolean;
   sort: "" | "name";
   regionGroups: boolean;
+  /** Client-side chain: names matching chainLanding dial through the relay group. */
+  chainLanding: string;
+  chainRelay: string;
 }
 export interface SubscriptionItem {
   id: number;
@@ -713,6 +716,7 @@ export interface SubPreviewItem {
   region: string;
   protocol: string;
   line: "direct" | "relay";
+  chain?: "landing" | "relay";
 }
 export const getSubscriptions = () =>
   Network.post<{ items: SubscriptionItem[]; regions: string[] }>(
