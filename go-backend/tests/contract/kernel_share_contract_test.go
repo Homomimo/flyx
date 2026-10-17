@@ -121,9 +121,14 @@ func TestInboundShareAndSubscriptionContract(t *testing.T) {
 		if out.Code == 0 {
 			t.Fatalf("subscription token leaked: %+v", out)
 		}
-		out = kernelContractPost(t, router, admin, "/api/v1/config/update-single", `{"name":"node_sub_token","value":"`+strings.Repeat("a", 32)+`"}`)
-		if mustQueryString(t, r, `SELECT value FROM vite_config WHERE name = 'node_sub_token'`) != token {
-			t.Fatalf("token must not be writable through config update: %+v", out)
+		// Tokens live in the subscription table; a config value named like
+		// the old key must not open a subscription.
+		kernelContractPost(t, router, admin, "/api/v1/config/update-single", `{"name":"node_sub_token","value":"`+strings.Repeat("a", 32)+`"}`)
+		if res := getSub(t, router, "/api/v1/open_api/sub/"+strings.Repeat("a", 32), ""); res.Code != http.StatusNotFound {
+			t.Fatalf("config value must not work as a token: %d", res.Code)
+		}
+		if mustQueryString(t, r, `SELECT token FROM subscription ORDER BY id LIMIT 1`) != token {
+			t.Fatal("default subscription token changed")
 		}
 	})
 

@@ -111,3 +111,44 @@ func TestSubscriptionRegionGroups(t *testing.T) {
 		t.Fatalf("name clash with a group:\n%s", clash)
 	}
 }
+
+func TestSubPipelineFilterFlagDedupe(t *testing.T) {
+	eps := namedEndpoints("香港 01", "日本 01", "美国 01", "Plain")
+	eps[1].Direct = true
+	eps[2].Proxy = Proxy{"type": "trojan", "name": "美国 01"}
+	// Same address as 香港 01: a duplicate.
+	dup := eps[0]
+	dup.Name = "香港 01 备用"
+	eps = append(eps, dup)
+
+	names := func(opts SubOptions) string { return strings.Join(endpointNames(ApplySubOptions(eps, opts)), ",") }
+
+	if got := names(SubOptions{Lines: "direct"}); got != "日本 01" {
+		t.Fatalf("direct only: %s", got)
+	}
+	if got := names(SubOptions{Regions: []string{"🇭🇰 香港", RegionOther}}); got != "香港 01,Plain,香港 01 备用" {
+		t.Fatalf("region filter: %s", got)
+	}
+	if got := names(SubOptions{Protocols: []string{ProtocolTrojan}}); got != "美国 01" {
+		t.Fatalf("protocol filter uses the imported proxy type: %s", got)
+	}
+	if got := names(SubOptions{Include: "香港|plain", Exclude: "/备用$/"}); got != "香港 01,Plain" {
+		t.Fatalf("include/exclude: %s", got)
+	}
+	if got := names(SubOptions{Dedupe: true}); got != "香港 01,日本 01,美国 01,Plain" {
+		t.Fatalf("dedupe: %s", got)
+	}
+	if got := names(SubOptions{AddFlag: true, Prefix: "[x] ", Regions: []string{"🇯🇵 日本"}}); got != "[x] 🇯🇵 日本 01" {
+		t.Fatalf("flag then prefix: %s", got)
+	}
+	if got := names(SubOptions{AddFlag: true, Include: "Plain"}); got != "Plain" {
+		t.Fatalf("no region, no flag: %s", got)
+	}
+	// A name that already has a flag keeps it single.
+	if got := endpointNames(ApplySubOptions(namedEndpoints("🇭🇰 香港"), SubOptions{AddFlag: true})); got[0] != "🇭🇰 香港" {
+		t.Fatalf("existing flag: %v", got)
+	}
+	if err := (SubOptions{Include: "/[/"}).Validate(); err == nil {
+		t.Fatal("bad include regex must be rejected")
+	}
+}

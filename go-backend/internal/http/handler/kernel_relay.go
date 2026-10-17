@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -18,8 +16,6 @@ import (
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
-
-const nodeSubTokenConfigKey = "node_sub_token"
 
 type relayView struct {
 	ID            int64               `json:"id"`
@@ -493,45 +489,6 @@ func (h *Handler) inboundShare(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(out))
 }
 
-func newSubToken() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func (h *Handler) subToken(reset bool) (string, error) {
-	if !reset {
-		if cfg, err := h.repo.GetConfigByName(nodeSubTokenConfigKey); err == nil && cfg != nil && len(cfg.Value) >= 32 {
-			return cfg.Value, nil
-		}
-	}
-	token := newSubToken()
-	if err := h.repo.UpsertConfig(nodeSubTokenConfigKey, token, time.Now().UnixMilli()); err != nil {
-		return "", err
-	}
-	return token, nil
-}
-
-func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return
-	}
-	var req struct {
-		Reset bool `json:"reset"`
-	}
-	_ = decodeJSON(r.Body, &req)
-	token, err := h.subToken(req.Reset)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"token": token,
-		"path":  "/api/v1/open_api/sub/" + token,
-	}))
-}
-
 // openSubscription serves GET /api/v1/open_api/sub/{token}. It is outside
 // JWT auth; the 128-bit token is the credential and is compared in constant
 // time.
@@ -541,23 +498,18 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/open_api/sub/"), "/")
-	var user *model.SubUser
-	cfg, err := h.repo.GetConfigByName(nodeSubTokenConfigKey)
-	if err != nil || cfg == nil || len(cfg.Value) < 32 || !constantTimeEqual(token, cfg.Value) {
-		// Not the owner's link: a shared user's, looked up by its own
-		// 128-bit token.
-		if len(token) != 32 {
-			http.NotFound(w, r)
-			return
-		}
-		if user, err = h.repo.GetSubUserByToken(token); err != nil || user == nil {
-			http.NotFound(w, r)
-			return
-		}
-		if !subUserActive(user, time.Now()) {
-			http.Error(w, "订阅已过期或已停用", http.StatusForbidden)
-			return
-		}
+	if len(token) != 32 {
+		http.NotFound(w, r)
+		return
+	}
+	sub, err := h.repo.GetSubscriptionByToken(token)
+	if err != nil || sub == nil || !constantTimeEqual(token, sub.Token) {
+		http.NotFound(w, r)
+		return
+	}
+	if !subActive(sub, time.Now()) {
+		http.Error(w, "订阅已过期或已停用", http.StatusForbidden)
+		return
 	}
 
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
@@ -579,27 +531,27 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = filtered
 	}
-	var endpoints []kernel.Endpoint
-	if user != nil {
-		endpoints = h.userEndpoints(user, rows)
-	} else {
-		endpoints, _ = h.inboundEndpoints(rows)
-	}
-	body, contentType, err := kernel.Subscription(format, endpoints, h.subOptions())
+	endpoints := h.subEndpoints(sub, rows)
+	body, contentType, err := kernel.Subscription(format, endpoints, parsePipeline(sub.Options).options())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Traffic is counted per inbound, so a shared user's link reports
-	// only the expiry.
-	var up, down, expire int64
-	if user != nil {
-		expire = user.ExpireTime / 1000
-	} else {
+	// Traffic is counted per inbound, so a share subscription reports only
+	// the expiry; the owner's reports the selected inbounds' traffic.
+	var up, down int64
+	expire := sub.ExpireTime / 1000
+	if !isShare(sub) {
+		want := map[int64]bool{}
+		for _, id := range subInboundIDs(sub, rows) {
+			want[id] = true
+		}
 		for _, row := range rows {
-			up += row.UploadBytes
-			down += row.DownloadBytes
+			if want[row.ID] {
+				up += row.UploadBytes
+				down += row.DownloadBytes
+			}
 		}
 	}
 	appName := "FLVX"
@@ -610,7 +562,8 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=0; expire=%d", up, down, expire))
 	w.Header().Set("Profile-Update-Interval", "12")
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(appName))
+	// Clients use the file name as the profile name.
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(appName+" - "+sub.Name))
 	if r.Method == http.MethodHead {
 		return
 	}

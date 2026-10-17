@@ -35,7 +35,7 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runKernelStatusLoop(ctx)
 	go h.runExternalProbeLoop(ctx)
 	go h.runNotifyLoop(ctx)
-	go h.runSubUserLoop(ctx)
+	go h.runSubscriptionLoop(ctx)
 }
 
 func (h *Handler) runFederationCleanupRetryLoop(ctx context.Context) {

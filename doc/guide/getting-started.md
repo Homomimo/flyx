@@ -20,21 +20,21 @@ curl -L https://github.com/kure29/flvx/releases/latest/download/panel_install.sh
 
 ## 3. 搭建节点
 
-1. **入站** 页 → **内核** 标签 → **安装内核**，在落地机上安装 Xray
-2. **入站** 标签 → **新建入站** → 选落地机和 Xray → 点模板 **VLESS + Reality + Vision** → 保存
+1. **落地** 页 → **内核** 标签 → **安装内核**，在落地机上安装 Xray
+2. **落地** 标签 → **新建入站** → 选落地机和 Xray → 点模板 **VLESS + Reality + Vision** → 保存
 
 详见 [搭建节点](./nodes.md)。
 
 ## 4. 对接中转（可选）
 
-1. **隧道** 页新建隧道，入口选中转机
-2. 回到入站，点击入站 → **中转** → 选这条隧道
+1. **中转** 页 → **隧道** 标签新建隧道，入口选中转机
+2. **中转** 页 → **线路** 标签，点落地 → 选这条隧道（也可以在落地页点入站 → **中转**）
 
 详见 [对接中转](./relay.md)。已有别处搭好的节点，可以用 [导入节点](./import.md)。
 
 ## 5. 订阅
 
-**入站** 页 → **订阅** 标签 → 复制订阅链接，导入 Clash Verge、Mihomo、sing-box、Surge、v2rayN、Shadowrocket 等客户端即可，直连和中转线路都在里面。
+**订阅** 页里默认有一个“我的订阅”，点复制按钮，导入 Clash Verge、Mihomo、sing-box、Surge、v2rayN、Shadowrocket 等客户端即可，直连和中转线路都在里面。想按地区拆分、改名或分享给朋友，见 [订阅](./subscription.md)。
 
 ::: tip 复制失败？
 浏览器只在 HTTPS 页面里完全开放复制功能。建议给面板配置域名和 HTTPS，见 [安装部署 - 反向代理](./install.md#反向代理-可选)。

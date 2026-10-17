@@ -29,6 +29,7 @@ export default defineConfig({
           { text: "搭建节点", link: "/guide/nodes" },
           { text: "对接中转", link: "/guide/relay" },
           { text: "导入节点", link: "/guide/import" },
+          { text: "订阅", link: "/guide/subscription" },
         ],
       },
       {

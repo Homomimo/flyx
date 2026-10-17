@@ -4,12 +4,11 @@ import axios from "axios";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy, QrCode, RefreshCw } from "lucide-react";
+import { Copy, QrCode } from "lucide-react";
 
 import { copyWithToast } from "@/utils/clipboard";
-import { getInboundShare, getSubInfo } from "@/api";
+import { getInboundShare } from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import {
   Modal,
@@ -217,7 +216,7 @@ export function ShareModal({
   );
 }
 
-const SUB_FORMATS: { key: string; label: string; hint: string }[] = [
+export const SUB_FORMATS: { key: string; label: string; hint: string }[] = [
   { key: "", label: "自动识别", hint: "按客户端自动返回对应格式" },
   {
     key: "clash",
@@ -228,145 +227,3 @@ const SUB_FORMATS: { key: string; label: string; hint: string }[] = [
   { key: "base64", label: "通用", hint: "v2rayN、Shadowrocket、NekoBox" },
   { key: "surge", label: "Surge", hint: "不含 VLESS / Reality" },
 ];
-
-export function SubscriptionCard() {
-  const [path, setPath] = useState("");
-  const [showQr, setShowQr] = useState(false);
-  const [resetOpen, setResetOpen] = useState(false);
-  const [resetting, setResetting] = useState(false);
-
-  const load = (reset = false) =>
-    getSubInfo(reset).then((res) => {
-      if (res.code === 0) {
-        setPath(res.data.path);
-
-        return true;
-      }
-      toast.error(res.msg || "获取订阅失败");
-
-      return false;
-    });
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const url = (format: string) =>
-    path ? `${panelOrigin()}${path}${format ? `?format=${format}` : ""}` : "";
-
-  const doReset = async () => {
-    setResetting(true);
-    try {
-      if (await load(true)) {
-        toast.success("订阅地址已重置，旧地址立即失效");
-        setResetOpen(false);
-      }
-    } finally {
-      setResetting(false);
-    }
-  };
-
-  return (
-    <Card className="shadow-sm">
-      <CardBody className="space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <h3 className="text-base font-semibold">订阅</h3>
-            <p className="text-xs text-default-500">
-              包含全部已启用入站及其中转，客户端定期更新即可同步
-            </p>
-          </div>
-          <div className="flex gap-1">
-            <Button
-              isIconOnly
-              aria-label="订阅二维码"
-              size="sm"
-              variant="flat"
-              onPress={() => setShowQr((v) => !v)}
-            >
-              <QrCode className="w-4 h-4" />
-            </Button>
-            <Button
-              isIconOnly
-              aria-label="重置订阅地址"
-              size="sm"
-              variant="flat"
-              onPress={() => setResetOpen(true)}
-            >
-              <RefreshCw className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            className="flex-1"
-            color="primary"
-            isDisabled={!path}
-            startContent={<Copy className="w-4 h-4" />}
-            variant="flat"
-            onPress={() => copyText(url(""), "订阅链接已复制")}
-          >
-            复制订阅链接（自动识别客户端）
-          </Button>
-        </div>
-        <p className="pt-1 text-xs text-default-500">指定格式</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
-          {SUB_FORMATS.filter((f) => f.key).map((f) => (
-            <button
-              key={f.key || "auto"}
-              className="text-left rounded-xl border border-divider px-3 py-2 hover:bg-default-100 transition-colors disabled:opacity-50"
-              disabled={!path}
-              type="button"
-              onClick={() => copyText(url(f.key), `${f.label} 订阅已复制`)}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{f.label}</span>
-                <Copy className="w-3.5 h-3.5 text-default-400" />
-              </div>
-              <div className="text-xs text-default-500">{f.hint}</div>
-            </button>
-          ))}
-        </div>
-        {showQr && path && (
-          <div className="flex flex-col items-center gap-2 pt-1">
-            <QrImage text={url("")} />
-            <p className="text-xs text-default-500 font-mono break-all text-center">
-              {url("")}
-            </p>
-          </div>
-        )}
-      </CardBody>
-
-      <Modal
-        backdrop="blur"
-        classNames={{ base: modalBase }}
-        isOpen={resetOpen}
-        placement="center"
-        onOpenChange={setResetOpen}
-      >
-        <ModalContent>
-          {(close) => (
-            <>
-              <ModalHeader>
-                <h2 className="text-lg font-bold">重置订阅地址</h2>
-              </ModalHeader>
-              <ModalBody>
-                <p className="text-sm text-default-600">
-                  旧的订阅地址会立即失效，所有客户端都需要重新导入新地址。
-                </p>
-              </ModalBody>
-              <ModalFooter>
-                <Button variant="light" onPress={close}>
-                  取消
-                </Button>
-                <Button color="warning" isLoading={resetting} onPress={doReset}>
-                  重置
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
-    </Card>
-  );
-}

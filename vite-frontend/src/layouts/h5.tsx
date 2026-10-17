@@ -15,6 +15,7 @@ interface TabItem {
   adminOnly?: boolean;
   // Admins reach it from the profile page instead, to keep the bar short.
   userOnly?: boolean;
+  adminLabel?: string;
 }
 
 export default function H5Layout({ children }: { children: React.ReactNode }) {
@@ -29,10 +30,13 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
   useScrollTopOnPathChange();
 
   // Tabbar配置
+  // Admins work along the landing → relay → subscription flow; the forward
+  // pages for regular users stay as they were.
   const tabItems: TabItem[] = [
     {
       path: "/dashboard",
       label: "首页",
+      adminLabel: "概览",
       icon: (
         <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
           <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
@@ -51,10 +55,25 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
           />
         </svg>
       ),
+      userOnly: true,
     },
     {
-      path: "/tunnel",
-      label: "隧道",
+      path: "/inbound",
+      label: "落地",
+      icon: (
+        <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+          <path
+            clipRule="evenodd"
+            d="M2 5a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm14 1a1 1 0 11-2 0 1 1 0 012 0zM2 13a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2zm14 1a1 1 0 11-2 0 1 1 0 012 0z"
+            fillRule="evenodd"
+          />
+        </svg>
+      ),
+      adminOnly: true,
+    },
+    {
+      path: "/relay",
+      label: "中转",
       icon: (
         <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
           <path
@@ -67,29 +86,12 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
       adminOnly: true,
     },
     {
-      path: "/node",
-      label: "节点",
+      path: "/subscription",
+      label: "订阅",
       icon: (
         <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-          <path
-            clipRule="evenodd"
-            d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11.707 4.707a1 1 0 00-1.414-1.414L10 9.586 8.707 8.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8 10.414l1.293 1.293a1 1 0 001.414 0l4-4z"
-            fillRule="evenodd"
-          />
-        </svg>
-      ),
-      adminOnly: true,
-    },
-    {
-      path: "/inbound",
-      label: "入站",
-      icon: (
-        <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-          <path
-            clipRule="evenodd"
-            d="M2 5a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm14 1a1 1 0 11-2 0 1 1 0 012 0zM2 13a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2zm14 1a1 1 0 11-2 0 1 1 0 012 0z"
-            fillRule="evenodd"
-          />
+          <path d="M5 3a1 1 0 000 2c5.523 0 10 4.477 10 10a1 1 0 102 0C17 8.373 11.627 3 5 3z" />
+          <path d="M4 9a1 1 0 011-1 7 7 0 017 7 1 1 0 11-2 0 5 5 0 00-5-5 1 1 0 01-1-1zM3 15a2 2 0 114 0 2 2 0 01-4 0z" />
         </svg>
       ),
       adminOnly: true,
@@ -111,6 +113,7 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
     {
       path: "/profile",
       label: "我的",
+      adminLabel: "更多",
       icon: (
         <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
           <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
@@ -208,7 +211,22 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
       {/* 底部Tabbar */}
       <nav className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-2xl border-t border-white/80 dark:border-white/10 h-[calc(4rem+var(--safe-area-bottom))] flex-shrink-0 flex items-center justify-around px-2 fixed bottom-0 left-0 right-0 z-30">
         {filteredTabItems.map((item) => {
-          const isActive = location.pathname === item.path;
+          const isActive =
+            location.pathname === item.path ||
+            (item.path === "/relay" &&
+              isAdmin &&
+              ["/tunnel", "/forward"].includes(location.pathname)) ||
+            (item.path === "/profile" &&
+              isAdmin &&
+              [
+                "/node",
+                "/monitor",
+                "/user",
+                "/group",
+                "/limit",
+                "/config",
+                "/panel-sharing",
+              ].includes(location.pathname));
           const isMonitor = item.path === "/monitor";
           const isMonitorBlocked = isMonitor && monitorAllowed !== true;
 
@@ -230,7 +248,9 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
               onClick={() => handleTabClick(item.path)}
             >
               <div className="flex-shrink-0 mb-1">{item.icon}</div>
-              <span className="text-xs font-medium">{item.label}</span>
+              <span className="text-xs font-medium">
+                {(isAdmin && item.adminLabel) || item.label}
+              </span>
             </button>
           );
         })}

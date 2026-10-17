@@ -22,6 +22,8 @@ type Endpoint struct {
 	Direct bool
 	// Proxy is set for imported nodes; it replaces Inbound when rendering.
 	Proxy Proxy
+	// Original is the name before ApplySubOptions renamed it.
+	Original string
 }
 
 // hopRange is the port-hopping range clients may use for this endpoint.

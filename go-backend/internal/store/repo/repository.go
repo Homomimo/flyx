@@ -212,6 +212,10 @@ func Open(path string) (*Repository, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
+	if err := migrateSubscriptions(db, unixMilliNow()); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("migrate subscriptions: %w", err)
+	}
 
 	return &Repository{db: db, dbPath: path}, nil
 }
@@ -253,6 +257,10 @@ func OpenPostgres(dsn string) (*Repository, error) {
 	if err := migrateSchema(db); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
+	}
+	if err := migrateSubscriptions(db, unixMilliNow()); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("migrate subscriptions: %w", err)
 	}
 
 	return &Repository{db: db}, nil
@@ -326,6 +334,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NodeInboundCounter{},
 		&model.NodeInboundRelay{},
 		&model.SubUser{},
+		&model.Subscription{},
 	}
 
 	if db.Dialector.Name() != "sqlite" {
