@@ -9,7 +9,7 @@ import type { InboundApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy } from "lucide-react";
+import { ChevronDown, Copy } from "lucide-react";
 
 import {
   deleteSubscription,
@@ -187,21 +187,77 @@ function ChipPicker({
 function Section({
   title,
   hint,
+  summary,
+  collapsible,
+  defaultOpen = true,
   children,
 }: {
   title: string;
   hint?: string;
+  /** Shown next to the title while collapsed. */
+  summary?: string;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const shown = !collapsible || open;
+
   return (
     <section className="space-y-3 border-t border-divider pt-4 first:border-t-0 first:pt-0">
-      <div>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        {hint && <p className="text-xs text-default-500">{hint}</p>}
-      </div>
-      {children}
+      {collapsible ? (
+        <button
+          aria-expanded={open}
+          className="flex w-full items-start gap-2 text-left"
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+        >
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-semibold">
+              {title}
+              {!open && summary && (
+                <span className="ml-2 text-xs font-normal text-primary">
+                  {summary}
+                </span>
+              )}
+            </h3>
+            {open && hint && <p className="text-xs text-default-500">{hint}</p>}
+          </div>
+          <ChevronDown
+            className={`mt-0.5 h-4 w-4 shrink-0 text-default-400 transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+      ) : (
+        <div>
+          <h3 className="text-sm font-semibold">{title}</h3>
+          {hint && <p className="text-xs text-default-500">{hint}</p>}
+        </div>
+      )}
+      {shown && children}
     </section>
   );
+}
+
+/** Names the processing steps a pipeline turns on, e.g. "过滤、改名". */
+function pipelineSummary(o: SubPipeline): string {
+  const steps: string[] = [];
+
+  if (
+    o.lines ||
+    o.regions.length ||
+    o.protocols.length ||
+    o.include ||
+    o.exclude
+  )
+    steps.push("过滤");
+  if (o.rename.trim()) steps.push("改名");
+  if (o.addFlag) steps.push("国旗");
+  if (o.prefix) steps.push("前缀");
+  if (o.dedupe) steps.push("去重");
+  if (o.sort) steps.push("排序");
+  if (o.regionGroups) steps.push("地区分组");
+
+  return steps.join("、");
 }
 
 interface Draft extends SubscriptionDraft {
@@ -549,7 +605,10 @@ function Editor({
         </Section>
 
         <Section
+          collapsible
+          defaultOpen={Boolean(pipelineSummary(o))}
           hint="按顺序执行：过滤 → 改名 → 国旗 → 前缀 → 去重 → 排序"
+          summary={pipelineSummary(o) || "未设置"}
           title="处理"
         >
           <div className="space-y-1.5">
@@ -658,7 +717,10 @@ function Editor({
         </Section>
 
         <Section
+          collapsible
+          defaultOpen={Boolean(o.chainLanding || o.chainRelay)}
           hint="客户端先连中转节点，再经它连落地节点，网站看到的是落地节点的 IP。落地节点会挂到「中转节点」组上，在「落地节点」里选出口、在「中转节点」里选中转。两项都填且都匹配到节点才生效；通用分享链接（Base64）无法表达链式"
+          summary={o.chainLanding && o.chainRelay ? "已开启" : "未开启"}
           title="链式代理"
         >
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

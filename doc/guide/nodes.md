@@ -93,7 +93,10 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 | 自动识别 | 按客户端 UA 返回对应格式 | |
 | Clash / Mihomo | Clash Verge、Stash、FlClash | XHTTP、Snell、NaïveProxy |
 | sing-box | SFA / SFI / SFM | XHTTP、Snell |
-| 通用 base64 | v2rayN、Shadowrocket、NekoBox | Snell |
+| Shadowrocket | Shadowrocket | XHTTP、Snell、NaïveProxy |
+| Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy |
+| Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy |
+| 通用 base64 | v2rayN、NekoBox | Snell |
 | Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy |
 
 ## 批量操作
