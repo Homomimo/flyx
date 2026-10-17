@@ -62,15 +62,15 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			Epoch: c.Epoch, Bytes: c.Bytes,
 		})
 	}
-	var users []model.SubUser
-	if err := r.db.Order("id ASC").Find(&users).Error; err != nil {
+	var subs []model.Subscription
+	if err := r.db.Order("id ASC").Find(&subs).Error; err != nil {
 		return nil, err
 	}
-	for _, u := range users {
-		out.Users = append(out.Users, model.SubUserBackup{
-			ID: u.ID, Name: u.Name, Token: u.Token, UUID: u.UUID, Password: u.Password,
-			InboundIDs: u.InboundIDs, ExpireTime: u.ExpireTime, Enabled: u.Enabled,
-			Remark: u.Remark, CreatedTime: u.CreatedTime,
+	for _, sub := range subs {
+		out.Subscriptions = append(out.Subscriptions, model.SubscriptionBackup{
+			ID: sub.ID, Name: sub.Name, Kind: sub.Kind, Token: sub.Token, UUID: sub.UUID, Password: sub.Password,
+			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
+			Enabled: sub.Enabled, Remark: sub.Remark, Inx: sub.Inx, CreatedTime: sub.CreatedTime,
 		})
 	}
 	return out, nil
@@ -163,24 +163,38 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 			return 0, err
 		}
 	}
-	// Shared users keep their links and credentials. AppliedActive starts at
-	// 0 so the expiry loop pushes the active ones to the kernels.
+	// Subscriptions keep their links and credentials, matched by token.
+	// AppliedActive starts at 0 so the expiry loop pushes the active share
+	// subscriptions to the kernels.
+	subs := append([]model.SubscriptionBackup(nil), b.Subscriptions...)
 	for _, u := range b.Users {
-		if err := tx.Where("token = ? AND id <> ?", u.Token, u.ID).Delete(&model.SubUser{}).Error; err != nil {
-			return 0, err
+		subs = append(subs, model.SubscriptionBackup{
+			Name: u.Name, Kind: model.SubscriptionShare, Token: u.Token, UUID: u.UUID, Password: u.Password,
+			InboundIDs: u.InboundIDs, ExpireTime: u.ExpireTime, Enabled: u.Enabled, Remark: u.Remark,
+			CreatedTime: u.CreatedTime,
+		})
+	}
+	for _, sb := range subs {
+		if sb.Token == "" {
+			continue
 		}
-		item := model.SubUser{
-			ID: u.ID, Name: u.Name, Token: u.Token, UUID: u.UUID, Password: u.Password,
-			InboundIDs: u.InboundIDs, ExpireTime: u.ExpireTime, Enabled: u.Enabled,
-			Remark: u.Remark, CreatedTime: u.CreatedTime, UpdatedTime: now,
+		var existing model.Subscription
+		res := tx.Where("token = ?", sb.Token).Limit(1).Find(&existing)
+		if res.Error != nil {
+			return 0, res.Error
 		}
-		if err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{
-				"name", "token", "uuid", "password", "inbound_ids", "expire_time", "enabled",
-				"applied_active", "remark", "updated_time",
-			}),
-		}).Create(&item).Error; err != nil {
+		item := model.Subscription{
+			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
+			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
+			Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
+		}
+		if item.Kind != model.SubscriptionShare {
+			item.Kind = model.SubscriptionOwn
+		}
+		if res.RowsAffected > 0 {
+			item.ID = existing.ID
+		}
+		if err := tx.Save(&item).Error; err != nil {
 			return 0, err
 		}
 	}

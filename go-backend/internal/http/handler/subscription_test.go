@@ -10,8 +10,8 @@ import (
 	"go-backend/internal/store/repo"
 )
 
-func TestKernelPayloadCarriesActiveSubUsers(t *testing.T) {
-	r, err := repo.Open(t.TempDir() + "/subuser.db")
+func TestKernelPayloadCarriesActiveShareSubscriptions(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/subscription.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,10 +31,15 @@ func TestKernelPayloadCarriesActiveSubUsers(t *testing.T) {
 		VALUES(?, ?, 'a', 'trojan', '::', 443, '{"password":"owner-pw"}', ?, ?)`, kernelID, nodeID, now, now).Error; err != nil {
 		t.Fatal(err)
 	}
-	inboundID := mustLastInsertID(t, r, "inbound")
-	u := &model.SubUser{Name: "x", Token: strings.Repeat("a", 32), UUID: "u", Password: "user-pw",
-		InboundIDs: formatIDList([]int64{inboundID}), Enabled: 1, CreatedTime: now, UpdatedTime: now}
-	if err := r.SaveSubUser(u); err != nil {
+	// "All inbounds" also covers inbounds added later.
+	s := &model.Subscription{Name: "x", Kind: model.SubscriptionShare, Token: strings.Repeat("a", 32), UUID: "u",
+		Password: "user-pw", SourceAll: 1, Enabled: 1, CreatedTime: now, UpdatedTime: now}
+	if err := r.SaveSubscription(s); err != nil {
+		t.Fatal(err)
+	}
+	own := &model.Subscription{Name: "mine", Kind: model.SubscriptionOwn, Token: strings.Repeat("b", 32),
+		Password: "own-should-not-appear", SourceAll: 1, Enabled: 1, CreatedTime: now, UpdatedTime: now}
+	if err := r.SaveSubscription(own); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,23 +49,15 @@ func TestKernelPayloadCarriesActiveSubUsers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return mustJSONString(t, payload["files"])
+		b, _ := json.Marshal(payload["files"])
+		return string(b)
 	}
-	if c := config(); !strings.Contains(c, "owner-pw") || !strings.Contains(c, "user-pw") {
-		t.Fatalf("active user must be in the config: %s", c)
+	if c := config(); !strings.Contains(c, "owner-pw") || !strings.Contains(c, "user-pw") || strings.Contains(c, "own-should-not-appear") {
+		t.Fatalf("active share subscription must be in the config, own ones not: %s", c)
 	}
-	u.ExpireTime = now - 1000
-	_ = r.SaveSubUser(u)
+	s.ExpireTime = now - 1000
+	_ = r.SaveSubscription(s)
 	if c := config(); strings.Contains(c, "user-pw") || !strings.Contains(c, "owner-pw") {
-		t.Fatalf("expired user must be removed, owner kept: %s", c)
+		t.Fatalf("expired share must be removed, owner kept: %s", c)
 	}
-}
-
-func mustJSONString(t *testing.T, v interface{}) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
 }

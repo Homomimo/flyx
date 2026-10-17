@@ -112,20 +112,20 @@ func (h *Handler) checkUserReminders(now time.Time) {
 			}
 		}
 	}
-	if subs, err := h.repo.ListSubUsers(); err == nil {
-		for _, u := range subs {
-			if u.Enabled != 1 || u.ExpireTime == 0 || time.UnixMilli(u.ExpireTime).Sub(now) > window {
+	if subs, err := h.repo.ListSubscriptions(); err == nil {
+		for _, s := range subs {
+			if !isShare(&s) || s.Enabled != 1 || s.ExpireTime == 0 || time.UnixMilli(s.ExpireTime).Sub(now) > window {
 				continue
 			}
-			if !h.notifier.alertOnce(fmt.Sprintf("sub:%d:%d", u.ID, u.ExpireTime)) {
+			if !h.notifier.alertOnce(fmt.Sprintf("sub:%d:%d", s.ID, s.ExpireTime)) {
 				continue
 			}
-			text, expired := expiryText(u.ExpireTime, now)
-			title := "共享用户即将到期"
+			text, expired := expiryText(s.ExpireTime, now)
+			title := "分享订阅即将到期"
 			if expired {
-				title = "共享用户已到期，已断开"
+				title = "分享订阅已到期，已断开"
 			}
-			h.notify(notifyEventUserQuota, title, fmt.Sprintf("用户：%s\n到期：%s", u.Name, text))
+			h.notify(notifyEventUserQuota, title, fmt.Sprintf("订阅：%s\n到期：%s", s.Name, text))
 		}
 	}
 }
@@ -204,17 +204,23 @@ func (h *Handler) dailyReportText(now time.Time) string {
 	if flow, err := h.repo.SumStatisticsFlowSince(now.Add(-24 * time.Hour).UnixMilli()); err == nil && flow > 0 {
 		lines = append(lines, "转发流量（过去 24 小时）："+formatBytes(flow))
 	}
-	if subs, err := h.repo.ListSubUsers(); err == nil && len(subs) > 0 {
-		active, soon := 0, 0
+	if subs, err := h.repo.ListSubscriptions(); err == nil {
+		active, soon, total := 0, 0, 0
 		for i := range subs {
-			if subUserActive(&subs[i], now) {
+			if !isShare(&subs[i]) {
+				continue
+			}
+			total++
+			if subActive(&subs[i], now) {
 				active++
 				if subs[i].ExpireTime > 0 && time.UnixMilli(subs[i].ExpireTime).Sub(now) <= notifyUserExpiryDays*24*time.Hour {
 					soon++
 				}
 			}
 		}
-		lines = append(lines, fmt.Sprintf("共享用户：%d 个有效，%d 个 3 天内到期", active, soon))
+		if total > 0 {
+			lines = append(lines, fmt.Sprintf("分享订阅：%d 个有效，%d 个 3 天内到期", active, soon))
+		}
 	}
 	if len(lines) == 0 {
 		return "暂无数据"

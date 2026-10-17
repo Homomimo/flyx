@@ -7,16 +7,155 @@ import (
 	"strings"
 )
 
-// SubOptions customizes the node list of a subscription.
+// SubOptions is a subscription's processing pipeline. The steps run in a
+// fixed order: filter → rename → flag → prefix → dedupe → sort; region
+// groups are added when the profile is rendered.
 type SubOptions struct {
+	// Lines keeps "relay" or "direct" endpoints only; "" keeps both.
+	Lines string
+	// Regions keeps endpoints whose region (see RegionOf) is listed;
+	// RegionOther stands for names without a recognized region.
+	Regions []string
+	// Protocols keeps endpoints using one of these protocols.
+	Protocols []string
+	// Include / Exclude match names: /regex/, or keywords split by "|".
+	Include string
+	Exclude string
 	// Rename rules, one per line: "find => replace". A find wrapped in
 	// slashes (/.../) is a regular expression; an empty replace deletes.
 	Rename string
-	Prefix string
+	// AddFlag puts the region's flag emoji in front of names lacking one.
+	AddFlag bool
+	Prefix  string
+	// Dedupe drops endpoints pointing at the same address, port and
+	// protocol as an earlier one.
+	Dedupe bool
 	// Sort is "" (panel order) or "name".
 	Sort string
 	// RegionGroups adds one auto-select group per detected region.
 	RegionGroups bool
+}
+
+// RegionOther is the filter value for names without a recognized region.
+const RegionOther = "其他"
+
+// RegionNames lists the region groups in display order.
+func RegionNames() []string {
+	out := make([]string, len(regions))
+	for i, r := range regions {
+		out[i] = r.name
+	}
+	return out
+}
+
+type matcher struct {
+	re    *regexp.Regexp
+	words []string
+}
+
+// ParseMatcher parses a filter expression: /regex/, or keywords separated
+// by "|" (any of them, case-insensitive). Empty matches nothing.
+func ParseMatcher(expr string) (*matcher, error) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return nil, nil
+	}
+	if len(expr) > 2 && strings.HasPrefix(expr, "/") && strings.HasSuffix(expr, "/") {
+		re, err := regexp.Compile(expr[1 : len(expr)-1])
+		if err != nil {
+			return nil, fmt.Errorf("正则表达式错误：%s", expr)
+		}
+		return &matcher{re: re}, nil
+	}
+	m := &matcher{}
+	for _, w := range strings.Split(expr, "|") {
+		if w = strings.ToLower(strings.TrimSpace(w)); w != "" {
+			m.words = append(m.words, w)
+		}
+	}
+	return m, nil
+}
+
+func (m *matcher) match(name string) bool {
+	if m.re != nil {
+		return m.re.MatchString(name)
+	}
+	lower := strings.ToLower(name)
+	for _, w := range m.words {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// EndpointProtocol is the protocol clients use for the endpoint.
+func EndpointProtocol(e Endpoint) string {
+	if e.Proxy != nil {
+		if p := ProxyProtocol(e.Proxy); p != "" {
+			return p
+		}
+		return e.Proxy.Type()
+	}
+	return e.Inbound.Protocol
+}
+
+// EndpointRegion is the endpoint's region group, or RegionOther.
+func EndpointRegion(e Endpoint) string {
+	if r := RegionOf(e.Name); r != "" {
+		return r
+	}
+	return RegionOther
+}
+
+// Validate checks the expressions in the options.
+func (o SubOptions) Validate() error {
+	if _, err := ParseRenameRules(o.Rename); err != nil {
+		return err
+	}
+	if _, err := ParseMatcher(o.Include); err != nil {
+		return fmt.Errorf("包含：%v", err)
+	}
+	if _, err := ParseMatcher(o.Exclude); err != nil {
+		return fmt.Errorf("排除：%v", err)
+	}
+	return nil
+}
+
+// FilterEndpoints applies the filter step only.
+func FilterEndpoints(endpoints []Endpoint, opts SubOptions) []Endpoint {
+	include, _ := ParseMatcher(opts.Include)
+	exclude, _ := ParseMatcher(opts.Exclude)
+	regionSet := toSet(opts.Regions)
+	protoSet := toSet(opts.Protocols)
+	out := make([]Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		switch {
+		case opts.Lines == "relay" && e.Direct, opts.Lines == "direct" && !e.Direct:
+			continue
+		case len(regionSet) > 0 && !regionSet[EndpointRegion(e)]:
+			continue
+		case len(protoSet) > 0 && !protoSet[EndpointProtocol(e)]:
+			continue
+		case include != nil && !include.match(e.Name):
+			continue
+		case exclude != nil && exclude.match(e.Name):
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func toSet(list []string) map[string]bool {
+	if len(list) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(list))
+	for _, v := range list {
+		m[v] = true
+	}
+	return m
 }
 
 type renameRule struct {
@@ -55,12 +194,17 @@ func ParseRenameRules(text string) ([]renameRule, error) {
 	return rules, nil
 }
 
-// ApplySubOptions renames and sorts endpoints. Invalid rename rules are
-// skipped (they are validated when saved).
+// ApplySubOptions runs the pipeline. Invalid expressions are skipped
+// (they are validated when saved).
 func ApplySubOptions(endpoints []Endpoint, opts SubOptions) []Endpoint {
+	endpoints = FilterEndpoints(endpoints, opts)
 	rules, _ := ParseRenameRules(opts.Rename)
-	out := make([]Endpoint, len(endpoints))
-	for i, e := range endpoints {
+	out := make([]Endpoint, 0, len(endpoints))
+	seen := map[string]bool{}
+	for _, e := range endpoints {
+		if e.Original == "" {
+			e.Original = e.Name
+		}
 		name := e.Name
 		for _, r := range rules {
 			if r.re != nil {
@@ -73,8 +217,18 @@ func ApplySubOptions(endpoints []Endpoint, opts SubOptions) []Endpoint {
 		if name == "" {
 			name = strings.TrimSpace(e.Name)
 		}
+		if opts.AddFlag {
+			name = withFlag(name, e.Name)
+		}
+		if opts.Dedupe {
+			key := strings.ToLower(strings.Trim(e.Host, "[]")) + "|" + fmt.Sprint(e.Port) + "|" + EndpointProtocol(e)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+		}
 		e.Name = opts.Prefix + name
-		out[i] = e
+		out = append(out, e)
 	}
 	if opts.Sort == "name" {
 		sort.SliceStable(out, func(i, j int) bool { return NaturalLess(out[i].Name, out[j].Name) })
@@ -205,4 +359,34 @@ func regionGroups(names []string) []regionGroup {
 		}
 	}
 	return out
+}
+
+// withFlag prefixes the region flag (from the new name, else the original)
+// unless the name already carries a flag.
+func withFlag(name, original string) string {
+	if hasFlag(name) {
+		return name
+	}
+	region := RegionOf(name)
+	if region == "" {
+		region = RegionOf(original)
+	}
+	if region == "" {
+		return name
+	}
+	flag := strings.Fields(region)[0]
+	return flag + " " + name
+}
+
+// hasFlag reports whether s contains a regional-indicator pair (a flag).
+func hasFlag(s string) bool {
+	prev := false
+	for _, r := range s {
+		ri := r >= 0x1F1E6 && r <= 0x1F1FF
+		if ri && prev {
+			return true
+		}
+		prev = ri
+	}
+	return false
 }

@@ -1,0 +1,1051 @@
+import type {
+  SubPipeline,
+  SubPreviewItem,
+  SubscriptionDraft,
+  SubscriptionItem,
+} from "@/api";
+import type { InboundApiItem } from "@/api/types";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
+import { Copy, QrCode } from "lucide-react";
+
+import {
+  deleteSubscription,
+  getInboundList,
+  getSubscriptions,
+  previewSubscription,
+  resetSubscription,
+  saveSubscription,
+} from "@/api";
+import { AnimatedPage } from "@/components/animated-page";
+import { PageLoadingState } from "@/components/page-state";
+import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
+import {
+  QrImage,
+  SUB_FORMATS,
+  copyText,
+  panelOrigin,
+} from "@/pages/inbound/share";
+import { Button } from "@/shadcn-bridge/heroui/button";
+import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
+import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
+import { Chip } from "@/shadcn-bridge/heroui/chip";
+import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
+import {
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+} from "@/shadcn-bridge/heroui/modal";
+import { Switch } from "@/shadcn-bridge/heroui/switch";
+
+const modalBase =
+  "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
+
+/** Protocols that can carry per-user credentials (mirrors the backend). */
+const MULTI_USER_PROTOCOLS = new Set([
+  "vless",
+  "vmess",
+  "trojan",
+  "hysteria2",
+  "tuic",
+  "anytls",
+  "naive",
+]);
+
+const EMPTY_PIPELINE: SubPipeline = {
+  lines: "",
+  regions: [],
+  protocols: [],
+  include: "",
+  exclude: "",
+  rename: "",
+  addFlag: false,
+  prefix: "",
+  dedupe: false,
+  sort: "",
+  regionGroups: false,
+};
+
+function toDateInput(ms: number): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** The end of the chosen local day, so a link stays valid through it. */
+function fromDateInput(value: string): number {
+  if (!value) return 0;
+  const [y, m, d] = value.split("-").map(Number);
+
+  return new Date(y, m - 1, d, 23, 59, 59).getTime();
+}
+
+function expiryLabel(ms: number): string {
+  if (!ms) return "永不过期";
+  const days = Math.ceil((ms - Date.now()) / 86400000);
+
+  if (days <= 0) return `${toDateInput(ms)} 已过期`;
+
+  return `${toDateInput(ms)} 到期 · 剩 ${days} 天`;
+}
+
+function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<[T, string]>;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div
+      className="grid gap-1 rounded-xl bg-default-100 p-1 text-sm"
+      style={{
+        gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
+      }}
+    >
+      {options.map(([k, label]) => (
+        <button
+          key={k}
+          className={`rounded-lg px-2 py-1.5 transition-colors ${
+            value === k
+              ? "bg-background font-medium shadow-sm"
+              : "text-default-500"
+          }`}
+          type="button"
+          onClick={() => onChange(k)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ToggleRow({
+  id,
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <Switch
+        aria-labelledby={`${id}-label`}
+        id={id}
+        isSelected={value}
+        size="sm"
+        onValueChange={onChange}
+      />
+      <label
+        className="flex cursor-pointer flex-col"
+        htmlFor={id}
+        id={`${id}-label`}
+      >
+        <span className="text-sm">{label}</span>
+        {hint && <span className="text-xs text-default-500">{hint}</span>}
+      </label>
+    </div>
+  );
+}
+
+function ChipPicker({
+  options,
+  selected,
+  onChange,
+  emptyText,
+}: {
+  options: Array<[string, string]>;
+  selected: string[];
+  onChange: (v: string[]) => void;
+  emptyText: string;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <button
+        className={`rounded-full border px-2.5 py-1 text-xs ${
+          selected.length === 0
+            ? "border-primary bg-primary-50 text-primary dark:bg-primary-900/30"
+            : "border-divider text-default-500"
+        }`}
+        type="button"
+        onClick={() => onChange([])}
+      >
+        {emptyText}
+      </button>
+      {options.map(([value, label]) => {
+        const on = selected.includes(value);
+
+        return (
+          <button
+            key={value}
+            className={`rounded-full border px-2.5 py-1 text-xs ${
+              on
+                ? "border-primary bg-primary-50 text-primary dark:bg-primary-900/30"
+                : "border-divider text-default-600"
+            }`}
+            type="button"
+            onClick={() =>
+              onChange(
+                on ? selected.filter((x) => x !== value) : [...selected, value],
+              )
+            }
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Section({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-3 border-t border-divider pt-4 first:border-t-0 first:pt-0">
+      <div>
+        <h3 className="text-sm font-semibold">{title}</h3>
+        {hint && <p className="text-xs text-default-500">{hint}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+interface Draft extends SubscriptionDraft {
+  expire: string;
+}
+
+function draftFrom(s?: SubscriptionItem): Draft {
+  if (!s) {
+    return {
+      name: "",
+      kind: "own",
+      sourceAll: true,
+      inboundIds: [],
+      options: { ...EMPTY_PIPELINE },
+      expireTime: 0,
+      expire: "",
+      enabled: true,
+      remark: "",
+    };
+  }
+
+  return {
+    id: s.id,
+    name: s.name,
+    kind: s.kind,
+    sourceAll: s.sourceAll,
+    inboundIds: s.inboundIds,
+    options: { ...EMPTY_PIPELINE, ...s.options },
+    expireTime: s.expireTime,
+    expire: toDateInput(s.expireTime),
+    enabled: s.enabled,
+    remark: s.remark,
+  };
+}
+
+/** The API payload: the backend rejects unknown fields like `expire`. */
+function toPayload(d: Draft): SubscriptionDraft {
+  const { expire, ...rest } = d;
+
+  return {
+    ...rest,
+    expireTime: d.kind === "share" ? fromDateInput(expire) : 0,
+  };
+}
+
+function Editor({
+  draft,
+  setDraft,
+  inbounds,
+  regions,
+  saving,
+  onSave,
+  onClose,
+}: {
+  draft: Draft;
+  setDraft: (d: Draft) => void;
+  inbounds: InboundApiItem[];
+  regions: string[];
+  saving: boolean;
+  onSave: () => void;
+  onClose: () => void;
+}) {
+  const [preview, setPreview] = useState<{
+    items: SubPreviewItem[];
+    total: number;
+    dropped: number;
+  } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const o = draft.options;
+  const setOpts = (patch: Partial<SubPipeline>) => {
+    setDraft({ ...draft, options: { ...o, ...patch } });
+    setPreview(null);
+  };
+  const set = (patch: Partial<Draft>) => {
+    setDraft({ ...draft, ...patch });
+    setPreview(null);
+  };
+
+  const share = draft.kind === "share";
+  const protocols = useMemo(
+    () =>
+      [...new Set(inbounds.map((i) => i.protocol))].map(
+        (p) => [p, PROTOCOL_LABELS[p] ?? p] as [string, string],
+      ),
+    [inbounds],
+  );
+  const selfBuilt = inbounds.filter((i) => !i.external);
+  const imported = inbounds.filter((i) => i.external);
+  const sharedPicked = share
+    ? inbounds.filter(
+        (i) =>
+          (draft.sourceAll ? i.enabled : draft.inboundIds.includes(i.id)) &&
+          (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
+      ).length
+    : 0;
+
+  const runPreview = async () => {
+    setPreviewing(true);
+    try {
+      const res = await previewSubscription(toPayload(draft));
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "预览失败");
+
+        return;
+      }
+      setPreview(res.data);
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const pickList = (title: string, list: InboundApiItem[]) =>
+    list.length > 0 && (
+      <div className="space-y-1">
+        <p className="text-xs text-default-500">{title}</p>
+        {list.map((i) => (
+          <Checkbox
+            key={i.id}
+            className="w-full"
+            isSelected={draft.inboundIds.includes(i.id)}
+            onValueChange={(on) =>
+              set({
+                inboundIds: on
+                  ? [...draft.inboundIds, i.id]
+                  : draft.inboundIds.filter((x) => x !== i.id),
+              })
+            }
+          >
+            <span className="text-sm">{i.name}</span>
+            {!i.enabled && (
+              <span className="ml-1 text-xs text-default-400">已停用</span>
+            )}
+            {share && (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)) && (
+              <span className="ml-1 text-xs text-warning">共用凭据</span>
+            )}
+          </Checkbox>
+        ))}
+      </div>
+    );
+
+  return (
+    <>
+      <ModalHeader>
+        <h2 className="text-lg font-bold">
+          {draft.id ? "编辑订阅" : "新建订阅"}
+        </h2>
+      </ModalHeader>
+      <ModalBody className="space-y-4">
+        <Section title="基本">
+          <Input
+            label="名称"
+            placeholder="例如 我的手机 / 小明"
+            value={draft.name}
+            variant="bordered"
+            onChange={(e) => set({ name: e.target.value })}
+          />
+          <Segmented
+            options={[
+              ["own", "自用"],
+              ["share", "分享给他人"],
+            ]}
+            value={draft.kind}
+            onChange={(kind) => set({ kind })}
+          />
+          <p className="text-xs text-default-500">
+            {share
+              ? "对方拿到独立的 UUID / 密码，到期或停用后从节点上删除，已导入的配置也连不上"
+              : "用你自己的凭据，适合自己的设备；可以建多个，各自筛选不同的节点"}
+          </p>
+          {share && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium" htmlFor="sub-expire">
+                到期日期
+              </label>
+              <div className="flex gap-2">
+                <input
+                  className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-background px-2 text-sm"
+                  id="sub-expire"
+                  type="date"
+                  value={draft.expire}
+                  onChange={(e) => set({ expire: e.target.value })}
+                />
+                {[30, 90, 365].map((d) => (
+                  <Button
+                    key={d}
+                    className="min-w-0 px-2"
+                    size="sm"
+                    variant="flat"
+                    onPress={() =>
+                      set({ expire: toDateInput(Date.now() + d * 86400000) })
+                    }
+                  >
+                    {d === 365 ? "1年" : `${d}天`}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-default-500">
+                {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
+              </p>
+            </div>
+          )}
+        </Section>
+
+        <Section hint="中转线路会跟着它的落地一起出现" title="来源">
+          <Segmented
+            options={[
+              ["all", "全部落地"],
+              ["pick", "指定落地"],
+            ]}
+            value={draft.sourceAll ? "all" : "pick"}
+            onChange={(v) => set({ sourceAll: v === "all" })}
+          />
+          {draft.sourceAll ? (
+            <p className="text-xs text-default-500">
+              包括以后新增的落地；只想要一部分可以用下面的过滤
+            </p>
+          ) : (
+            <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
+              {pickList("自建", selfBuilt)}
+              {pickList("导入", imported)}
+            </div>
+          )}
+          {sharedPicked > 0 && (
+            <p className="text-xs text-warning">
+              其中 {sharedPicked} 个是导入的节点或 Shadowsocks /
+              Snell，没法单独分配凭据：对方拿到共用的密码，停用后订阅失效，但已导入的配置仍能连接。
+            </p>
+          )}
+        </Section>
+
+        <Section
+          hint="按顺序执行：过滤 → 改名 → 国旗 → 前缀 → 去重 → 排序"
+          title="处理"
+        >
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium">线路</p>
+            <Segmented
+              options={[
+                ["", "全部"],
+                ["relay", "只要中转"],
+                ["direct", "只要直连"],
+              ]}
+              value={o.lines}
+              onChange={(lines) => setOpts({ lines })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium">地区</p>
+            <ChipPicker
+              emptyText="全部地区"
+              options={regions.map((r) => [r, r])}
+              selected={o.regions}
+              onChange={(regions) => setOpts({ regions })}
+            />
+          </div>
+          {protocols.length > 1 && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium">协议</p>
+              <ChipPicker
+                emptyText="全部协议"
+                options={protocols}
+                selected={o.protocols}
+                onChange={(protocols) => setOpts({ protocols })}
+              />
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Input
+              description="多个关键词用 | 分隔，或 /正则/"
+              label="名称包含"
+              placeholder="例如 IEPL|专线"
+              value={o.include}
+              variant="bordered"
+              onChange={(e) => setOpts({ include: e.target.value })}
+            />
+            <Input
+              label="名称排除"
+              placeholder="例如 /过期|剩余/"
+              value={o.exclude}
+              variant="bordered"
+              onChange={(e) => setOpts({ exclude: e.target.value })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium">改名规则</p>
+            <p className="text-xs text-default-500">
+              每行一条 <code>要替换的 =&gt; 替换成</code>，右边留空就是删除，
+              <code>/.../</code> 是正则
+            </p>
+            <Textarea
+              classNames={{ input: "font-mono text-xs" }}
+              minRows={2}
+              placeholder={"花云| =>\n/\\|[0-9.]+x/ =>"}
+              value={o.rename}
+              variant="bordered"
+              onChange={(e) => setOpts({ rename: e.target.value })}
+            />
+          </div>
+          <ToggleRow
+            hint="按名称识别地区，在前面加上国旗"
+            id="sub-flag"
+            label="自动加国旗"
+            value={o.addFlag}
+            onChange={(addFlag) => setOpts({ addFlag })}
+          />
+          <Input
+            label="名称前缀"
+            placeholder="例如 [家宽] "
+            value={o.prefix}
+            variant="bordered"
+            onChange={(e) => setOpts({ prefix: e.target.value })}
+          />
+          <ToggleRow
+            hint="地址、端口、协议都相同的只保留第一个"
+            id="sub-dedupe"
+            label="去重"
+            value={o.dedupe}
+            onChange={(dedupe) => setOpts({ dedupe })}
+          />
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium">排序</p>
+            <Segmented
+              options={[
+                ["", "面板顺序"],
+                ["name", "按名称"],
+              ]}
+              value={o.sort}
+              onChange={(sort) => setOpts({ sort })}
+            />
+          </div>
+          <ToggleRow
+            hint="Clash / sing-box / Surge 里每个地区一个自动测速组"
+            id="sub-groups"
+            label="按地区分组"
+            value={o.regionGroups}
+            onChange={(regionGroups) => setOpts({ regionGroups })}
+          />
+        </Section>
+
+        <Section title="预览">
+          <Button
+            className="w-full"
+            isLoading={previewing}
+            variant="flat"
+            onPress={runPreview}
+          >
+            看看结果
+          </Button>
+          {preview && (
+            <>
+              <p className="text-xs text-default-500">
+                共 {preview.items.length} 个节点
+                {preview.dropped > 0 && `，过滤掉 ${preview.dropped} 个`}
+              </p>
+              <div className="max-h-64 overflow-y-auto rounded-xl border border-divider">
+                {preview.items.length === 0 ? (
+                  <p className="p-3 text-xs text-default-500">没有节点</p>
+                ) : (
+                  preview.items.map((p, i) => (
+                    <div
+                      key={`${p.original}-${i}`}
+                      className="flex items-center gap-2 border-b border-divider px-3 py-1.5 text-xs last:border-b-0"
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        {p.name}
+                        {p.name !== p.original && (
+                          <span className="text-default-400">
+                            {" "}
+                            ← {p.original}
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 text-default-500">
+                        {p.line === "relay" ? "中转" : "直连"}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+        </Section>
+
+        <Input
+          label="备注"
+          placeholder="可选"
+          value={draft.remark}
+          variant="bordered"
+          onChange={(e) => set({ remark: e.target.value })}
+        />
+      </ModalBody>
+      <ModalFooter>
+        <Button variant="light" onPress={onClose}>
+          取消
+        </Button>
+        <Button color="primary" isLoading={saving} onPress={onSave}>
+          保存
+        </Button>
+      </ModalFooter>
+    </>
+  );
+}
+
+export default function SubscriptionPage() {
+  const [loading, setLoading] = useState(true);
+  const [subs, setSubs] = useState<SubscriptionItem[]>([]);
+  const [regions, setRegions] = useState<string[]>([]);
+  const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [detail, setDetail] = useState<SubscriptionItem | null>(null);
+  const [showQr, setShowQr] = useState(false);
+  const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
+  const [toggling, setToggling] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [subRes, inRes] = await Promise.all([
+        getSubscriptions(),
+        getInboundList(),
+      ]);
+
+      if (subRes.code === 0 && subRes.data) {
+        setSubs(subRes.data.items ?? []);
+        setRegions(subRes.data.regions ?? []);
+      } else {
+        toast.error(subRes.msg || "加载订阅失败");
+      }
+      if (inRes.code === 0) setInbounds(inRes.data ?? []);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const url = (s: SubscriptionItem, format = "") =>
+    `${panelOrigin()}${s.path}${format ? `?format=${format}` : ""}`;
+
+  const showResult = (msg: string | undefined, ok: string) => {
+    if (msg && msg !== "操作成功") toast(msg, { icon: "⚠️" });
+    else toast.success(ok);
+  };
+
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      const res = await saveSubscription(toPayload(draft));
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "保存失败");
+
+        return;
+      }
+      showResult(
+        res.msg,
+        draft.id ? "已保存" : "已创建，复制链接导入客户端即可",
+      );
+      setDraft(null);
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggle = async (s: SubscriptionItem) => {
+    setToggling(s.id);
+    try {
+      const res = await saveSubscription(
+        toPayload({ ...draftFrom(s), enabled: !s.enabled }),
+      );
+
+      if (res.code !== 0) toast.error(res.msg || "操作失败");
+      else showResult(res.msg, s.enabled ? "已停用" : "已启用");
+      await load();
+    } finally {
+      setToggling(null);
+    }
+  };
+
+  const runConfirm = async () => {
+    if (!detail || !confirm) return;
+    setSaving(true);
+    try {
+      const res =
+        confirm === "reset"
+          ? await resetSubscription(detail.id)
+          : await deleteSubscription(detail.id);
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "操作失败");
+
+        return;
+      }
+      showResult(
+        res.msg,
+        confirm === "reset" ? "已重置，旧链接立即失效" : "已删除",
+      );
+      setConfirm(null);
+      setDetail(null);
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <PageLoadingState message="正在加载..." />;
+
+  const own = subs.filter((s) => s.kind === "own");
+  const shared = subs.filter((s) => s.kind === "share");
+
+  const card = (s: SubscriptionItem) => (
+    <div
+      key={s.id}
+      className="flex cursor-pointer items-center gap-3 rounded-xl border border-divider bg-content1 px-3 py-2.5 shadow-sm transition-colors hover:bg-default-100"
+      role="button"
+      tabIndex={0}
+      onClick={() => {
+        setShowQr(false);
+        setDetail(s);
+      }}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setDetail(s);
+        }
+      }}
+    >
+      <span
+        className={`h-2 w-2 shrink-0 rounded-full ${s.active ? "bg-success" : "bg-default-300"}`}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate font-medium">{s.name}</span>
+          {!s.enabled ? (
+            <Chip size="sm" variant="flat">
+              已停用
+            </Chip>
+          ) : (
+            !s.active && (
+              <Chip color="danger" size="sm" variant="flat">
+                已过期
+              </Chip>
+            )
+          )}
+        </div>
+        <div className="truncate text-xs text-default-500">
+          {s.nodeCount} 个节点
+          {" · "}
+          {s.sourceAll ? "全部落地" : `${s.inboundIds.length} 个落地`}
+          {s.kind === "share" ? ` · ${expiryLabel(s.expireTime)}` : ""}
+          {s.remark ? ` · ${s.remark}` : ""}
+        </div>
+      </div>
+      <div
+        className="flex shrink-0 items-center gap-2"
+        role="presentation"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Button
+          isIconOnly
+          aria-label={`复制 ${s.name} 的订阅链接`}
+          size="sm"
+          variant="flat"
+          onPress={() => copyText(url(s), "订阅链接已复制")}
+        >
+          <Copy className="h-4 w-4" />
+        </Button>
+        <Switch
+          aria-label={`${s.enabled ? "停用" : "启用"} ${s.name}`}
+          isDisabled={toggling === s.id}
+          isSelected={s.enabled}
+          size="sm"
+          onValueChange={() => toggle(s)}
+        />
+      </div>
+    </div>
+  );
+
+  return (
+    <AnimatedPage className="space-y-5 px-3 py-6 lg:px-6">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h1 className="text-lg font-semibold">订阅</h1>
+          <p className="text-xs text-default-500">
+            每个订阅一个链接：选落地、过滤、改名，客户端自动识别格式
+          </p>
+        </div>
+        <Button
+          color="primary"
+          size="sm"
+          variant="flat"
+          onPress={() => setDraft(draftFrom())}
+        >
+          新建订阅
+        </Button>
+      </div>
+
+      {inbounds.length === 0 && (
+        <Card className="bg-default-50/50 shadow-sm">
+          <CardBody className="py-6 text-center text-sm text-default-500">
+            还没有落地。先在“落地”里搭建或导入节点，订阅里才会有内容。
+          </CardBody>
+        </Card>
+      )}
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold text-default-600">自用</h2>
+        <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
+          {own.map(card)}
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-default-600">分享给他人</h2>
+          <Button
+            size="sm"
+            variant="light"
+            onPress={() =>
+              setDraft({ ...draftFrom(), kind: "share", sourceAll: false })
+            }
+          >
+            添加
+          </Button>
+        </div>
+        {shared.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-divider py-4 text-center text-xs text-default-500">
+            给朋友单独的订阅和凭据，到期或停用后自动断开
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
+            {shared.map(card)}
+          </div>
+        )}
+      </section>
+
+      {/* Detail: links, QR and actions. */}
+      <Modal
+        backdrop="blur"
+        classNames={{ base: modalBase }}
+        isOpen={Boolean(detail) && !confirm}
+        placement="center"
+        scrollBehavior="inside"
+        onOpenChange={(open) => !open && setDetail(null)}
+      >
+        <ModalContent>
+          {(onClose) =>
+            detail && (
+              <>
+                <ModalHeader className="flex flex-col gap-1">
+                  <h2 className="text-lg font-bold break-all">{detail.name}</h2>
+                  <p className="text-small font-normal text-default-500">
+                    {detail.kind === "share" ? "分享" : "自用"} ·{" "}
+                    {detail.nodeCount} 个节点
+                    {detail.kind === "share"
+                      ? ` · ${expiryLabel(detail.expireTime)}`
+                      : ""}
+                  </p>
+                </ModalHeader>
+                <ModalBody className="space-y-3">
+                  <Button
+                    className="w-full"
+                    color="primary"
+                    startContent={<Copy className="h-4 w-4" />}
+                    variant="flat"
+                    onPress={() => copyText(url(detail), "订阅链接已复制")}
+                  >
+                    复制订阅链接（自动识别客户端）
+                  </Button>
+                  <div className="grid grid-cols-2 gap-2">
+                    {SUB_FORMATS.filter((f) => f.key).map((f) => (
+                      <button
+                        key={f.key}
+                        className="rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-default-100"
+                        type="button"
+                        onClick={() =>
+                          copyText(url(detail, f.key), `${f.label} 订阅已复制`)
+                        }
+                      >
+                        <div className="text-sm font-medium">{f.label}</div>
+                        <div className="truncate text-xs text-default-500">
+                          {f.hint}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <Button
+                    size="sm"
+                    startContent={<QrCode className="h-4 w-4" />}
+                    variant="light"
+                    onPress={() => setShowQr((v) => !v)}
+                  >
+                    {showQr ? "收起二维码" : "二维码"}
+                  </Button>
+                  {showQr && (
+                    <div className="flex justify-center">
+                      <QrImage text={url(detail)} />
+                    </div>
+                  )}
+                  {detail.kind === "share" && detail.sharedIds.length > 0 && (
+                    <p className="text-xs text-warning">
+                      其中 {detail.sharedIds.length}{" "}
+                      个落地用的是共用凭据，停用后已导入的配置仍能连接
+                    </p>
+                  )}
+                </ModalBody>
+                <ModalFooter className="flex-wrap">
+                  <Button
+                    color="danger"
+                    size="sm"
+                    variant="light"
+                    onPress={() => setConfirm("delete")}
+                  >
+                    删除
+                  </Button>
+                  <Button
+                    color="warning"
+                    size="sm"
+                    variant="light"
+                    onPress={() => setConfirm("reset")}
+                  >
+                    {detail.kind === "share" ? "重置链接和凭据" : "重置链接"}
+                  </Button>
+                  <Button
+                    color="primary"
+                    size="sm"
+                    onPress={() => {
+                      const s = detail;
+
+                      onClose();
+                      setDraft(draftFrom(s));
+                    }}
+                  >
+                    编辑
+                  </Button>
+                </ModalFooter>
+              </>
+            )
+          }
+        </ModalContent>
+      </Modal>
+
+      <Modal
+        backdrop="blur"
+        classNames={{ base: modalBase }}
+        isOpen={Boolean(draft)}
+        placement="center"
+        scrollBehavior="inside"
+        size="2xl"
+        onOpenChange={(open) => !open && setDraft(null)}
+      >
+        <ModalContent>
+          {(onClose) =>
+            draft && (
+              <Editor
+                draft={draft}
+                inbounds={inbounds}
+                regions={regions}
+                saving={saving}
+                setDraft={setDraft}
+                onClose={onClose}
+                onSave={save}
+              />
+            )
+          }
+        </ModalContent>
+      </Modal>
+
+      <Modal
+        backdrop="blur"
+        classNames={{ base: modalBase }}
+        isOpen={Boolean(confirm)}
+        placement="center"
+        onOpenChange={(open) => !open && setConfirm(null)}
+      >
+        <ModalContent>
+          {(onClose) => (
+            <>
+              <ModalHeader>
+                <h2
+                  className={`text-lg font-bold ${confirm === "delete" ? "text-danger" : ""}`}
+                >
+                  {confirm === "reset" ? "重置链接" : "删除订阅"}
+                </h2>
+              </ModalHeader>
+              <ModalBody>
+                <p className="text-sm text-default-600">
+                  {confirm === "reset"
+                    ? detail?.kind === "share"
+                      ? "旧链接和对方已导入的配置会立即失效，需要把新链接发给对方重新导入。"
+                      : "旧链接立即失效，需要在客户端里换成新链接。"
+                    : "订阅链接立即失效，无法恢复。"}
+                </p>
+              </ModalBody>
+              <ModalFooter>
+                <Button variant="light" onPress={onClose}>
+                  取消
+                </Button>
+                <Button
+                  color={confirm === "delete" ? "danger" : "warning"}
+                  isLoading={saving}
+                  onPress={runConfirm}
+                >
+                  确认
+                </Button>
+              </ModalFooter>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
+    </AnimatedPage>
+  );
+}

@@ -20,6 +20,8 @@ import GroupPage from "@/pages/group";
 import ProfilePage from "@/pages/profile";
 import LimitPage from "@/pages/limit";
 import InboundPage from "@/pages/inbound";
+import RelayPage from "@/pages/relay";
+import SubscriptionPage from "@/pages/subscription";
 import ConfigPage from "@/pages/config";
 import PanelSharingPage from "@/pages/panel-sharing";
 import AdminLayout from "@/layouts/admin";
@@ -255,6 +257,22 @@ function App() {
             </ProtectedRoute>
           }
           path="/inbound"
+        />
+        <Route
+          element={
+            <ProtectedRoute>
+              <RelayPage />
+            </ProtectedRoute>
+          }
+          path="/relay"
+        />
+        <Route
+          element={
+            <ProtectedRoute>
+              <SubscriptionPage />
+            </ProtectedRoute>
+          }
+          path="/subscription"
         />
         <Route
           element={

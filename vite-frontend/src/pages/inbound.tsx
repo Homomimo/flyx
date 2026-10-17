@@ -46,9 +46,7 @@ import {
 import { InboundFormModal } from "@/pages/inbound/inbound-form-modal";
 import { type InstallRequest, KernelPanel } from "@/pages/inbound/kernel-panel";
 import { RelayModal } from "@/pages/inbound/relay-modal";
-import { ShareModal, SubscriptionCard, copyText } from "@/pages/inbound/share";
-import { SubSettingsCard } from "@/pages/inbound/sub-settings";
-import { SubUsersCard } from "@/pages/inbound/sub-users";
+import { ShareModal, copyText } from "@/pages/inbound/share";
 import {
   type InboundForm,
   KERNEL_LABELS,
@@ -76,7 +74,7 @@ const modalBase =
 
 type ConfirmAction = "delete" | "regenerate" | "reset";
 
-type PageTab = "inbounds" | "kernels" | "sub";
+type PageTab = "inbounds" | "kernels";
 
 const TAB_KEY = "flvx_inbound_tab";
 
@@ -86,7 +84,7 @@ function usePageTab(): [PageTab, (t: PageTab) => void] {
     try {
       const v = localStorage.getItem(TAB_KEY);
 
-      return v === "kernels" || v === "sub" ? v : "inbounds";
+      return v === "kernels" ? v : "inbounds";
     } catch {
       return "inbounds";
     }
@@ -701,7 +699,7 @@ export default function InboundPage() {
   ).length;
   const tabs: Array<{ key: PageTab; label: string; badge?: React.ReactNode }> =
     [
-      { key: "inbounds", label: "入站", badge: inbounds.length || undefined },
+      { key: "inbounds", label: "落地", badge: inbounds.length || undefined },
       {
         key: "kernels",
         label: "内核",
@@ -712,12 +710,11 @@ export default function InboundPage() {
             kernels.length || undefined
           ),
       },
-      { key: "sub", label: "订阅" },
     ];
 
   return (
     <AnimatedPage className="px-3 lg:px-6 py-6">
-      <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
+      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -747,23 +744,6 @@ export default function InboundPage() {
           onInstallRequestHandled={() => setInstallRequest(null)}
         />
       )}
-
-      {tab === "sub" &&
-        (inbounds.length > 0 ? (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div className="space-y-4">
-              <SubscriptionCard />
-              <SubUsersCard inbounds={inbounds} />
-            </div>
-            <SubSettingsCard />
-          </div>
-        ) : (
-          <Card className="shadow-sm bg-default-50/50">
-            <CardBody className="text-center py-10 text-sm text-default-500">
-              创建入站后，这里会生成一个订阅链接，包含全部入站和中转线路。
-            </CardBody>
-          </Card>
-        ))}
 
       {tab === "inbounds" && (
         <>

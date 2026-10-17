@@ -656,50 +656,68 @@ export const batchToggleInbounds = (ids: number[], enabled: boolean) =>
     ids,
     enabled,
   });
-export interface SubSettings {
+export interface SubPipeline {
+  lines: "" | "relay" | "direct";
+  regions: string[];
+  protocols: string[];
+  include: string;
+  exclude: string;
   rename: string;
+  addFlag: boolean;
   prefix: string;
-  sort: string;
+  dedupe: boolean;
+  sort: "" | "name";
   regionGroups: boolean;
 }
-export interface SubPreviewItem {
-  original: string;
-  name: string;
-  region: string;
-}
-export const getSubSettings = () =>
-  Network.post<SubSettings>("/inbound/sub/settings");
-export const saveSubSettings = (data: SubSettings) =>
-  Network.post<SubSettings>("/inbound/sub/settings/save", data);
-export const previewSubSettings = (data: SubSettings) =>
-  Network.post<SubPreviewItem[]>("/inbound/sub/preview", data);
-
-export interface SubUserItem {
+export interface SubscriptionItem {
   id: number;
   name: string;
+  kind: "own" | "share";
   token: string;
   path: string;
+  sourceAll: boolean;
   inboundIds: number[];
   sharedIds: number[];
+  options: SubPipeline;
   expireTime: number;
   enabled: boolean;
   active: boolean;
   remark: string;
+  nodeCount: number;
 }
-export const getSubUsers = () =>
-  Network.post<SubUserItem[]>("/inbound/user/list");
-export const saveSubUser = (data: {
+export interface SubscriptionDraft {
   id?: number;
   name: string;
+  kind: "own" | "share";
+  sourceAll: boolean;
   inboundIds: number[];
+  options: SubPipeline;
   expireTime: number;
   enabled?: boolean;
   remark: string;
-}) => Network.post<SubUserItem>("/inbound/user/save", data);
-export const deleteSubUser = (id: number) =>
-  Network.post("/inbound/user/delete", { id });
-export const resetSubUser = (id: number) =>
-  Network.post<SubUserItem>("/inbound/user/reset", { id });
+}
+export interface SubPreviewItem {
+  name: string;
+  original: string;
+  region: string;
+  protocol: string;
+  line: "direct" | "relay";
+}
+export const getSubscriptions = () =>
+  Network.post<{ items: SubscriptionItem[]; regions: string[] }>(
+    "/subscription/list",
+  );
+export const saveSubscription = (data: SubscriptionDraft) =>
+  Network.post<SubscriptionItem>("/subscription/save", data);
+export const deleteSubscription = (id: number) =>
+  Network.post("/subscription/delete", { id });
+export const resetSubscription = (id: number) =>
+  Network.post<SubscriptionItem>("/subscription/reset", { id });
+export const previewSubscription = (data: SubscriptionDraft) =>
+  Network.post<{ items: SubPreviewItem[]; total: number; dropped: number }>(
+    "/subscription/preview",
+    data,
+  );
 
 export const testNotify = (data: {
   telegramToken: string;

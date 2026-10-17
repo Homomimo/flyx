@@ -417,11 +417,31 @@ type BackupData struct {
 }
 
 type InboundsBackup struct {
-	Kernels  []KernelBackup         `json:"kernels"`
-	Inbounds []InboundBackup        `json:"inbounds"`
-	Relays   []InboundRelayBackup   `json:"relays"`
-	Counters []InboundCounterBackup `json:"counters,omitempty"`
-	Users    []SubUserBackup        `json:"users,omitempty"`
+	Kernels       []KernelBackup         `json:"kernels"`
+	Inbounds      []InboundBackup        `json:"inbounds"`
+	Relays        []InboundRelayBackup   `json:"relays"`
+	Counters      []InboundCounterBackup `json:"counters,omitempty"`
+	Subscriptions []SubscriptionBackup   `json:"subscriptions,omitempty"`
+	// Users are shared users from 3.0.10 backups; imported as share
+	// subscriptions.
+	Users []SubUserBackup `json:"users,omitempty"`
+}
+
+type SubscriptionBackup struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Token       string `json:"token"`
+	UUID        string `json:"uuid"`
+	Password    string `json:"password"`
+	SourceAll   int    `json:"sourceAll"`
+	InboundIDs  string `json:"inboundIds"`
+	Options     string `json:"options"`
+	ExpireTime  int64  `json:"expireTime"`
+	Enabled     int    `json:"enabled"`
+	Remark      string `json:"remark"`
+	Inx         int    `json:"inx"`
+	CreatedTime int64  `json:"createdTime"`
 }
 
 type SubUserBackup struct {
