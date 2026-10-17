@@ -5,19 +5,26 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 var subscriptionCheckInterval = time.Minute
+
+// subSyncMu keeps the loop and the traffic-triggered syncs from pushing the
+// same kernels at once.
+var subSyncMu sync.Mutex
 
 // subPipeline is the JSON form of kernel.SubOptions stored per subscription.
 type subPipeline struct {
@@ -124,7 +131,53 @@ func newUUID() string {
 // subActive reports whether the link works (and, for share subscriptions,
 // whether its credentials must be on the kernels).
 func subActive(s *model.Subscription, now time.Time) bool {
-	return s.Enabled == 1 && (s.ExpireTime == 0 || s.ExpireTime > now.UnixMilli())
+	return s.Enabled == 1 && (s.ExpireTime == 0 || s.ExpireTime > now.UnixMilli()) && !subOverQuota(s)
+}
+
+func subUsed(s *model.Subscription) int64 { return s.UploadBytes + s.DownloadBytes }
+
+func subOverQuota(s *model.Subscription) bool {
+	return s.TrafficLimit > 0 && subUsed(s) >= s.TrafficLimit
+}
+
+// lastResetAt is the most recent monthly reset moment at or before now for
+// reset day d (local time), clamped to the month's length.
+func lastResetAt(d int, now time.Time) time.Time {
+	at := func(y int, m time.Month) time.Time {
+		last := time.Date(y, m+1, 0, 0, 0, 0, 0, now.Location()).Day()
+		day := d
+		if day > last {
+			day = last
+		}
+		return time.Date(y, m, day, 0, 0, 0, 0, now.Location())
+	}
+	t := at(now.Year(), now.Month())
+	if t.After(now) {
+		t = at(now.Year(), now.Month()-1)
+	}
+	return t
+}
+
+// subDueReset reports whether the monthly reset is due.
+func subDueReset(s *model.Subscription, now time.Time) bool {
+	if s.ResetDay <= 0 || !isShare(s) {
+		return false
+	}
+	return s.TrafficResetTime < lastResetAt(s.ResetDay, now).UnixMilli()
+}
+
+// applyUserCounters adds a node's per-user traffic to the subscriptions
+// and cuts off the ones that reached their limit right away.
+func (h *Handler) applyUserCounters(nodeID int64, epoch string, counters []agentUserCounter, now int64) {
+	samples := make([]repo.SubscriptionCounterSample, 0, len(counters))
+	for _, c := range counters {
+		samples = append(samples, repo.SubscriptionCounterSample{SubscriptionID: c.ID, Direction: c.Dir, Bytes: c.Bytes})
+	}
+	if err := h.repo.ApplySubscriptionCounterSamples(nodeID, epoch, samples, now); err != nil {
+		log.Printf("subscription traffic apply failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+	h.syncSubscriptions(time.UnixMilli(now))
 }
 
 func isShare(s *model.Subscription) bool { return s.Kind == model.SubscriptionShare }
@@ -142,6 +195,25 @@ func subInboundIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
 		}
 		return ids
 	}
+	ids := subExplicitIDs(s, rows)
+	picked := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		picked[id] = true
+	}
+	sources := map[int64]bool{}
+	for _, id := range parseIDList(s.SourceIDs) {
+		sources[id] = true
+	}
+	for _, r := range rows {
+		if r.SourceID != 0 && sources[r.SourceID] && !picked[r.ID] {
+			ids = append(ids, r.ID)
+		}
+	}
+	return ids
+}
+
+// subExplicitIDs are the inbounds picked one by one (still existing).
+func subExplicitIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
 	known := make(map[int64]bool, len(rows))
 	for _, r := range rows {
 		known[r.ID] = true
@@ -203,6 +275,8 @@ func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 // syncSubscriptions pushes credential changes for share subscriptions
 // whose active state differs from what the kernels last received.
 func (h *Handler) syncSubscriptions(now time.Time) {
+	subSyncMu.Lock()
+	defer subSyncMu.Unlock()
 	subs, err := h.repo.ListSubscriptions()
 	if err != nil {
 		return
@@ -210,6 +284,14 @@ func (h *Handler) syncSubscriptions(now time.Time) {
 	var rows []model.NodeInbound
 	for i := range subs {
 		s := &subs[i]
+		if subDueReset(s, now) {
+			if err := h.repo.ResetSubscriptionTraffic(s.ID, now.UnixMilli()); err == nil {
+				s.UploadBytes, s.DownloadBytes = 0, 0
+				if h.notifier != nil {
+					h.notifier.clearAlerts(fmt.Sprintf("subflow:%d:", s.ID))
+				}
+			}
+		}
 		active := boolToInt(isShare(s) && subActive(s, now))
 		if active == s.AppliedActive {
 			continue
@@ -276,6 +358,7 @@ type subscriptionView struct {
 	Path       string  `json:"path"`
 	SourceAll  bool    `json:"sourceAll"`
 	InboundIDs []int64 `json:"inboundIds"`
+	SourceIDs  []int64 `json:"sourceIds"`
 	// SharedIDs are selected inbounds of a share subscription that can't
 	// carry per-user credentials (Snell, Shadowsocks, imported nodes).
 	SharedIDs  []int64     `json:"sharedIds"`
@@ -285,6 +368,12 @@ type subscriptionView struct {
 	Active     bool        `json:"active"`
 	Remark     string      `json:"remark"`
 	NodeCount  int         `json:"nodeCount"`
+	// Traffic (share subscriptions; bytes).
+	UploadBytes   int64 `json:"uploadBytes"`
+	DownloadBytes int64 `json:"downloadBytes"`
+	TrafficLimit  int64 `json:"trafficLimit"`
+	ResetDay      int   `json:"resetDay"`
+	OverQuota     bool  `json:"overQuota"`
 }
 
 func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbound, now time.Time) subscriptionView {
@@ -304,18 +393,20 @@ func (h *Handler) subscriptionView(s *model.Subscription, rows []model.NodeInbou
 			}
 		}
 	}
-	selected := ids
-	if s.SourceAll == 1 {
-		selected = []int64{}
-	} else if selected == nil {
-		selected = []int64{}
+	selected := []int64{}
+	sourceIDs := []int64{}
+	if s.SourceAll != 1 {
+		selected = append(selected, subExplicitIDs(s, rows)...)
+		sourceIDs = append(sourceIDs, parseIDList(s.SourceIDs)...)
 	}
 	pipe := parsePipeline(s.Options)
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
-		SourceAll: s.SourceAll == 1, InboundIDs: selected, SharedIDs: shared, Options: pipe,
+		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), Remark: s.Remark,
-		NodeCount: len(kernel.ApplySubOptions(h.subEndpoints(s, rows), pipe.options())),
+		NodeCount:   len(kernel.ApplySubOptions(h.subEndpoints(s, rows), pipe.options())),
+		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
+		ResetDay: s.ResetDay, OverQuota: subOverQuota(s),
 	}
 }
 
@@ -360,10 +451,14 @@ type subscriptionRequest struct {
 	Kind       string      `json:"kind"`
 	SourceAll  bool        `json:"sourceAll"`
 	InboundIDs []int64     `json:"inboundIds"`
+	SourceIDs  []int64     `json:"sourceIds"`
 	Options    subPipeline `json:"options"`
 	ExpireTime int64       `json:"expireTime"`
 	Enabled    *bool       `json:"enabled"`
 	Remark     string      `json:"remark"`
+	// TrafficLimit is in bytes (0 = unlimited); ResetDay 1-28 (0 = never).
+	TrafficLimit int64 `json:"trafficLimit"`
+	ResetDay     int   `json:"resetDay"`
 }
 
 // validate checks the request and returns the inbound ids it selects.
@@ -378,6 +473,15 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 	if req.ExpireTime < 0 {
 		req.ExpireTime = 0
 	}
+	if req.TrafficLimit < 0 || req.Kind != model.SubscriptionShare {
+		req.TrafficLimit = 0
+	}
+	if req.ResetDay < 0 || req.ResetDay > 28 {
+		return nil, errText("每月重置日只能是 1–28 号")
+	}
+	if req.Kind != model.SubscriptionShare {
+		req.ResetDay = 0
+	}
 	if err := req.Options.normalize(); err != nil {
 		return nil, err
 	}
@@ -391,8 +495,15 @@ func (req *subscriptionRequest) validate(rows []model.NodeInbound) ([]int64, err
 			ids = append(ids, id)
 		}
 	}
-	if !req.SourceAll && len(ids) == 0 {
-		return nil, errText("请至少选择一个入站，或选择全部")
+	var sources []int64
+	for _, id := range req.SourceIDs {
+		if id > 0 {
+			sources = append(sources, id)
+		}
+	}
+	req.SourceIDs = sources
+	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 {
+		return nil, errText("请至少选择一个入站或订阅源，或选择全部")
 	}
 	return ids, nil
 }
@@ -439,10 +550,18 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	s.SourceAll = boolToInt(req.SourceAll)
 	s.InboundIDs = formatIDList(ids)
+	s.SourceIDs = formatIDList(req.SourceIDs)
 	opts, _ := json.Marshal(req.Options)
 	s.Options = string(opts)
 	s.ExpireTime = req.ExpireTime
 	s.Remark = strings.TrimSpace(req.Remark)
+	s.TrafficLimit = req.TrafficLimit
+	if req.ResetDay != s.ResetDay && req.ResetDay > 0 {
+		// Count from now: a newly set reset day must not wipe this month.
+		s.TrafficResetTime = now.UnixMilli()
+		_ = h.repo.MarkSubscriptionResetTime(s.ID, s.TrafficResetTime)
+	}
+	s.ResetDay = req.ResetDay
 	if req.Enabled != nil {
 		s.Enabled = boolToInt(*req.Enabled)
 	}
@@ -519,6 +638,32 @@ func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
 	h.respondAfterSubPush(w, push, h.subscriptionView(s, rows, time.Now()))
 }
 
+// subscriptionResetTraffic zeroes a share subscription's traffic and puts
+// it back on the nodes if the limit had cut it off.
+func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Request) {
+	id := idFromBody(r, w)
+	if id <= 0 {
+		return
+	}
+	s, err := h.repo.GetSubscription(id)
+	if err != nil || s == nil {
+		response.WriteJSON(w, response.ErrDefault("订阅不存在"))
+		return
+	}
+	now := time.Now()
+	if err := h.repo.ResetSubscriptionTraffic(id, now.UnixMilli()); err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if h.notifier != nil {
+		h.notifier.clearAlerts(fmt.Sprintf("subflow:%d:", id))
+	}
+	h.syncSubscriptions(now)
+	s, _ = h.repo.GetSubscription(id)
+	rows, _ := h.repo.ListNodeInbounds()
+	response.WriteJSON(w, response.OK(h.subscriptionView(s, rows, now)))
+}
+
 type subPreviewItem struct {
 	Name     string `json:"name"`
 	Original string `json:"original"`
@@ -552,7 +697,7 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids)}
+	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs)}
 	source := h.subEndpoints(draft, rows)
 	result := kernel.ApplySubOptions(source, req.Options.options())
 	items := make([]subPreviewItem, 0, len(result))

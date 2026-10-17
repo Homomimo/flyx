@@ -1,4 +1,5 @@
 import type {
+  RemoteSourceItem,
   SubPipeline,
   SubPreviewItem,
   SubscriptionDraft,
@@ -13,9 +14,11 @@ import { Copy, QrCode } from "lucide-react";
 import {
   deleteSubscription,
   getInboundList,
+  getRemoteSources,
   getSubscriptions,
   previewSubscription,
   resetSubscription,
+  resetSubscriptionTraffic,
   saveSubscription,
 } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
@@ -40,6 +43,9 @@ import {
   ModalHeader,
 } from "@/shadcn-bridge/heroui/modal";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
+import { formatTraffic } from "@/utils/traffic";
+import { Segmented, ToggleRow } from "@/pages/subscription/controls";
+import { RemoteSourcesSection } from "@/pages/subscription/sources";
 
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
@@ -94,70 +100,39 @@ function expiryLabel(ms: number): string {
   return `${toDateInput(ms)} 到期 · 剩 ${days} 天`;
 }
 
-function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: Array<[T, string]>;
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div
-      className="grid gap-1 rounded-xl bg-default-100 p-1 text-sm"
-      style={{
-        gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
-      }}
-    >
-      {options.map(([k, label]) => (
-        <button
-          key={k}
-          className={`rounded-lg px-2 py-1.5 transition-colors ${
-            value === k
-              ? "bg-background font-medium shadow-sm"
-              : "text-default-500"
-          }`}
-          type="button"
-          onClick={() => onChange(k)}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
+/** Used / limit of a share subscription, with a bar when it has a limit. */
+function Usage({ s, compact }: { s: SubscriptionItem; compact?: boolean }) {
+  const used = s.uploadBytes + s.downloadBytes;
+  const pct = s.trafficLimit ? Math.min(100, (used / s.trafficLimit) * 100) : 0;
+  const tone =
+    pct >= 100 ? "bg-danger" : pct >= 90 ? "bg-warning" : "bg-primary";
 
-function ToggleRow({
-  id,
-  label,
-  hint,
-  value,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
-}) {
   return (
-    <div className="flex items-start gap-3">
-      <Switch
-        aria-labelledby={`${id}-label`}
-        id={id}
-        isSelected={value}
-        size="sm"
-        onValueChange={onChange}
-      />
-      <label
-        className="flex cursor-pointer flex-col"
-        htmlFor={id}
-        id={`${id}-label`}
-      >
-        <span className="text-sm">{label}</span>
-        {hint && <span className="text-xs text-default-500">{hint}</span>}
-      </label>
+    <div className={compact ? "space-y-1" : "space-y-1.5"}>
+      <div className="flex items-baseline justify-between gap-2 text-xs text-default-500">
+        <span className="font-mono">
+          {formatTraffic(used)}
+          {s.trafficLimit
+            ? ` / ${formatTraffic(s.trafficLimit)}`
+            : " · 不限流量"}
+        </span>
+        {!compact && (
+          <span>{s.resetDay ? `每月 ${s.resetDay} 号重置` : "不自动重置"}</span>
+        )}
+      </div>
+      {s.trafficLimit > 0 && (
+        <div className="h-1.5 overflow-hidden rounded-full bg-default-100">
+          <div
+            className={`h-full rounded-full ${tone}`}
+            style={{ width: `${Math.max(2, pct)}%` }}
+          />
+        </div>
+      )}
+      {!compact && (
+        <div className="font-mono text-xs text-default-400">
+          ↑ {formatTraffic(s.uploadBytes)} · ↓ {formatTraffic(s.downloadBytes)}
+        </div>
+      )}
     </div>
   );
 }
@@ -234,6 +209,17 @@ function Section({
 
 interface Draft extends SubscriptionDraft {
   expire: string;
+  /** Traffic limit typed in GB ("" = unlimited). */
+  limitGB: string;
+}
+
+const GB = 1024 ** 3;
+
+function gbText(bytes: number): string {
+  if (!bytes) return "";
+  const v = bytes / GB;
+
+  return String(Number.isInteger(v) ? v : Number(v.toFixed(2)));
 }
 
 function draftFrom(s?: SubscriptionItem): Draft {
@@ -243,11 +229,15 @@ function draftFrom(s?: SubscriptionItem): Draft {
       kind: "own",
       sourceAll: true,
       inboundIds: [],
+      sourceIds: [],
       options: { ...EMPTY_PIPELINE },
       expireTime: 0,
       expire: "",
       enabled: true,
       remark: "",
+      trafficLimit: 0,
+      limitGB: "",
+      resetDay: 0,
     };
   }
 
@@ -257,21 +247,29 @@ function draftFrom(s?: SubscriptionItem): Draft {
     kind: s.kind,
     sourceAll: s.sourceAll,
     inboundIds: s.inboundIds,
+    sourceIds: s.sourceIds ?? [],
     options: { ...EMPTY_PIPELINE, ...s.options },
     expireTime: s.expireTime,
     expire: toDateInput(s.expireTime),
     enabled: s.enabled,
     remark: s.remark,
+    trafficLimit: s.trafficLimit,
+    limitGB: gbText(s.trafficLimit),
+    resetDay: s.resetDay,
   };
 }
 
 /** The API payload: the backend rejects unknown fields like `expire`. */
 function toPayload(d: Draft): SubscriptionDraft {
-  const { expire, ...rest } = d;
+  const { expire, limitGB, ...rest } = d;
+  const share = d.kind === "share";
+  const gb = Number(limitGB);
 
   return {
     ...rest,
-    expireTime: d.kind === "share" ? fromDateInput(expire) : 0,
+    expireTime: share ? fromDateInput(expire) : 0,
+    trafficLimit: share && gb > 0 ? Math.round(gb * GB) : 0,
+    resetDay: share ? d.resetDay : 0,
   };
 }
 
@@ -279,6 +277,7 @@ function Editor({
   draft,
   setDraft,
   inbounds,
+  sources,
   regions,
   saving,
   onSave,
@@ -287,6 +286,7 @@ function Editor({
   draft: Draft;
   setDraft: (d: Draft) => void;
   inbounds: InboundApiItem[];
+  sources: RemoteSourceItem[];
   regions: string[];
   saving: boolean;
   onSave: () => void;
@@ -317,11 +317,15 @@ function Editor({
     [inbounds],
   );
   const selfBuilt = inbounds.filter((i) => !i.external);
-  const imported = inbounds.filter((i) => i.external);
+  // Nodes of a remote source are picked as the whole source.
+  const imported = inbounds.filter((i) => i.external && !i.sourceId);
   const sharedPicked = share
     ? inbounds.filter(
         (i) =>
-          (draft.sourceAll ? i.enabled : draft.inboundIds.includes(i.id)) &&
+          (draft.sourceAll
+            ? i.enabled
+            : draft.inboundIds.includes(i.id) ||
+              draft.sourceIds.includes(i.sourceId ?? 0)) &&
           (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
       ).length
     : 0;
@@ -432,6 +436,63 @@ function Editor({
               </p>
             </div>
           )}
+          {share && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium" htmlFor="sub-limit">
+                流量上限
+              </label>
+              <div className="flex gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <input
+                    className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
+                    id="sub-limit"
+                    inputMode="decimal"
+                    placeholder="不限"
+                    value={draft.limitGB}
+                    onChange={(e) =>
+                      set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
+                    }
+                  />
+                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-default-500">
+                    GB
+                  </span>
+                </div>
+                {[50, 100, 500].map((g) => (
+                  <Button
+                    key={g}
+                    className="min-w-0 px-2"
+                    size="sm"
+                    variant="flat"
+                    onPress={() => set({ limitGB: String(g) })}
+                  >
+                    {g}G
+                  </Button>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <label className="text-sm" htmlFor="sub-reset-day">
+                  每月重置
+                </label>
+                <select
+                  className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
+                  id="sub-reset-day"
+                  value={draft.resetDay}
+                  onChange={(e) => set({ resetDay: Number(e.target.value) })}
+                >
+                  <option value={0}>不重置</option>
+                  {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                    <option key={d} value={d}>
+                      每月 {d} 号
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-xs text-default-500">
+                上传 +
+                下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
+              </p>
+            </div>
+          )}
         </Section>
 
         <Section hint="中转线路会跟着它的落地一起出现" title="来源">
@@ -451,6 +512,32 @@ function Editor({
             <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
               {pickList("自建", selfBuilt)}
               {pickList("导入", imported)}
+              {sources.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-default-500">
+                    订阅源（整个源，更新后的节点自动跟上）
+                  </p>
+                  {sources.map((src) => (
+                    <Checkbox
+                      key={src.id}
+                      className="w-full"
+                      isSelected={draft.sourceIds.includes(src.id)}
+                      onValueChange={(on) =>
+                        set({
+                          sourceIds: on
+                            ? [...draft.sourceIds, src.id]
+                            : draft.sourceIds.filter((x) => x !== src.id),
+                        })
+                      }
+                    >
+                      <span className="text-sm">{src.name}</span>
+                      <span className="ml-1 text-xs text-default-400">
+                        {src.nodeCount} 个节点
+                      </span>
+                    </Checkbox>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {sharedPicked > 0 && (
@@ -639,19 +726,24 @@ export default function SubscriptionPage() {
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
+  const [sources, setSources] = useState<RemoteSourceItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [detail, setDetail] = useState<SubscriptionItem | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
+  const [resettingTraffic, setResettingTraffic] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [subRes, inRes] = await Promise.all([
+      const [subRes, inRes, srcRes] = await Promise.all([
         getSubscriptions(),
         getInboundList(),
+        getRemoteSources(),
       ]);
+
+      if (srcRes.code === 0) setSources(srcRes.data ?? []);
 
       if (subRes.code === 0 && subRes.data) {
         setSubs(subRes.data.items ?? []);
@@ -711,6 +803,25 @@ export default function SubscriptionPage() {
       await load();
     } finally {
       setToggling(null);
+    }
+  };
+
+  const resetTraffic = async () => {
+    if (!detail) return;
+    setResettingTraffic(true);
+    try {
+      const res = await resetSubscriptionTraffic(detail.id);
+
+      if (res.code !== 0 || !res.data) {
+        toast.error(res.msg || "操作失败");
+
+        return;
+      }
+      toast.success(detail.overQuota ? "流量已重置，已恢复连接" : "流量已重置");
+      setDetail(res.data);
+      await load();
+    } finally {
+      setResettingTraffic(false);
     }
   };
 
@@ -776,7 +887,7 @@ export default function SubscriptionPage() {
           ) : (
             !s.active && (
               <Chip color="danger" size="sm" variant="flat">
-                已过期
+                {s.overQuota ? "流量用完" : "已过期"}
               </Chip>
             )
           )}
@@ -784,10 +895,22 @@ export default function SubscriptionPage() {
         <div className="truncate text-xs text-default-500">
           {s.nodeCount} 个节点
           {" · "}
-          {s.sourceAll ? "全部落地" : `${s.inboundIds.length} 个落地`}
+          {s.sourceAll
+            ? "全部落地"
+            : [
+                s.inboundIds.length ? `${s.inboundIds.length} 个落地` : "",
+                s.sourceIds?.length ? `${s.sourceIds.length} 个订阅源` : "",
+              ]
+                .filter(Boolean)
+                .join(" + ")}
           {s.kind === "share" ? ` · ${expiryLabel(s.expireTime)}` : ""}
           {s.remark ? ` · ${s.remark}` : ""}
         </div>
+        {s.kind === "share" && (
+          <div className="mt-1.5">
+            <Usage compact s={s} />
+          </div>
+        )}
       </div>
       <div
         className="flex shrink-0 items-center gap-2"
@@ -872,6 +995,8 @@ export default function SubscriptionPage() {
         )}
       </section>
 
+      <RemoteSourcesSection sources={sources} onChanged={load} />
+
       {/* Detail: links, QR and actions. */}
       <Modal
         backdrop="blur"
@@ -896,6 +1021,29 @@ export default function SubscriptionPage() {
                   </p>
                 </ModalHeader>
                 <ModalBody className="space-y-3">
+                  {detail.kind === "share" && (
+                    <div className="space-y-2 rounded-xl bg-default-100 p-3">
+                      <Usage s={detail} />
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-default-500">
+                          {detail.overQuota
+                            ? "流量已用完，已从节点上断开"
+                            : "上传 + 下载合计"}
+                        </span>
+                        <Button
+                          isDisabled={
+                            detail.uploadBytes + detail.downloadBytes === 0
+                          }
+                          isLoading={resettingTraffic}
+                          size="sm"
+                          variant="flat"
+                          onPress={resetTraffic}
+                        >
+                          重置流量
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   <Button
                     className="w-full"
                     color="primary"
@@ -996,6 +1144,7 @@ export default function SubscriptionPage() {
                 regions={regions}
                 saving={saving}
                 setDraft={setDraft}
+                sources={sources}
                 onClose={onClose}
                 onSave={save}
               />

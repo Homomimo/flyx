@@ -5,25 +5,10 @@ import {
   useNavigate,
   Navigate,
 } from "react-router-dom";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { AnimatePresence } from "framer-motion";
 
 import IndexPage from "@/pages/index";
-import ChangePasswordPage from "@/pages/change-password";
-import DashboardPage from "@/pages/dashboard";
-import MonitorPage from "@/pages/monitor";
-import ForwardPage from "@/pages/forward";
-import TunnelPage from "@/pages/tunnel";
-import NodePage from "@/pages/node";
-import UserPage from "@/pages/user";
-import GroupPage from "@/pages/group";
-import ProfilePage from "@/pages/profile";
-import LimitPage from "@/pages/limit";
-import InboundPage from "@/pages/inbound";
-import RelayPage from "@/pages/relay";
-import SubscriptionPage from "@/pages/subscription";
-import ConfigPage from "@/pages/config";
-import PanelSharingPage from "@/pages/panel-sharing";
 import AdminLayout from "@/layouts/admin";
 import H5Layout from "@/layouts/h5";
 import H5SimpleLayout from "@/layouts/h5-simple";
@@ -32,6 +17,24 @@ import { siteConfig, updateSiteConfig } from "@/config/site";
 import { useH5Mode } from "@/hooks/useH5Mode";
 import { SESSION_UPDATED_EVENT } from "@/utils/session";
 import { useThemeContext } from "@/themes/context";
+import { PageLoadingState } from "@/components/page-state";
+
+// Pages load on first visit so the login screen does not wait for all of them.
+const ChangePasswordPage = lazy(() => import("@/pages/change-password"));
+const DashboardPage = lazy(() => import("@/pages/dashboard"));
+const MonitorPage = lazy(() => import("@/pages/monitor"));
+const ForwardPage = lazy(() => import("@/pages/forward"));
+const TunnelPage = lazy(() => import("@/pages/tunnel"));
+const NodePage = lazy(() => import("@/pages/node"));
+const UserPage = lazy(() => import("@/pages/user"));
+const GroupPage = lazy(() => import("@/pages/group"));
+const ProfilePage = lazy(() => import("@/pages/profile"));
+const LimitPage = lazy(() => import("@/pages/limit"));
+const InboundPage = lazy(() => import("@/pages/inbound"));
+const RelayPage = lazy(() => import("@/pages/relay"));
+const SubscriptionPage = lazy(() => import("@/pages/subscription"));
+const ConfigPage = lazy(() => import("@/pages/config"));
+const PanelSharingPage = lazy(() => import("@/pages/panel-sharing"));
 
 const ProtectedRoute = ({
   children,
@@ -50,15 +53,21 @@ const ProtectedRoute = ({
   }
 
   // 如果跳过布局，直接返回子组件
+  const page = (
+    <Suspense fallback={<PageLoadingState message="正在加载..." />}>
+      {children}
+    </Suspense>
+  );
+
   if (skipLayout) {
-    return <>{children}</>;
+    return page;
   }
 
   // 根据模式和页面类型选择布局
   const Layout =
     isH5 && useSimpleLayout ? H5SimpleLayout : isH5 ? H5Layout : AdminLayout;
 
-  return <Layout>{children}</Layout>;
+  return <Layout>{page}</Layout>;
 };
 
 // 登录页面路由组件 - 已登录则重定向到dashboard

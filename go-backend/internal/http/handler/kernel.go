@@ -95,6 +95,9 @@ type inboundView struct {
 	UpdatedTime     int64              `json:"updatedTime"`
 	// Probe is the last reachability check of an imported node.
 	Probe *externalProbe `json:"probe,omitempty"`
+	// SourceID / SourceName: the remote subscription it came from.
+	SourceID   int64  `json:"sourceId,omitempty"`
+	SourceName string `json:"sourceName,omitempty"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -505,6 +508,12 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 		kernelByID[k.ID] = k
 	}
 	nodes := make(map[int64]*model.Node)
+	sourceNames := map[int64]string{}
+	if sources, err := h.repo.ListRemoteSources(); err == nil {
+		for _, s := range sources {
+			sourceNames[s.ID] = s.Name
+		}
+	}
 	views := make([]inboundView, 0, len(rows))
 	for _, row := range rows {
 		in, err := inboundFromModel(row)
@@ -545,6 +554,8 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			DownloadBytes:  row.DownloadBytes,
 			CreatedTime:    row.CreatedTime,
 			UpdatedTime:    row.UpdatedTime,
+			SourceID:       row.SourceID,
+			SourceName:     sourceNames[row.SourceID],
 		}
 		if node != nil {
 			v.NodeName = node.Name
@@ -1080,9 +1091,16 @@ type agentKernelCounter struct {
 	Bytes     int64  `json:"bytes"`
 }
 
+type agentUserCounter struct {
+	ID    int64  `json:"id"`
+	Dir   string `json:"dir"`
+	Bytes int64  `json:"bytes"`
+}
+
 type agentKernelStatus struct {
 	Kernels      []agentKernelState   `json:"kernels"`
 	Counters     []agentKernelCounter `json:"counters"`
+	Users        []agentUserCounter   `json:"users"`
 	Epoch        string               `json:"epoch"`
 	NftAvailable bool                 `json:"nftAvailable"`
 	NftError     string               `json:"nftError"`
@@ -1152,6 +1170,9 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		"hash":     rendered.Hash,
 		"enabled":  k.Enabled == 1 && !rendered.Idle,
 		"ports":    ports,
+	}
+	if len(rendered.UserMarks) > 0 {
+		payload["userMarks"] = rendered.UserMarks
 	}
 	if len(rendered.Processes) > 0 {
 		payload["processes"] = rendered.Processes
@@ -1466,7 +1487,13 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 		_ = h.repo.UpdateNodeKernelFields(k.ID, fields)
 	}
 
-	if !status.NftAvailable || len(status.Counters) == 0 {
+	if !status.NftAvailable {
+		return
+	}
+	if len(status.Users) > 0 {
+		h.applyUserCounters(nodeID, status.Epoch, status.Users, now)
+	}
+	if len(status.Counters) == 0 {
 		return
 	}
 	samples := make([]repo.InboundCounterSample, 0, len(status.Counters))

@@ -89,7 +89,7 @@ export function ImportModal({
         </ModalHeader>
         <ModalBody>
           <Textarea
-            description="支持：分享链接（ss / vmess / vless / trojan / hysteria2 / tuic / anytls / socks5，每行一个）、base64 订阅、Clash / Mihomo 配置、sing-box 配置、Surge / Loon 节点行，或直接填订阅地址（https://...）"
+            description="支持：分享链接（ss / vmess / vless / trojan / hysteria2 / tuic / anytls / socks5，每行一个）、base64 订阅、Clash / Mihomo 配置、sing-box 配置、Surge / Loon 节点行，或直接填订阅地址（https://...，只导入一次；要定时更新请到“订阅 → 订阅源”添加）"
             label="节点或订阅"
             minRows={5}
             placeholder={"vless://...\nss://...\n或 https://订阅地址"}

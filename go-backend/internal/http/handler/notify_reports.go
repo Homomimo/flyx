@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go-backend/internal/store/model"
 )
 
 const (
@@ -114,6 +116,9 @@ func (h *Handler) checkUserReminders(now time.Time) {
 	}
 	if subs, err := h.repo.ListSubscriptions(); err == nil {
 		for _, s := range subs {
+			if isShare(&s) && s.Enabled == 1 {
+				h.checkSubQuota(&s)
+			}
 			if !isShare(&s) || s.Enabled != 1 || s.ExpireTime == 0 || time.UnixMilli(s.ExpireTime).Sub(now) > window {
 				continue
 			}
@@ -127,6 +132,29 @@ func (h *Handler) checkUserReminders(now time.Time) {
 			}
 			h.notify(notifyEventUserQuota, title, fmt.Sprintf("订阅：%s\n到期：%s", s.Name, text))
 		}
+	}
+}
+
+// checkSubQuota reports a share subscription near or at its traffic limit.
+func (h *Handler) checkSubQuota(s *model.Subscription) {
+	key := fmt.Sprintf("subflow:%d:", s.ID)
+	used, limit := subUsed(s), s.TrafficLimit
+	switch {
+	case limit <= 0:
+	case used >= limit:
+		if h.notifier.alertOnce(key + "full") {
+			h.notifier.alertOnce(key + "warn")
+			h.notify(notifyEventUserQuota, "分享订阅流量已用完，已断开",
+				fmt.Sprintf("订阅：%s\n已用：%s / %s", s.Name, formatBytes(used), formatBytes(limit)))
+		}
+	case float64(used) >= float64(limit)*notifyFlowWarnRatio:
+		if h.notifier.alertOnce(key + "warn") {
+			h.notify(notifyEventUserQuota, "分享订阅流量即将用完",
+				fmt.Sprintf("订阅：%s\n已用：%s / %s（%.0f%%）", s.Name, formatBytes(used), formatBytes(limit),
+					float64(used)*100/float64(limit)))
+		}
+	default:
+		h.notifier.clearAlerts(key)
 	}
 }
 

@@ -24,6 +24,9 @@ type Subscription struct {
 	// InboundIDs (comma separated) lists them.
 	SourceAll  int    `gorm:"column:source_all;not null;default:0"`
 	InboundIDs string `gorm:"column:inbound_ids;type:text;not null;default:''"`
+	// SourceIDs (comma separated) adds every node of these remote sources,
+	// including ones a later refresh brings.
+	SourceIDs string `gorm:"column:source_ids;type:text;not null;default:''"`
 	// Options is the JSON processing pipeline.
 	Options string `gorm:"type:text;not null;default:''"`
 	// ExpireTime is unix ms; 0 never expires.
@@ -31,11 +34,33 @@ type Subscription struct {
 	Enabled    int   `gorm:"not null;default:0"`
 	// AppliedActive is the active state last pushed to the kernels, so the
 	// expiry loop knows whose credentials still have to be removed.
-	AppliedActive int    `gorm:"column:applied_active;not null;default:0"`
-	Remark        string `gorm:"type:text;not null;default:''"`
-	Inx           int    `gorm:"not null;default:0"`
-	CreatedTime   int64  `gorm:"column:created_time;not null"`
-	UpdatedTime   int64  `gorm:"column:updated_time;not null"`
+	AppliedActive int `gorm:"column:applied_active;not null;default:0"`
+	// Traffic of a share subscription, counted on the nodes per user.
+	// TrafficLimit (bytes, 0 = unlimited) cuts it off once reached;
+	// ResetDay (1-28, 0 = never) zeroes the traffic monthly.
+	UploadBytes      int64  `gorm:"column:upload_bytes;not null;default:0"`
+	DownloadBytes    int64  `gorm:"column:download_bytes;not null;default:0"`
+	TrafficLimit     int64  `gorm:"column:traffic_limit;not null;default:0"`
+	ResetDay         int    `gorm:"column:reset_day;not null;default:0"`
+	TrafficResetTime int64  `gorm:"column:traffic_reset_time;not null;default:0"`
+	Remark           string `gorm:"type:text;not null;default:''"`
+	Inx              int    `gorm:"not null;default:0"`
+	CreatedTime      int64  `gorm:"column:created_time;not null"`
+	UpdatedTime      int64  `gorm:"column:updated_time;not null"`
 }
 
 func (Subscription) TableName() string { return "subscription" }
+
+// SubscriptionCounter remembers the last cumulative per-user counter seen
+// from a node, so the next sample adds only the difference.
+type SubscriptionCounter struct {
+	ID             int64  `gorm:"primaryKey;autoIncrement"`
+	NodeID         int64  `gorm:"column:node_id;not null;uniqueIndex:idx_sub_counter"`
+	SubscriptionID int64  `gorm:"column:subscription_id;not null;uniqueIndex:idx_sub_counter"`
+	Direction      string `gorm:"type:varchar(8);not null;uniqueIndex:idx_sub_counter"`
+	Epoch          string `gorm:"type:varchar(32);not null;default:''"`
+	Bytes          int64  `gorm:"not null;default:0"`
+	UpdatedTime    int64  `gorm:"column:updated_time;not null;default:0"`
+}
+
+func (SubscriptionCounter) TableName() string { return "subscription_counter" }

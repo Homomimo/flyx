@@ -48,9 +48,35 @@ type NodeInbound struct {
 	Inx            int    `gorm:"not null;default:0"`
 	CreatedTime    int64  `gorm:"column:created_time;not null"`
 	UpdatedTime    int64  `gorm:"column:updated_time;not null"`
+	// SourceID is the remote subscription an imported node came from (0 =
+	// imported by hand); the source's refresh keeps it up to date.
+	SourceID int64 `gorm:"column:source_id;not null;default:0;index"`
 }
 
 func (NodeInbound) TableName() string { return "node_inbound" }
+
+// RemoteSource is a subscription URL (an airport, a friend's panel) whose
+// nodes are kept as imported nodes and refreshed periodically.
+type RemoteSource struct {
+	ID   int64  `gorm:"primaryKey;autoIncrement"`
+	Name string `gorm:"type:varchar(100);not null"`
+	URL  string `gorm:"column:url;type:text;not null"`
+	// IntervalHours between refreshes; 0 refreshes only by hand.
+	IntervalHours int `gorm:"column:interval_hours;not null;default:0"`
+	// RelayOnly marks its nodes relay-only when they are created.
+	RelayOnly int    `gorm:"column:relay_only;not null;default:0"`
+	Enabled   int    `gorm:"not null;default:0"`
+	LastFetch int64  `gorm:"column:last_fetch;not null;default:0"`
+	LastError string `gorm:"column:last_error;type:text;not null;default:''"`
+	NodeCount int    `gorm:"column:node_count;not null;default:0"`
+	// Userinfo is the provider's Subscription-Userinfo header (traffic and
+	// expiry of the airport plan), shown as is.
+	Userinfo    string `gorm:"type:varchar(255);not null;default:''"`
+	CreatedTime int64  `gorm:"column:created_time;not null"`
+	UpdatedTime int64  `gorm:"column:updated_time;not null"`
+}
+
+func (RemoteSource) TableName() string { return "remote_source" }
 
 // NodeInboundCounter remembers the last cumulative nft counter value seen for
 // an inbound so traffic can be accumulated as deltas. Epoch changes whenever

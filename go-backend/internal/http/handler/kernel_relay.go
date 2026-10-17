@@ -538,11 +538,13 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Traffic is counted per inbound, so a share subscription reports only
-	// the expiry; the owner's reports the selected inbounds' traffic.
-	var up, down int64
+	// A share subscription reports its own traffic and limit; the owner's
+	// reports the selected inbounds' traffic.
+	var up, down, total int64
 	expire := sub.ExpireTime / 1000
-	if !isShare(sub) {
+	if isShare(sub) {
+		up, down, total = sub.UploadBytes, sub.DownloadBytes, sub.TrafficLimit
+	} else {
 		want := map[int64]bool{}
 		for _, id := range subInboundIDs(sub, rows) {
 			want[id] = true
@@ -560,7 +562,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=0; expire=%d", up, down, expire))
+	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", up, down, total, expire))
 	w.Header().Set("Profile-Update-Interval", "12")
 	// Clients use the file name as the profile name.
 	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(appName+" - "+sub.Name))

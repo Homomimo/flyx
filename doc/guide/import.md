@@ -9,7 +9,7 @@
 - Clash / Mihomo 配置（读取 `proxies`）
 - sing-box 配置（读取 `outbounds`）
 - Surge / Loon 节点行，例如 `名称 = snell, 1.2.3.4, 6160, psk=..., version=4`
-- 订阅地址（`https://...`）：面板服务器会以 Mihomo 的身份去下载，拿到的通常是参数最完整的 Clash 配置
+- 订阅地址（`https://...`）：面板服务器会以 Mihomo 的身份去下载，拿到的通常是参数最完整的 Clash 配置。这里只导入一次；想定时更新，请到 [订阅 → 订阅源](./subscription.md#订阅源) 添加
 
 ## 说明
 

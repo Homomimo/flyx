@@ -25,6 +25,19 @@ func renderSingbox(inbounds []Inbound) (string, error) {
 	if len(acme.list) > 0 {
 		cfg["certificate_providers"] = acme.list
 	}
+	// Each user leaves through a direct outbound whose sockets carry the
+	// user's mark (see UserMark); the first outbound stays the default.
+	if ids := markedUsers(inbounds); len(ids) > 0 {
+		outbounds := cfg["outbounds"].([]interface{})
+		rules := make([]interface{}, 0, len(ids))
+		for _, id := range ids {
+			tag := userOutboundTag(id)
+			outbounds = append(outbounds, obj{"type": "direct", "tag": tag, "routing_mark": UserMark(id)})
+			rules = append(rules, obj{"auth_user": []string{User{ID: id}.Name()}, "outbound": tag})
+		}
+		cfg["outbounds"] = outbounds
+		cfg["route"] = obj{"rules": rules, "final": "direct"}
+	}
 	return marshalConfig(cfg)
 }
 

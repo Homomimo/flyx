@@ -422,6 +422,7 @@ type InboundsBackup struct {
 	Relays        []InboundRelayBackup   `json:"relays"`
 	Counters      []InboundCounterBackup `json:"counters,omitempty"`
 	Subscriptions []SubscriptionBackup   `json:"subscriptions,omitempty"`
+	Sources       []RemoteSourceBackup   `json:"sources,omitempty"`
 	// Users are shared users from 3.0.10 backups; imported as share
 	// subscriptions.
 	Users []SubUserBackup `json:"users,omitempty"`
@@ -436,12 +437,19 @@ type SubscriptionBackup struct {
 	Password    string `json:"password"`
 	SourceAll   int    `json:"sourceAll"`
 	InboundIDs  string `json:"inboundIds"`
+	SourceIDs   string `json:"sourceIds,omitempty"`
 	Options     string `json:"options"`
 	ExpireTime  int64  `json:"expireTime"`
 	Enabled     int    `json:"enabled"`
 	Remark      string `json:"remark"`
 	Inx         int    `json:"inx"`
 	CreatedTime int64  `json:"createdTime"`
+	// Traffic (share subscriptions).
+	UploadBytes      int64 `json:"uploadBytes,omitempty"`
+	DownloadBytes    int64 `json:"downloadBytes,omitempty"`
+	TrafficLimit     int64 `json:"trafficLimit,omitempty"`
+	ResetDay         int   `json:"resetDay,omitempty"`
+	TrafficResetTime int64 `json:"trafficResetTime,omitempty"`
 }
 
 type SubUserBackup struct {
@@ -489,6 +497,17 @@ type InboundBackup struct {
 	DownloadBytes       int64  `json:"downloadBytes"`
 	Inx                 int    `json:"inx"`
 	CreatedTime         int64  `json:"createdTime"`
+	SourceID            int64  `json:"sourceId,omitempty"`
+}
+
+type RemoteSourceBackup struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	URL           string `json:"url"`
+	IntervalHours int    `json:"intervalHours"`
+	RelayOnly     int    `json:"relayOnly"`
+	Enabled       int    `json:"enabled"`
+	CreatedTime   int64  `json:"createdTime"`
 }
 
 type InboundRelayBackup struct {

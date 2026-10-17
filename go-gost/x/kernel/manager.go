@@ -126,6 +126,16 @@ func (m *Manager) allPorts() []Port {
 	return ports
 }
 
+func (m *Manager) allUserMarks() []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []int64
+	for _, inst := range m.instances {
+		ids = append(ids, inst.req.UserMarks...)
+	}
+	return ids
+}
+
 // ensureBinary installs a binary into dir unless it is already there.
 func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir string) (string, error) {
 	path := filepath.Join(dir, d.BinName)
@@ -218,7 +228,7 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	}
 
 	m.persist()
-	if err := m.nft.sync(m.allPorts()); err != nil {
+	if err := m.nft.sync(m.allPorts(), m.allUserMarks()); err != nil {
 		inst.logs.add("[flvx] 流量计数规则同步失败: " + err.Error())
 	}
 	st := m.state(req.Type, false)
@@ -315,7 +325,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 			_ = os.RemoveAll(filepath.Join(m.baseDir, kernelType))
 		}
 		m.persist()
-		if err := m.nft.sync(m.allPorts()); err != nil {
+		if err := m.nft.sync(m.allPorts(), m.allUserMarks()); err != nil {
 			return State{Type: kernelType}, err
 		}
 		return State{Type: kernelType}, nil
@@ -397,13 +407,14 @@ func (m *Manager) Status(logsFor string) Status {
 		out.NftAvailable = nftAvailable() == nil
 		return out
 	}
-	counters, epoch, err := m.nft.read()
+	counters, users, epoch, err := m.nft.read()
 	if err != nil {
 		out.NftError = err.Error()
 		return out
 	}
 	out.NftAvailable = true
 	out.Counters = counters
+	out.Users = users
 	out.Epoch = epoch
 	return out
 }

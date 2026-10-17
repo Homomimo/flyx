@@ -37,7 +37,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
-			CreatedTime: i.CreatedTime,
+			CreatedTime: i.CreatedTime, SourceID: i.SourceID,
 		})
 	}
 
@@ -62,6 +62,16 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			Epoch: c.Epoch, Bytes: c.Bytes,
 		})
 	}
+	var sources []model.RemoteSource
+	if err := r.db.Order("id ASC").Find(&sources).Error; err != nil {
+		return nil, err
+	}
+	for _, src := range sources {
+		out.Sources = append(out.Sources, model.RemoteSourceBackup{
+			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
+			RelayOnly: src.RelayOnly, Enabled: src.Enabled, CreatedTime: src.CreatedTime,
+		})
+	}
 	var subs []model.Subscription
 	if err := r.db.Order("id ASC").Find(&subs).Error; err != nil {
 		return nil, err
@@ -69,8 +79,10 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	for _, sub := range subs {
 		out.Subscriptions = append(out.Subscriptions, model.SubscriptionBackup{
 			ID: sub.ID, Name: sub.Name, Kind: sub.Kind, Token: sub.Token, UUID: sub.UUID, Password: sub.Password,
-			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
+			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, SourceIDs: sub.SourceIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
 			Enabled: sub.Enabled, Remark: sub.Remark, Inx: sub.Inx, CreatedTime: sub.CreatedTime,
+			UploadBytes: sub.UploadBytes, DownloadBytes: sub.DownloadBytes, TrafficLimit: sub.TrafficLimit,
+			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime,
 		})
 	}
 	return out, nil
@@ -105,6 +117,21 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 		}
 	}
 
+	// Sources first: imported nodes point at them. A refresh fills in the
+	// status fields.
+	for _, src := range b.Sources {
+		item := model.RemoteSource{
+			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
+			RelayOnly: src.RelayOnly, Enabled: src.Enabled, CreatedTime: src.CreatedTime, UpdatedTime: now,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"name", "url", "interval_hours", "relay_only", "enabled", "updated_time"}),
+		}).Create(&item).Error; err != nil {
+			return 0, err
+		}
+	}
+
 	for _, i := range b.Inbounds {
 		listen := i.Listen
 		if listen == "" {
@@ -117,7 +144,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: i.WhitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
-			CreatedTime: i.CreatedTime, UpdatedTime: now,
+			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -125,7 +152,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 				"kernel_id", "node_id", "name", "protocol", "listen", "port", "transport", "security",
 				"settings", "extra", "share_host", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
-				"inx", "updated_time",
+				"inx", "updated_time", "source_id",
 			}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
@@ -185,8 +212,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 		}
 		item := model.Subscription{
 			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
-			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
+			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
 			Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
+			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
+			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime,
 		}
 		if item.Kind != model.SubscriptionShare {
 			item.Kind = model.SubscriptionOwn
