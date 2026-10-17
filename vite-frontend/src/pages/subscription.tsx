@@ -45,7 +45,6 @@ import {
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { formatTraffic } from "@/utils/traffic";
 import { Segmented, ToggleRow } from "@/pages/subscription/controls";
-import { RemoteSourcesSection } from "@/pages/subscription/sources";
 
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
@@ -386,20 +385,23 @@ function Editor({
       </ModalHeader>
       <ModalBody className="space-y-4">
         <Section title="基本">
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium">给谁用</p>
+            <Segmented
+              options={[
+                ["own", "自己"],
+                ["share", "别人"],
+              ]}
+              value={draft.kind}
+              onChange={(kind) => set({ kind })}
+            />
+          </div>
           <Input
             label="名称"
-            placeholder="例如 我的手机 / 小明"
+            placeholder={share ? "例如 小明" : "例如 我的手机"}
             value={draft.name}
             variant="bordered"
             onChange={(e) => set({ name: e.target.value })}
-          />
-          <Segmented
-            options={[
-              ["own", "自用"],
-              ["share", "分享给他人"],
-            ]}
-            value={draft.kind}
-            onChange={(kind) => set({ kind })}
           />
           <p className="text-xs text-default-500">
             {share
@@ -886,8 +888,11 @@ export default function SubscriptionPage() {
 
   if (loading) return <PageLoadingState message="正在加载..." />;
 
-  const own = subs.filter((s) => s.kind === "own");
-  const shared = subs.filter((s) => s.kind === "share");
+  // Own subscriptions first, then the shared ones.
+  const ordered = [
+    ...subs.filter((s) => s.kind !== "share"),
+    ...subs.filter((s) => s.kind === "share"),
+  ];
 
   const card = (s: SubscriptionItem) => (
     <div
@@ -913,6 +918,14 @@ export default function SubscriptionPage() {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate font-medium">{s.name}</span>
+          <Chip
+            className="shrink-0"
+            color={s.kind === "share" ? "secondary" : "default"}
+            size="sm"
+            variant="flat"
+          >
+            {s.kind === "share" ? "分享" : "自用"}
+          </Chip>
           {!s.enabled ? (
             <Chip size="sm" variant="flat">
               已停用
@@ -997,38 +1010,15 @@ export default function SubscriptionPage() {
         </Card>
       )}
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-semibold text-default-600">自用</h2>
+      {ordered.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs text-default-500">
+          给自己的设备，或分享给别人：分享的订阅有独立凭据，到期、停用或流量用完自动断开
+        </p>
+      ) : (
         <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
-          {own.map(card)}
+          {ordered.map(card)}
         </div>
-      </section>
-
-      <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-default-600">分享给他人</h2>
-          <Button
-            size="sm"
-            variant="light"
-            onPress={() =>
-              setDraft({ ...draftFrom(), kind: "share", sourceAll: false })
-            }
-          >
-            添加
-          </Button>
-        </div>
-        {shared.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-divider py-4 text-center text-xs text-default-500">
-            给朋友单独的订阅和凭据，到期或停用后自动断开
-          </p>
-        ) : (
-          <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
-            {shared.map(card)}
-          </div>
-        )}
-      </section>
-
-      <RemoteSourcesSection sources={sources} onChanged={load} />
+      )}
 
       {/* Detail: links, QR and actions. */}
       <Modal

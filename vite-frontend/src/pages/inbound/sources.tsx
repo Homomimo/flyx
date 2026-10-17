@@ -24,7 +24,7 @@ import { formatTraffic } from "@/utils/traffic";
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
 
-const INTERVALS: Array<[string, string]> = [
+export const INTERVALS: Array<[string, string]> = [
   ["0", "手动"],
   ["6", "6 小时"],
   ["12", "12 小时"],
@@ -171,7 +171,7 @@ export function RemoteSourcesSection({
       </div>
       {sources.length === 0 ? (
         <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs text-default-500">
-          填机场或别人的订阅链接：节点会定时更新，出现在“落地”里，可以接中转，也能和自己的落地合并成一个订阅
+          填机场或别人的订阅链接：节点会定时更新，出现在“入站”里，可以接中转，也能和自己的落地合并成一个订阅。在“导入”里粘贴订阅地址并打开“定时同步”也会存到这里
         </p>
       ) : (
         <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">

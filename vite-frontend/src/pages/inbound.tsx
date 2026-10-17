@@ -1,3 +1,4 @@
+import type { RemoteSourceItem } from "@/api";
 import type {
   InboundApiItem,
   KernelApiItem,
@@ -17,6 +18,7 @@ import {
   getKernelCapabilities,
   getKernelList,
   getNodeList,
+  getRemoteSources,
   probeInbounds,
   regenerateInbound,
   resetInboundTraffic,
@@ -40,6 +42,7 @@ import {
 import { InboundFormModal } from "@/pages/inbound/inbound-form-modal";
 import { type InstallRequest, KernelPanel } from "@/pages/inbound/kernel-panel";
 import { RelayModal } from "@/pages/inbound/relay-modal";
+import { RemoteSourcesSection } from "@/pages/inbound/sources";
 import { ShareModal, copyText } from "@/pages/inbound/share";
 import {
   type InboundForm,
@@ -68,7 +71,7 @@ const modalBase =
 
 type ConfirmAction = "delete" | "regenerate" | "reset";
 
-type PageTab = "inbounds" | "kernels";
+type PageTab = "inbounds" | "kernels" | "sources";
 
 const TAB_KEY = "flvx_inbound_tab";
 
@@ -78,7 +81,7 @@ function usePageTab(): [PageTab, (t: PageTab) => void] {
     try {
       const v = localStorage.getItem(TAB_KEY);
 
-      return v === "kernels" ? v : "inbounds";
+      return v === "kernels" || v === "sources" ? v : "inbounds";
     } catch {
       return "inbounds";
     }
@@ -242,19 +245,23 @@ export default function InboundPage() {
   const [batchDeleting, setBatchDeleting] = useState(false);
   const [batchToggling, setBatchToggling] = useState(false);
   const [probing, setProbing] = useState(false);
+  const [sources, setSources] = useState<RemoteSourceItem[]>([]);
 
   const loadData = useCallback(
     async (initial = false) => {
       if (initial) setLoading(true);
       try {
-        const [capsRes, nodeRes, kernelRes, inboundRes] = await Promise.all([
-          getKernelCapabilities(),
-          getNodeList(),
-          getKernelList(),
-          getInboundList(),
-        ]);
+        const [capsRes, nodeRes, kernelRes, inboundRes, sourceRes] =
+          await Promise.all([
+            getKernelCapabilities(),
+            getNodeList(),
+            getKernelList(),
+            getInboundList(),
+            getRemoteSources(),
+          ]);
 
         if (capsRes.code === 0) setCaps(capsRes.data);
+        if (sourceRes.code === 0) setSources(sourceRes.data ?? []);
         if (nodeRes.code === 0) setNodes(nodeRes.data || []);
         if (kernelRes.code === 0) {
           setKernels(kernelRes.data || []);
@@ -887,11 +894,20 @@ export default function InboundPage() {
             kernels.length || undefined
           ),
       },
+      {
+        key: "sources",
+        label: "订阅源",
+        badge: sources.some((s) => s.lastError) ? (
+          <span className="text-danger">异常</span>
+        ) : (
+          sources.length || undefined
+        ),
+      },
     ];
 
   return (
     <AnimatedPage className="px-3 lg:px-6 py-6">
-      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
+      <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -919,6 +935,13 @@ export default function InboundPage() {
           nodes={nodes}
           onChanged={() => loadData(false)}
           onInstallRequestHandled={() => setInstallRequest(null)}
+        />
+      )}
+
+      {tab === "sources" && (
+        <RemoteSourcesSection
+          sources={sources}
+          onChanged={() => loadData(false)}
         />
       )}
 
@@ -1263,6 +1286,10 @@ export default function InboundPage() {
         isOpen={importOpen}
         onClose={() => setImportOpen(false)}
         onImported={() => loadData(false)}
+        onSourceAdded={() => {
+          setTab("sources");
+          loadData(false);
+        }}
       />
       <ExternalEditModal
         item={externalEdit}
