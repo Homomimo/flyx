@@ -233,6 +233,15 @@ export function ModalContent({
         className,
       )}
       showCloseButton={false}
+      onOpenAutoFocus={(event) => {
+        // Focusing the first field on open pops the native picker for a
+        // select and the keyboard for an input on phones. Focus the dialog
+        // itself instead; fields with autoFocus still take it.
+        event.preventDefault();
+        if (!(event.target as HTMLElement).contains(document.activeElement)) {
+          (event.target as HTMLElement).focus({ preventScroll: true });
+        }
+      }}
       {...props}
     >
       {renderedChildren}
