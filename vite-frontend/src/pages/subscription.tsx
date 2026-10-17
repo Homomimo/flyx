@@ -9,7 +9,7 @@ import type { InboundApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy, QrCode } from "lucide-react";
+import { Copy } from "lucide-react";
 
 import {
   deleteSubscription,
@@ -24,12 +24,7 @@ import {
 import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
 import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
-import {
-  QrImage,
-  SUB_FORMATS,
-  copyText,
-  panelOrigin,
-} from "@/pages/inbound/share";
+import { copyText, panelOrigin } from "@/pages/inbound/share";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
@@ -44,6 +39,7 @@ import {
 } from "@/shadcn-bridge/heroui/modal";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { formatTraffic } from "@/utils/traffic";
+import { SUB_CLIENTS } from "@/pages/subscription/clients";
 import { Segmented, ToggleRow } from "@/pages/subscription/controls";
 
 const modalBase =
@@ -765,7 +761,6 @@ export default function SubscriptionPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [detail, setDetail] = useState<SubscriptionItem | null>(null);
-  const [showQr, setShowQr] = useState(false);
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
   const [resettingTraffic, setResettingTraffic] = useState(false);
@@ -900,10 +895,7 @@ export default function SubscriptionPage() {
       className="flex cursor-pointer items-center gap-3 rounded-xl border border-divider bg-content1 px-3 py-2.5 shadow-sm transition-colors hover:bg-default-100"
       role="button"
       tabIndex={0}
-      onClick={() => {
-        setShowQr(false);
-        setDetail(s);
-      }}
+      onClick={() => setDetail(s)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
@@ -1020,7 +1012,7 @@ export default function SubscriptionPage() {
         </div>
       )}
 
-      {/* Detail: links, QR and actions. */}
+      {/* Detail: import into a client, copy links, actions. */}
       <Modal
         backdrop="blur"
         classNames={{ base: modalBase }}
@@ -1076,36 +1068,49 @@ export default function SubscriptionPage() {
                   >
                     复制订阅链接（自动识别客户端）
                   </Button>
-                  <div className="grid grid-cols-2 gap-2">
-                    {SUB_FORMATS.filter((f) => f.key).map((f) => (
-                      <button
-                        key={f.key}
-                        className="rounded-xl border border-divider px-3 py-2 text-left transition-colors hover:bg-default-100"
-                        type="button"
-                        onClick={() =>
-                          copyText(url(detail, f.key), `${f.label} 订阅已复制`)
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {SUB_CLIENTS.map((c) => {
+                      const link = url(detail, c.format);
+                      const open = () => {
+                        if (c.importURL) {
+                          window.location.href = c.importURL(link, detail.name);
+                        } else {
+                          copyText(link, `${c.label}订阅已复制`);
                         }
-                      >
-                        <div className="text-sm font-medium">{f.label}</div>
-                        <div className="truncate text-xs text-default-500">
-                          {f.hint}
+                      };
+
+                      return (
+                        <div
+                          key={c.key}
+                          className="relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-default-100"
+                        >
+                          <button
+                            className="h-full min-w-0 flex-1 truncate pl-3 pr-9 text-left text-sm font-medium"
+                            title={
+                              c.importURL ? `导入到 ${c.label}` : "复制通用订阅"
+                            }
+                            type="button"
+                            onClick={open}
+                          >
+                            {c.label}
+                          </button>
+                          <button
+                            aria-label={`复制 ${c.label} 订阅链接`}
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-default-400 hover:bg-default-200 hover:text-default-600"
+                            type="button"
+                            onClick={() =>
+                              copyText(link, `${c.label} 订阅已复制`)
+                            }
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
                         </div>
-                      </button>
-                    ))}
+                      );
+                    })}
                   </div>
-                  <Button
-                    size="sm"
-                    startContent={<QrCode className="h-4 w-4" />}
-                    variant="light"
-                    onPress={() => setShowQr((v) => !v)}
-                  >
-                    {showQr ? "收起二维码" : "二维码"}
-                  </Button>
-                  {showQr && (
-                    <div className="flex justify-center">
-                      <QrImage text={url(detail)} />
-                    </div>
-                  )}
+                  <p className="text-center text-xs text-default-400">
+                    点客户端直接导入，右侧按钮复制链接
+                  </p>
                   {detail.kind === "share" && detail.sharedIds.length > 0 && (
                     <p className="text-xs text-warning">
                       其中 {detail.sharedIds.length}{" "}

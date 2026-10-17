@@ -215,15 +215,3 @@ export function ShareModal({
     </Modal>
   );
 }
-
-export const SUB_FORMATS: { key: string; label: string; hint: string }[] = [
-  { key: "", label: "自动识别", hint: "按客户端自动返回对应格式" },
-  {
-    key: "clash",
-    label: "Clash / Mihomo",
-    hint: "Clash Verge、Stash、FlClash",
-  },
-  { key: "singbox", label: "sing-box", hint: "SFA / SFI / SFM" },
-  { key: "base64", label: "通用", hint: "v2rayN、Shadowrocket、NekoBox" },
-  { key: "surge", label: "Surge", hint: "不含 VLESS / Reality" },
-];
