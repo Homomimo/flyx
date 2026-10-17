@@ -136,3 +136,12 @@ func TestNormalizeSplitRules(t *testing.T) {
 		t.Fatal("snell has no 分流")
 	}
 }
+
+func TestXrayGeoData(t *testing.T) {
+	files := XrayGeoData("https://gh.example.com/")
+	if len(files) != 2 || files[0].Name != "geosite.dat" ||
+		files[0].URL != "https://gh.example.com/https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" ||
+		files[1].ChecksumURL != "https://gh.example.com/https://github.com/v2fly/geoip/releases/latest/download/geoip.dat.sha256sum" {
+		t.Fatalf("geo data: %+v", files)
+	}
+}

@@ -1252,6 +1252,10 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 	if len(rendered.UserMarks) > 0 {
 		payload["userMarks"] = rendered.UserMarks
 	}
+	if k.KernelType == kernel.TypeXray {
+		// The agent keeps the 分流 data files next to Xray up to date.
+		payload["geoData"] = kernel.XrayGeoData(proxy)
+	}
 	if len(rendered.Processes) > 0 {
 		payload["processes"] = rendered.Processes
 	}

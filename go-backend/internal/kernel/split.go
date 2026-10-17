@@ -351,3 +351,28 @@ func (in Inbound) splitRequiresSniff() bool {
 	}
 	return false
 }
+
+// GeoFile is a data file the agent keeps current next to a kernel binary.
+type GeoFile struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	ChecksumURL string `json:"checksumUrl"`
+}
+
+// XrayGeoData are the geosite / geoip files Xray's 分流 reads, from the
+// v2fly releases Xray bundles; the agent refreshes them daily so the
+// categories stay current between kernel upgrades. mirror is the panel's
+// GitHub proxy ("" for none).
+func XrayGeoData(mirror string) []GeoFile {
+	file := func(name, repo, asset string) GeoFile {
+		u := "https://github.com/v2fly/" + repo + "/releases/latest/download/" + asset
+		if mirror != "" {
+			u = strings.TrimSuffix(mirror, "/") + "/" + u
+		}
+		return GeoFile{Name: name, URL: u, ChecksumURL: u + ".sha256sum"}
+	}
+	return []GeoFile{
+		file("geosite.dat", "domain-list-community", "dlc.dat"),
+		file("geoip.dat", "geoip", "geoip.dat"),
+	}
+}

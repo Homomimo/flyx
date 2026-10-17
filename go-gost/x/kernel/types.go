@@ -84,6 +84,9 @@ type ApplyRequest struct {
 	// UserMarks are subscription users whose connections the kernel marks
 	// with userMark(id); their traffic is counted per user.
 	UserMarks []int64 `json:"userMarks,omitempty"`
+	// GeoData are data files kept current next to the main binary (Xray's
+	// geosite.dat / geoip.dat).
+	GeoData []GeoFile `json:"geoData,omitempty"`
 }
 
 type State struct {
@@ -178,6 +181,11 @@ func (r *ApplyRequest) validate() error {
 	for _, f := range r.Files {
 		if !safeName(f.Name) || filepath.Base(f.Name) != f.Name {
 			return fmt.Errorf("非法配置文件名: %s", f.Name)
+		}
+	}
+	for _, g := range r.GeoData {
+		if err := g.validate(); err != nil {
+			return err
 		}
 	}
 	for _, id := range r.UserMarks {
