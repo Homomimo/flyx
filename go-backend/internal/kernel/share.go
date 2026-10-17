@@ -512,6 +512,12 @@ func SurgeLine(e Endpoint) (string, bool) {
 func FormatForUserAgent(ua string) string {
 	ua = strings.ToLower(ua)
 	switch {
+	case strings.Contains(ua, "shadowrocket"):
+		return FormatShadowrocket
+	case strings.Contains(ua, "loon"):
+		return FormatLoon
+	case strings.Contains(ua, "quantumult"):
+		return FormatQX
 	case strings.Contains(ua, "sing-box") || strings.Contains(ua, "singbox") || strings.Contains(ua, "sfa") || strings.Contains(ua, "sfi") || strings.Contains(ua, "sfm"):
 		return FormatSingbox
 	case strings.Contains(ua, "clash") || strings.Contains(ua, "mihomo") || strings.Contains(ua, "stash") || strings.Contains(ua, "meta"):
@@ -538,6 +544,12 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		return base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n"))), "text/plain; charset=utf-8", nil
 	case FormatClash:
 		return clashProfile(endpoints, groups), "text/yaml; charset=utf-8", nil
+	case FormatShadowrocket:
+		return shadowrocketProfile(endpoints), "text/yaml; charset=utf-8", nil
+	case FormatLoon:
+		return loonList(endpoints), "text/plain; charset=utf-8", nil
+	case FormatQX:
+		return qxList(endpoints), "text/plain; charset=utf-8", nil
 	case FormatSingbox:
 		body, err := singboxProfile(endpoints, groups)
 		return body, "application/json; charset=utf-8", err

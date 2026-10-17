@@ -120,7 +120,7 @@ func TestFormatForUserAgent(t *testing.T) {
 		"SFA/1.11":                    FormatSingbox,
 		"Surge iOS/2920":              FormatSurge,
 		"v2rayN/7.0":                  FormatBase64,
-		"Shadowrocket/2070 CFNetwork": FormatBase64,
+		"Shadowrocket/2070 CFNetwork": FormatShadowrocket,
 	}
 	for ua, want := range cases {
 		if got := FormatForUserAgent(ua); got != want {
