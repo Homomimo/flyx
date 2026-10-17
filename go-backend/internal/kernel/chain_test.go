@@ -158,3 +158,12 @@ func TestCheckChainRejections(t *testing.T) {
 		t.Fatal("snell render must refuse a chained inbound")
 	}
 }
+
+func renderJSONString(t *testing.T, content string) map[string]interface{} {
+	t.Helper()
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}

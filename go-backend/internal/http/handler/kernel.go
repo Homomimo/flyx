@@ -103,6 +103,8 @@ type inboundView struct {
 	OutboundID      int64  `json:"outboundId"`
 	OutboundName    string `json:"outboundName,omitempty"`
 	OutboundMissing bool   `json:"outboundMissing,omitempty"`
+	// SplitRules are the inbound's 分流 rules.
+	SplitRules []kernel.SplitRule `json:"splitRules"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -117,25 +119,26 @@ type kernelSecurityView struct {
 }
 
 type inboundRequest struct {
-	ID                  int64            `json:"id"`
-	NodeID              int64            `json:"nodeId"`
-	KernelType          string           `json:"kernelType"`
-	Name                string           `json:"name"`
-	Protocol            string           `json:"protocol"`
-	Listen              string           `json:"listen"`
-	Port                int              `json:"port"`
-	Settings            kernel.Settings  `json:"settings"`
-	Transport           kernel.Transport `json:"transport"`
-	Security            kernel.Security  `json:"security"`
-	Extra               string           `json:"extra"`
-	ShareHost           string           `json:"shareHost"`
-	Remark              string           `json:"remark"`
-	RelayOnly           bool             `json:"relayOnly"`
-	AcceptProxyProtocol bool             `json:"acceptProxyProtocol"`
-	RelayWhitelist      bool             `json:"relayWhitelist"`
-	WhitelistExtra      string           `json:"whitelistExtra"`
-	OutboundID          int64            `json:"outboundId"`
-	Enabled             *bool            `json:"enabled"`
+	ID                  int64              `json:"id"`
+	NodeID              int64              `json:"nodeId"`
+	KernelType          string             `json:"kernelType"`
+	Name                string             `json:"name"`
+	Protocol            string             `json:"protocol"`
+	Listen              string             `json:"listen"`
+	Port                int                `json:"port"`
+	Settings            kernel.Settings    `json:"settings"`
+	Transport           kernel.Transport   `json:"transport"`
+	Security            kernel.Security    `json:"security"`
+	Extra               string             `json:"extra"`
+	ShareHost           string             `json:"shareHost"`
+	Remark              string             `json:"remark"`
+	RelayOnly           bool               `json:"relayOnly"`
+	AcceptProxyProtocol bool               `json:"acceptProxyProtocol"`
+	RelayWhitelist      bool               `json:"relayWhitelist"`
+	WhitelistExtra      string             `json:"whitelistExtra"`
+	OutboundID          int64              `json:"outboundId"`
+	SplitRules          []kernel.SplitRule `json:"splitRules"`
+	Enabled             *bool              `json:"enabled"`
 }
 
 // ---- conversion ----
@@ -200,6 +203,7 @@ func (h *Handler) kernelCapabilities(w http.ResponseWriter, r *http.Request) {
 			"ssMethod":    kernel.DefaultSSMethod,
 			"flow":        kernel.FlowVision,
 		},
+		"splitCategories": kernel.SplitCategories,
 	}))
 }
 
@@ -567,6 +571,10 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			SourceID:       row.SourceID,
 			SourceName:     sourceNames[row.SourceID],
 			OutboundID:     row.OutboundID,
+			SplitRules:     rowSplitRules(row),
+		}
+		if v.SplitRules == nil {
+			v.SplitRules = []kernel.SplitRule{}
 		}
 		if row.OutboundID != 0 {
 			name, ok := names[row.OutboundID]
@@ -700,10 +708,20 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("自动申请证书需要 sing-box 1.14 及以上，节点安装的是 %s", k.Version)))
 		return
 	}
-	prevOutboundID := row.OutboundID
+	prevTargets := outboundTargets(row)
 	row.OutboundID = req.OutboundID
 	if req.OutboundID < 0 {
 		row.OutboundID = 0
+	}
+	split, err := kernel.NormalizeSplitRules(req.SplitRules)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	row.SplitRules = ""
+	if len(split) > 0 {
+		raw, _ := json.Marshal(split)
+		row.SplitRules = string(raw)
 	}
 	if err := h.validateChain(row, k.KernelType); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
@@ -764,9 +782,8 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	if update {
 		warnings = append(warnings, h.applyChainReferrers(row.ID)...)
 	}
-	if prevOutboundID != row.OutboundID {
-		warnings = append(warnings, h.applyWhitelistedTarget(prevOutboundID)...)
-		warnings = append(warnings, h.applyWhitelistedTarget(row.OutboundID)...)
+	for _, id := range changedTargets(prevTargets, outboundTargets(row)) {
+		warnings = append(warnings, h.applyWhitelistedTarget(id)...)
 	}
 	if len(warnings) > 0 {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"id": row.ID}})
@@ -894,7 +911,9 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	h.applyWhitelistedTarget(row.OutboundID)
+	for _, target := range outboundTargets(*row) {
+		h.applyWhitelistedTarget(target)
+	}
 	if isExternalInbound(row) {
 		response.WriteJSON(w, response.OKEmpty())
 		return
@@ -942,9 +961,7 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 			seenKernel[row.KernelID] = true
 			kernelIDs = append(kernelIDs, row.KernelID)
 		}
-		if row.OutboundID != 0 {
-			targetIDs = append(targetIDs, row.OutboundID)
-		}
+		targetIDs = append(targetIDs, outboundTargets(*row)...)
 	}
 	msg := "操作成功"
 	for _, kernelID := range kernelIDs {
@@ -1194,6 +1211,9 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		if in.Via, err = h.inboundVia(row); err != nil {
 			return nil, "", err
 		}
+		if in.Split, err = h.inboundSplit(row); err != nil {
+			return nil, "", err
+		}
 		inbounds = append(inbounds, in)
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
 		if lo, hi := in.HopRange(); lo > 0 {
@@ -1204,13 +1224,16 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		}
 		ports = append(ports, port)
 	}
-	rendered, err := kernel.Render(k.KernelType, inbounds)
-	if err != nil {
-		return nil, "", err
-	}
 	proxy := ""
 	if enabled, proxyURL := h.getGithubProxyConfig(); enabled {
 		proxy = proxyURL
+	}
+	rendered, err := kernel.RenderWith(k.KernelType, inbounds, kernel.RenderOptions{
+		RuleSetMirror:     proxy,
+		SingboxHTTPClient: !versionBelow(k.Version, 1, 14),
+	})
+	if err != nil {
+		return nil, "", err
 	}
 	download, err := kernel.ResolveDownload(info, k.Version, proxy)
 	if err != nil {

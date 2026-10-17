@@ -183,17 +183,9 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		"whitelist_extra":       in.WhitelistExtra,
 		"enabled":               in.Enabled,
 		"outbound_id":           in.OutboundID,
+		"split_rules":           in.SplitRules,
 		"updated_time":          in.UpdatedTime,
 	}).Error
-}
-
-// ListInboundsByOutbound returns the inbounds chained through an inbound.
-func (r *Repository) ListInboundsByOutbound(outboundID int64) ([]model.NodeInbound, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var rows []model.NodeInbound
-	return rows, r.db.Where("outbound_id = ?", outboundID).Order("id ASC").Find(&rows).Error
 }
 
 func (r *Repository) DeleteNodeInbound(id int64) error {

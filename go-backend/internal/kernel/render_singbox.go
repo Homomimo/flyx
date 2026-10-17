@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func renderSingbox(inbounds []Inbound) (string, error) {
+func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	list := make([]interface{}, 0, len(inbounds))
 	acme := &acmeProviders{}
 	for _, in := range inbounds {
@@ -27,7 +27,7 @@ func renderSingbox(inbounds []Inbound) (string, error) {
 	}
 	// Chained inbounds leave through their target; their rules come first
 	// so their users do not match the direct per-user rules below.
-	chained, rules, err := singboxChainRoutes(inbounds)
+	chained, rules, sets, err := singboxChainRoutes(inbounds)
 	if err != nil {
 		return "", err
 	}
@@ -41,7 +41,17 @@ func renderSingbox(inbounds []Inbound) (string, error) {
 	}
 	cfg["outbounds"] = outbounds
 	if len(rules) > 0 {
-		cfg["route"] = obj{"rules": rules, "final": "direct"}
+		route := obj{"rules": rules, "final": "direct"}
+		if defs := singboxRuleSets(sets, opts); len(defs) > 0 {
+			// sing-box downloads the 分流 rule sets itself and keeps them in
+			// the cache file across restarts.
+			route["rule_set"] = defs
+			cfg["experimental"] = obj{"cache_file": obj{"enabled": true, "path": "cache.db"}}
+			if opts.SingboxHTTPClient {
+				cfg["http_clients"] = []interface{}{obj{"tag": ruleSetHTTPClient}}
+			}
+		}
+		cfg["route"] = route
 	}
 	return marshalConfig(cfg)
 }
@@ -216,4 +226,28 @@ func singboxTLS(sec Security, acme *acmeProviders) (obj, error) {
 		}, nil
 	}
 	return nil, nil
+}
+
+// ruleSetHTTPClient is the HTTP client rule sets are downloaded with: a
+// direct connection.
+const ruleSetHTTPClient = "rule-set"
+
+// singboxRuleSets defines each rule set once, in first-use order.
+func singboxRuleSets(tags []string, opts RenderOptions) []interface{} {
+	var out []interface{}
+	seen := map[string]bool{}
+	for _, t := range tags {
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		// Downloaded directly (download_detour is deprecated in sing-box
+		// 1.14; before it, the default outbound is the direct one).
+		set := obj{"type": "remote", "tag": t, "format": "binary", "url": RuleSetURL(t, opts.RuleSetMirror)}
+		if opts.SingboxHTTPClient {
+			set["http_client"] = ruleSetHTTPClient
+		}
+		out = append(out, set)
+	}
+	return out
 }

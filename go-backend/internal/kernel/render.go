@@ -40,9 +40,25 @@ type Rendered struct {
 	Hash      string  `json:"hash"`
 }
 
+// RenderOptions are panel settings a kernel config depends on.
+type RenderOptions struct {
+	// RuleSetMirror prefixes the GitHub URLs sing-box downloads 分流 rule
+	// sets from ("" downloads directly).
+	RuleSetMirror string
+	// SingboxHTTPClient defines the HTTP client rule sets download with
+	// (sing-box 1.14+; older versions reject the field, newer ones drop
+	// the implicit default in 1.16).
+	SingboxHTTPClient bool
+}
+
 // Render produces the kernel configuration for the given enabled inbounds.
 // Inbounds must already be normalized.
 func Render(kernelType string, inbounds []Inbound) (Rendered, error) {
+	return RenderWith(kernelType, inbounds, RenderOptions{})
+}
+
+// RenderWith is Render with panel settings.
+func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rendered, error) {
 	sorted := make([]Inbound, len(inbounds))
 	copy(sorted, inbounds)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
@@ -57,7 +73,7 @@ func Render(kernelType string, inbounds []Inbound) (Rendered, error) {
 		out.Files = []File{{Name: "config.json", Content: content}}
 		out.Args = []string{"run", "-c", "{RUN_DIR}/config.json"}
 	case TypeSingbox:
-		content, err := renderSingbox(sorted)
+		content, err := renderSingbox(sorted, opts)
 		if err != nil {
 			return Rendered{}, err
 		}

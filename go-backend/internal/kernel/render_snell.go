@@ -24,6 +24,9 @@ func renderSnell(inbounds []Inbound) (Rendered, error) {
 		if in.Via != nil {
 			return Rendered{}, errors.New("Snell 内核不支持链式出站")
 		}
+		if len(in.Split) > 0 {
+			return Rendered{}, errors.New("Snell 内核不支持分流")
+		}
 		name := fmt.Sprintf("snell-%d", in.ID)
 		listen := net.JoinHostPort(in.Listen, strconv.Itoa(in.Port))
 		ipv6 := net.ParseIP(in.Listen).To4() == nil
