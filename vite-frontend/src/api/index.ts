@@ -684,6 +684,13 @@ export interface SubscriptionItem {
   active: boolean;
   remark: string;
   nodeCount: number;
+  uploadBytes: number;
+  downloadBytes: number;
+  /** Bytes; 0 = unlimited. */
+  trafficLimit: number;
+  /** Day of month (1-28) the traffic resets; 0 = never. */
+  resetDay: number;
+  overQuota: boolean;
 }
 export interface SubscriptionDraft {
   id?: number;
@@ -695,6 +702,8 @@ export interface SubscriptionDraft {
   expireTime: number;
   enabled?: boolean;
   remark: string;
+  trafficLimit: number;
+  resetDay: number;
 }
 export interface SubPreviewItem {
   name: string;
@@ -713,6 +722,8 @@ export const deleteSubscription = (id: number) =>
   Network.post("/subscription/delete", { id });
 export const resetSubscription = (id: number) =>
   Network.post<SubscriptionItem>("/subscription/reset", { id });
+export const resetSubscriptionTraffic = (id: number) =>
+  Network.post<SubscriptionItem>("/subscription/reset-traffic", { id });
 export const previewSubscription = (data: SubscriptionDraft) =>
   Network.post<{ items: SubPreviewItem[]; total: number; dropped: number }>(
     "/subscription/preview",

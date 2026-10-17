@@ -16,6 +16,7 @@ import {
   getSubscriptions,
   previewSubscription,
   resetSubscription,
+  resetSubscriptionTraffic,
   saveSubscription,
 } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
@@ -40,6 +41,7 @@ import {
   ModalHeader,
 } from "@/shadcn-bridge/heroui/modal";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
+import { formatTraffic } from "@/utils/traffic";
 
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
@@ -92,6 +94,43 @@ function expiryLabel(ms: number): string {
   if (days <= 0) return `${toDateInput(ms)} 已过期`;
 
   return `${toDateInput(ms)} 到期 · 剩 ${days} 天`;
+}
+
+/** Used / limit of a share subscription, with a bar when it has a limit. */
+function Usage({ s, compact }: { s: SubscriptionItem; compact?: boolean }) {
+  const used = s.uploadBytes + s.downloadBytes;
+  const pct = s.trafficLimit ? Math.min(100, (used / s.trafficLimit) * 100) : 0;
+  const tone =
+    pct >= 100 ? "bg-danger" : pct >= 90 ? "bg-warning" : "bg-primary";
+
+  return (
+    <div className={compact ? "space-y-1" : "space-y-1.5"}>
+      <div className="flex items-baseline justify-between gap-2 text-xs text-default-500">
+        <span className="font-mono">
+          {formatTraffic(used)}
+          {s.trafficLimit
+            ? ` / ${formatTraffic(s.trafficLimit)}`
+            : " · 不限流量"}
+        </span>
+        {!compact && (
+          <span>{s.resetDay ? `每月 ${s.resetDay} 号重置` : "不自动重置"}</span>
+        )}
+      </div>
+      {s.trafficLimit > 0 && (
+        <div className="h-1.5 overflow-hidden rounded-full bg-default-100">
+          <div
+            className={`h-full rounded-full ${tone}`}
+            style={{ width: `${Math.max(2, pct)}%` }}
+          />
+        </div>
+      )}
+      {!compact && (
+        <div className="font-mono text-xs text-default-400">
+          ↑ {formatTraffic(s.uploadBytes)} · ↓ {formatTraffic(s.downloadBytes)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Segmented<T extends string>({
@@ -234,6 +273,17 @@ function Section({
 
 interface Draft extends SubscriptionDraft {
   expire: string;
+  /** Traffic limit typed in GB ("" = unlimited). */
+  limitGB: string;
+}
+
+const GB = 1024 ** 3;
+
+function gbText(bytes: number): string {
+  if (!bytes) return "";
+  const v = bytes / GB;
+
+  return String(Number.isInteger(v) ? v : Number(v.toFixed(2)));
 }
 
 function draftFrom(s?: SubscriptionItem): Draft {
@@ -248,6 +298,9 @@ function draftFrom(s?: SubscriptionItem): Draft {
       expire: "",
       enabled: true,
       remark: "",
+      trafficLimit: 0,
+      limitGB: "",
+      resetDay: 0,
     };
   }
 
@@ -262,16 +315,23 @@ function draftFrom(s?: SubscriptionItem): Draft {
     expire: toDateInput(s.expireTime),
     enabled: s.enabled,
     remark: s.remark,
+    trafficLimit: s.trafficLimit,
+    limitGB: gbText(s.trafficLimit),
+    resetDay: s.resetDay,
   };
 }
 
 /** The API payload: the backend rejects unknown fields like `expire`. */
 function toPayload(d: Draft): SubscriptionDraft {
-  const { expire, ...rest } = d;
+  const { expire, limitGB, ...rest } = d;
+  const share = d.kind === "share";
+  const gb = Number(limitGB);
 
   return {
     ...rest,
-    expireTime: d.kind === "share" ? fromDateInput(expire) : 0,
+    expireTime: share ? fromDateInput(expire) : 0,
+    trafficLimit: share && gb > 0 ? Math.round(gb * GB) : 0,
+    resetDay: share ? d.resetDay : 0,
   };
 }
 
@@ -429,6 +489,63 @@ function Editor({
               </div>
               <p className="text-xs text-default-500">
                 {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
+              </p>
+            </div>
+          )}
+          {share && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium" htmlFor="sub-limit">
+                流量上限
+              </label>
+              <div className="flex gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <input
+                    className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
+                    id="sub-limit"
+                    inputMode="decimal"
+                    placeholder="不限"
+                    value={draft.limitGB}
+                    onChange={(e) =>
+                      set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
+                    }
+                  />
+                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-default-500">
+                    GB
+                  </span>
+                </div>
+                {[50, 100, 500].map((g) => (
+                  <Button
+                    key={g}
+                    className="min-w-0 px-2"
+                    size="sm"
+                    variant="flat"
+                    onPress={() => set({ limitGB: String(g) })}
+                  >
+                    {g}G
+                  </Button>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <label className="text-sm" htmlFor="sub-reset-day">
+                  每月重置
+                </label>
+                <select
+                  className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
+                  id="sub-reset-day"
+                  value={draft.resetDay}
+                  onChange={(e) => set({ resetDay: Number(e.target.value) })}
+                >
+                  <option value={0}>不重置</option>
+                  {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                    <option key={d} value={d}>
+                      每月 {d} 号
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-xs text-default-500">
+                上传 +
+                下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
               </p>
             </div>
           )}
@@ -645,6 +762,7 @@ export default function SubscriptionPage() {
   const [showQr, setShowQr] = useState(false);
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
+  const [resettingTraffic, setResettingTraffic] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -714,6 +832,25 @@ export default function SubscriptionPage() {
     }
   };
 
+  const resetTraffic = async () => {
+    if (!detail) return;
+    setResettingTraffic(true);
+    try {
+      const res = await resetSubscriptionTraffic(detail.id);
+
+      if (res.code !== 0 || !res.data) {
+        toast.error(res.msg || "操作失败");
+
+        return;
+      }
+      toast.success(detail.overQuota ? "流量已重置，已恢复连接" : "流量已重置");
+      setDetail(res.data);
+      await load();
+    } finally {
+      setResettingTraffic(false);
+    }
+  };
+
   const runConfirm = async () => {
     if (!detail || !confirm) return;
     setSaving(true);
@@ -776,7 +913,7 @@ export default function SubscriptionPage() {
           ) : (
             !s.active && (
               <Chip color="danger" size="sm" variant="flat">
-                已过期
+                {s.overQuota ? "流量用完" : "已过期"}
               </Chip>
             )
           )}
@@ -788,6 +925,11 @@ export default function SubscriptionPage() {
           {s.kind === "share" ? ` · ${expiryLabel(s.expireTime)}` : ""}
           {s.remark ? ` · ${s.remark}` : ""}
         </div>
+        {s.kind === "share" && (
+          <div className="mt-1.5">
+            <Usage compact s={s} />
+          </div>
+        )}
       </div>
       <div
         className="flex shrink-0 items-center gap-2"
@@ -896,6 +1038,29 @@ export default function SubscriptionPage() {
                   </p>
                 </ModalHeader>
                 <ModalBody className="space-y-3">
+                  {detail.kind === "share" && (
+                    <div className="space-y-2 rounded-xl bg-default-100 p-3">
+                      <Usage s={detail} />
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-default-500">
+                          {detail.overQuota
+                            ? "流量已用完，已从节点上断开"
+                            : "上传 + 下载合计"}
+                        </span>
+                        <Button
+                          isDisabled={
+                            detail.uploadBytes + detail.downloadBytes === 0
+                          }
+                          isLoading={resettingTraffic}
+                          size="sm"
+                          variant="flat"
+                          onPress={resetTraffic}
+                        >
+                          重置流量
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   <Button
                     className="w-full"
                     color="primary"

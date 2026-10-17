@@ -192,6 +192,17 @@ export function AdminOverview() {
     }
   }
   for (const s of shares) {
+    const used = s.uploadBytes + s.downloadBytes;
+
+    if (s.enabled && s.trafficLimit && used >= s.trafficLimit * 0.9) {
+      issues.push({
+        key: `subflow-${s.id}`,
+        level: s.overQuota ? "danger" : "warning",
+        title: `分享订阅${s.overQuota ? "流量已用完" : "流量快用完"}：${s.name}`,
+        detail: `${formatTraffic(used)} / ${formatTraffic(s.trafficLimit)}`,
+        path: "/subscription",
+      });
+    }
     if (s.enabled && s.expireTime && s.expireTime - now <= SOON) {
       issues.push({
         key: `sub-${s.id}`,
