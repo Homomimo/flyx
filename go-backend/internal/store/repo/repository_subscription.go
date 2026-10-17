@@ -9,6 +9,7 @@ import (
 	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Legacy settings (3.0.10) that became the default subscription.
@@ -145,14 +146,24 @@ func (r *Repository) SaveSubscription(s *model.Subscription) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Save(s).Error
+	// Traffic columns are only changed by the counter updates, so a save
+	// based on a stale read cannot drop traffic counted meanwhile.
+	if s.ID == 0 {
+		return r.db.Create(s).Error
+	}
+	return r.db.Omit("upload_bytes", "download_bytes", "traffic_reset_time").Save(s).Error
 }
 
 func (r *Repository) DeleteSubscription(id int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Where("id = ?", id).Delete(&model.Subscription{}).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("subscription_id = ?", id).Delete(&model.SubscriptionCounter{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ?", id).Delete(&model.Subscription{}).Error
+	})
 }
 
 func (r *Repository) UpdateSubscriptionApplied(id int64, active int) error {
@@ -160,4 +171,98 @@ func (r *Repository) UpdateSubscriptionApplied(id int64, active int) error {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Model(&model.Subscription{}).Where("id = ?", id).Update("applied_active", active).Error
+}
+
+// SubscriptionCounterSample is one cumulative per-user counter of a node.
+type SubscriptionCounterSample struct {
+	SubscriptionID int64
+	Direction      string // "up" or "down"
+	Bytes          int64
+}
+
+// ApplySubscriptionCounterSamples adds what each counter grew by since the
+// last sample of the same epoch (the whole value after a counter reset) to
+// the subscriptions' traffic.
+func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string, samples []SubscriptionCounterSample, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if len(samples) == 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var states []model.SubscriptionCounter
+		if err := tx.Where("node_id = ?", nodeID).Find(&states).Error; err != nil {
+			return err
+		}
+		type key struct {
+			id  int64
+			dir string
+		}
+		prev := make(map[key]model.SubscriptionCounter, len(states))
+		for _, st := range states {
+			prev[key{st.SubscriptionID, st.Direction}] = st
+		}
+		up := map[int64]int64{}
+		down := map[int64]int64{}
+		for _, s := range samples {
+			if s.Bytes < 0 || (s.Direction != "up" && s.Direction != "down") {
+				continue
+			}
+			delta := s.Bytes
+			old, seen := prev[key{s.SubscriptionID, s.Direction}]
+			if seen && old.Epoch == epoch && s.Bytes >= old.Bytes {
+				delta = s.Bytes - old.Bytes
+			}
+			if delta > 0 {
+				if s.Direction == "up" {
+					up[s.SubscriptionID] += delta
+				} else {
+					down[s.SubscriptionID] += delta
+				}
+			}
+			row := model.SubscriptionCounter{NodeID: nodeID, SubscriptionID: s.SubscriptionID, Direction: s.Direction,
+				Epoch: epoch, Bytes: s.Bytes, UpdatedTime: now}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "node_id"}, {Name: "subscription_id"}, {Name: "direction"}},
+				DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
+			}).Create(&row).Error; err != nil {
+				return err
+			}
+		}
+		ids := map[int64]bool{}
+		for id := range up {
+			ids[id] = true
+		}
+		for id := range down {
+			ids[id] = true
+		}
+		for id := range ids {
+			if err := tx.Model(&model.Subscription{}).Where("id = ?", id).Updates(map[string]interface{}{
+				"upload_bytes":   gorm.Expr("upload_bytes + ?", up[id]),
+				"download_bytes": gorm.Expr("download_bytes + ?", down[id]),
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ResetSubscriptionTraffic zeroes a subscription's traffic.
+func (r *Repository) ResetSubscriptionTraffic(id int64, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.Subscription{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"upload_bytes": 0, "download_bytes": 0, "traffic_reset_time": now,
+	}).Error
+}
+
+// MarkSubscriptionResetTime records when the traffic was last reset.
+func (r *Repository) MarkSubscriptionResetTime(id int64, at int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.Subscription{}).Where("id = ?", id).Update("traffic_reset_time", at).Error
 }

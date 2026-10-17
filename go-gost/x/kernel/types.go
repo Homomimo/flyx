@@ -81,6 +81,9 @@ type ApplyRequest struct {
 	Hash      string        `json:"hash"`
 	Enabled   bool          `json:"enabled"`
 	Ports     []Port        `json:"ports"`
+	// UserMarks are subscription users whose connections the kernel marks
+	// with userMark(id); their traffic is counted per user.
+	UserMarks []int64 `json:"userMarks,omitempty"`
 }
 
 type State struct {
@@ -103,9 +106,18 @@ type Counter struct {
 	Bytes     int64  `json:"bytes"`
 }
 
+// UserCounter is one user's traffic in one direction ("up" = the user's
+// upload, "down" = download) since the counters' epoch.
+type UserCounter struct {
+	ID    int64  `json:"id"`
+	Dir   string `json:"dir"`
+	Bytes int64  `json:"bytes"`
+}
+
 type Status struct {
-	Kernels      []State   `json:"kernels"`
-	Counters     []Counter `json:"counters"`
+	Kernels      []State       `json:"kernels"`
+	Counters     []Counter     `json:"counters"`
+	Users        []UserCounter `json:"users,omitempty"`
 	Epoch        string    `json:"epoch"`
 	NftAvailable bool      `json:"nftAvailable"`
 	NftError     string    `json:"nftError,omitempty"`
@@ -166,6 +178,11 @@ func (r *ApplyRequest) validate() error {
 	for _, f := range r.Files {
 		if !safeName(f.Name) || filepath.Base(f.Name) != f.Name {
 			return fmt.Errorf("非法配置文件名: %s", f.Name)
+		}
+	}
+	for _, id := range r.UserMarks {
+		if id <= 0 || id > userMarkMax {
+			return fmt.Errorf("非法用户标记: %d", id)
 		}
 	}
 	return r.validatePorts()

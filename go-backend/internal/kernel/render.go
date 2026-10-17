@@ -33,8 +33,11 @@ type Rendered struct {
 	Extras []string `json:"extras,omitempty"`
 	// Idle means there is nothing to run (a per-inbound kernel without
 	// inbounds); the kernel is applied disabled.
-	Idle bool   `json:"idle,omitempty"`
-	Hash string `json:"hash"`
+	Idle bool `json:"idle,omitempty"`
+	// UserMarks lists the users whose outgoing traffic carries UserMark, so
+	// the agent can count it per user.
+	UserMarks []int64 `json:"userMarks,omitempty"`
+	Hash      string  `json:"hash"`
 }
 
 // Render produces the kernel configuration for the given enabled inbounds.
@@ -69,6 +72,7 @@ func Render(kernelType string, inbounds []Inbound) (Rendered, error) {
 	default:
 		return Rendered{}, fmt.Errorf("暂不支持内核 %s", kernelType)
 	}
+	out.UserMarks = markedUsers(sorted)
 	out.Hash = hashRendered(out)
 	return out, nil
 }

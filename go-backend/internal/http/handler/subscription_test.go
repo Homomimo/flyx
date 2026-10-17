@@ -55,9 +55,67 @@ func TestKernelPayloadCarriesActiveShareSubscriptions(t *testing.T) {
 	if c := config(); !strings.Contains(c, "owner-pw") || !strings.Contains(c, "user-pw") || strings.Contains(c, "own-should-not-appear") {
 		t.Fatalf("active share subscription must be in the config, own ones not: %s", c)
 	}
+	k, _ := r.GetNodeKernel(kernelID)
+	if payload, _, _ := h.buildKernelApplyPayload(k); len(payload["userMarks"].([]int64)) != 1 || payload["userMarks"].([]int64)[0] != s.ID {
+		t.Fatalf("share users must be counted: %v", payload["userMarks"])
+	}
+
+	// Per-user counters: deltas within an epoch, the whole value after one.
+	s.TrafficLimit = 1000
+	_ = r.SaveSubscription(s)
+	h.applyUserCounters(nodeID, "e1", []agentUserCounter{{ID: s.ID, Dir: "up", Bytes: 100}, {ID: s.ID, Dir: "down", Bytes: 300}}, now)
+	h.applyUserCounters(nodeID, "e1", []agentUserCounter{{ID: s.ID, Dir: "up", Bytes: 150}, {ID: s.ID, Dir: "down", Bytes: 300}}, now)
+	h.applyUserCounters(nodeID, "e2", []agentUserCounter{{ID: s.ID, Dir: "down", Bytes: 50}}, now)
+	got, _ := r.GetSubscription(s.ID)
+	if got.UploadBytes != 150 || got.DownloadBytes != 350 || subOverQuota(got) {
+		t.Fatalf("traffic: up=%d down=%d", got.UploadBytes, got.DownloadBytes)
+	}
+	// A save from a stale read keeps the counted traffic.
+	stale := *s
+	stale.Name = "renamed"
+	_ = r.SaveSubscription(&stale)
+	h.applyUserCounters(nodeID, "e2", []agentUserCounter{{ID: s.ID, Dir: "down", Bytes: 600}}, now)
+	got, _ = r.GetSubscription(s.ID)
+	if got.Name != "renamed" || subUsed(got) != 1050 || !subOverQuota(got) || subActive(got, time.Now()) {
+		t.Fatalf("over the limit must cut off: %+v", got)
+	}
+	if c := config(); strings.Contains(c, "user-pw") {
+		t.Fatalf("over-quota share must be removed: %s", c)
+	}
+	_ = r.ResetSubscriptionTraffic(s.ID, now)
+	if c := config(); !strings.Contains(c, "user-pw") {
+		t.Fatalf("reset traffic restores the user: %s", c)
+	}
+
 	s.ExpireTime = now - 1000
 	_ = r.SaveSubscription(s)
 	if c := config(); strings.Contains(c, "user-pw") || !strings.Contains(c, "owner-pw") {
 		t.Fatalf("expired share must be removed, owner kept: %s", c)
+	}
+}
+
+func TestMonthlyReset(t *testing.T) {
+	loc := time.FixedZone("x", 8*3600)
+	at := func(s string) time.Time {
+		v, _ := time.ParseInLocation("2006-01-02 15:04", s, loc)
+		return v
+	}
+	cases := []struct {
+		day       int
+		now, want string
+	}{
+		{1, "2026-03-15 10:00", "2026-03-01 00:00"},
+		{20, "2026-03-15 10:00", "2026-02-20 00:00"},
+		{28, "2026-02-28 00:00", "2026-02-28 00:00"},
+		{28, "2026-01-05 00:00", "2025-12-28 00:00"},
+	}
+	for _, c := range cases {
+		if got := lastResetAt(c.day, at(c.now)); !got.Equal(at(c.want)) {
+			t.Fatalf("day %d at %s: %s, want %s", c.day, c.now, got, c.want)
+		}
+	}
+	s := &model.Subscription{Kind: model.SubscriptionShare, ResetDay: 1, TrafficResetTime: at("2026-02-10 00:00").UnixMilli()}
+	if !subDueReset(s, at("2026-03-01 08:00")) || subDueReset(s, at("2026-02-27 08:00")) {
+		t.Fatal("due on the reset day, not before")
 	}
 }

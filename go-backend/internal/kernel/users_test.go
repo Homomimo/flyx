@@ -65,3 +65,37 @@ func TestForUser(t *testing.T) {
 		t.Fatal("naive username")
 	}
 }
+
+func TestRenderUserMarks(t *testing.T) {
+	users := []User{{ID: 7, UUID: "11111111-1111-4111-8111-111111111111", Password: "userpw"}}
+	vless := Inbound{ID: 1, Protocol: ProtocolVLESS, Port: 443,
+		Settings: Settings{UUID: "00000000-0000-4000-8000-000000000000"}, Users: users}
+
+	r, err := Render(TypeXray, []Inbound{vless})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := r.Files[0].Content
+	if len(r.UserMarks) != 1 || r.UserMarks[0] != 7 || !strings.Contains(cfg, `"mark": 1180041223`) ||
+		!strings.Contains(cfg, `"u7@flvx"`) || !strings.Contains(cfg, `"outboundTag": "flvx-u7"`) {
+		t.Fatalf("xray must route the user through its marked outbound (%v):\n%s", r.UserMarks, cfg)
+	}
+
+	r, err = Render(TypeSingbox, []Inbound{vless})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg = r.Files[0].Content
+	if len(r.UserMarks) != 1 || !strings.Contains(cfg, `"routing_mark": 1180041223`) ||
+		!strings.Contains(cfg, `"outbound": "flvx-u7"`) || !strings.Contains(cfg, `"final": "direct"`) {
+		t.Fatalf("sing-box must route the user through its marked outbound:\n%s", cfg)
+	}
+
+	vless.Users = nil
+	if r, _ := Render(TypeXray, []Inbound{vless}); len(r.UserMarks) != 0 || strings.Contains(r.Files[0].Content, "routing") {
+		t.Fatal("no users, nothing to mark")
+	}
+	if UserMark(70000) != 0 || UserFromMark(UserMark(12)) != 12 || UserFromMark(0x12345678) != 0 {
+		t.Fatal("mark round trip")
+	}
+}

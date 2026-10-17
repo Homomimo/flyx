@@ -71,6 +71,8 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			ID: sub.ID, Name: sub.Name, Kind: sub.Kind, Token: sub.Token, UUID: sub.UUID, Password: sub.Password,
 			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
 			Enabled: sub.Enabled, Remark: sub.Remark, Inx: sub.Inx, CreatedTime: sub.CreatedTime,
+			UploadBytes: sub.UploadBytes, DownloadBytes: sub.DownloadBytes, TrafficLimit: sub.TrafficLimit,
+			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime,
 		})
 	}
 	return out, nil
@@ -187,6 +189,8 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
 			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, Options: sb.Options, ExpireTime: sb.ExpireTime,
 			Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
+			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
+			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime,
 		}
 		if item.Kind != model.SubscriptionShare {
 			item.Kind = model.SubscriptionOwn

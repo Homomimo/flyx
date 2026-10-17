@@ -224,6 +224,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/subscription/save", h.subscriptionSave)
 	mux.HandleFunc("/api/v1/subscription/delete", h.subscriptionDelete)
 	mux.HandleFunc("/api/v1/subscription/reset", h.subscriptionReset)
+	mux.HandleFunc("/api/v1/subscription/reset-traffic", h.subscriptionResetTraffic)
 	mux.HandleFunc("/api/v1/subscription/preview", h.subscriptionPreview)
 	mux.HandleFunc("/api/v1/inbound/toggle", h.inboundToggle)
 	mux.HandleFunc("/api/v1/inbound/reset-traffic", h.inboundResetTraffic)

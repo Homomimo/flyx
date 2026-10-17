@@ -1080,9 +1080,16 @@ type agentKernelCounter struct {
 	Bytes     int64  `json:"bytes"`
 }
 
+type agentUserCounter struct {
+	ID    int64  `json:"id"`
+	Dir   string `json:"dir"`
+	Bytes int64  `json:"bytes"`
+}
+
 type agentKernelStatus struct {
 	Kernels      []agentKernelState   `json:"kernels"`
 	Counters     []agentKernelCounter `json:"counters"`
+	Users        []agentUserCounter   `json:"users"`
 	Epoch        string               `json:"epoch"`
 	NftAvailable bool                 `json:"nftAvailable"`
 	NftError     string               `json:"nftError"`
@@ -1152,6 +1159,9 @@ func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]inter
 		"hash":     rendered.Hash,
 		"enabled":  k.Enabled == 1 && !rendered.Idle,
 		"ports":    ports,
+	}
+	if len(rendered.UserMarks) > 0 {
+		payload["userMarks"] = rendered.UserMarks
 	}
 	if len(rendered.Processes) > 0 {
 		payload["processes"] = rendered.Processes
@@ -1466,7 +1476,13 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 		_ = h.repo.UpdateNodeKernelFields(k.ID, fields)
 	}
 
-	if !status.NftAvailable || len(status.Counters) == 0 {
+	if !status.NftAvailable {
+		return
+	}
+	if len(status.Users) > 0 {
+		h.applyUserCounters(nodeID, status.Epoch, status.Users, now)
+	}
+	if len(status.Counters) == 0 {
 		return
 	}
 	samples := make([]repo.InboundCounterSample, 0, len(status.Counters))

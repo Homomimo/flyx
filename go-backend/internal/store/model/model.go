@@ -442,6 +442,12 @@ type SubscriptionBackup struct {
 	Remark      string `json:"remark"`
 	Inx         int    `json:"inx"`
 	CreatedTime int64  `json:"createdTime"`
+	// Traffic (share subscriptions).
+	UploadBytes      int64 `json:"uploadBytes,omitempty"`
+	DownloadBytes    int64 `json:"downloadBytes,omitempty"`
+	TrafficLimit     int64 `json:"trafficLimit,omitempty"`
+	ResetDay         int   `json:"resetDay,omitempty"`
+	TrafficResetTime int64 `json:"trafficResetTime,omitempty"`
 }
 
 type SubUserBackup struct {

@@ -83,6 +83,30 @@ func expandPorts(ports []Port) []counterRule {
 	return rules
 }
 
+// Users' connections carry the socket mark userMarkBase|id (set by the
+// panel-rendered kernel config). Packets out with it are the user's upload;
+// the mark is copied to the connection so packets coming back count as the
+// download.
+const (
+	userMarkBase = 0x46560000
+	userMarkMax  = 0xffff
+)
+
+func userCounterName(dir string, id int64) string { return fmt.Sprintf("u%s_%d", dir, id) }
+
+func sortedUsers(ids []int64) []int64 {
+	seen := make(map[int64]bool, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 && id <= userMarkMax && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 // hopRule redirects a UDP port range to an inbound port (port hopping).
 type hopRule struct {
 	From, To, Port int
@@ -147,17 +171,21 @@ func writeSet(b *strings.Builder, name, typ string, elems []string) {
 // Hop ranges are redirected before filtering, so counters and whitelists see
 // the inbound port. Only traffic addressed to this host is redirected; the
 // output hook covers clients running on the node itself.
-func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule) string {
+func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {}\n", nftTable)
 	fmt.Fprintf(&b, "delete table inet %s\n", nftTable)
-	if len(rules) == 0 {
+	if len(rules) == 0 && len(users) == 0 {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "table inet %s {\n", nftTable)
 	for _, r := range rules {
 		fmt.Fprintf(&b, "\tcounter %s {}\n", r.name("in"))
 		fmt.Fprintf(&b, "\tcounter %s {}\n", r.name("out"))
+	}
+	for _, id := range users {
+		fmt.Fprintf(&b, "\tcounter %s {}\n", userCounterName("up", id))
+		fmt.Fprintf(&b, "\tcounter %s {}\n", userCounterName("down", id))
 	}
 	guarded := make([]int64, 0, len(guards))
 	for id := range guards {
@@ -179,9 +207,15 @@ func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule)
 	for _, r := range rules {
 		fmt.Fprintf(&b, "\t\t%s dport %d counter name %s\n", r.Proto, r.Port, r.name("in"))
 	}
+	for _, id := range users {
+		fmt.Fprintf(&b, "\t\tct mark 0x%08x counter name %s\n", userMarkBase|id, userCounterName("down", id))
+	}
 	b.WriteString("\t}\n\tchain output {\n\t\ttype filter hook output priority -150; policy accept;\n")
 	for _, r := range rules {
 		fmt.Fprintf(&b, "\t\t%s sport %d counter name %s\n", r.Proto, r.Port, r.name("out"))
+	}
+	for _, id := range users {
+		fmt.Fprintf(&b, "\t\tmeta mark 0x%08x ct mark set meta mark counter name %s\n", userMarkBase|id, userCounterName("up", id))
 	}
 	b.WriteString("\t}\n")
 	if len(hops) > 0 {
@@ -224,7 +258,7 @@ func (n *nftCounters) tableExists(ctx context.Context) bool {
 	return err == nil
 }
 
-func (n *nftCounters) sync(ports []Port) error {
+func (n *nftCounters) sync(ports []Port, users []int64) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := nftAvailable(); err != nil {
@@ -232,12 +266,13 @@ func (n *nftCounters) sync(ports []Port) error {
 		return nil
 	}
 	rules := expandPorts(ports)
-	script := nftScript(rules, expandGuards(ports), expandHops(ports))
+	users = sortedUsers(users)
+	script := nftScript(rules, expandGuards(ports), expandHops(ports), users)
 	sig := hashString(script)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if sig == n.state.Signature && (len(rules) == 0 || n.tableExists(ctx)) {
+	if sig == n.state.Signature && ((len(rules) == 0 && len(users) == 0) || n.tableExists(ctx)) {
 		n.lastErr = ""
 		return nil
 	}
@@ -264,34 +299,41 @@ type nftListOutput struct {
 }
 
 // read returns the current counters together with the epoch they belong to.
-func (n *nftCounters) read() ([]Counter, string, error) {
+func (n *nftCounters) read() ([]Counter, []UserCounter, string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := nftAvailable(); err != nil {
-		return nil, "", fmt.Errorf("未安装 nftables，无法统计流量")
+		return nil, nil, "", fmt.Errorf("未安装 nftables，无法统计流量")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	out, err := nftRunner(ctx, "", "-j", "list", "counters", "table", "inet", nftTable)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	counters, err := parseCounters(out)
-	return counters, n.state.Epoch, err
+	counters, users, err := parseCounters(out)
+	return counters, users, n.state.Epoch, err
 }
 
-func parseCounters(raw []byte) ([]Counter, error) {
+func parseCounters(raw []byte) ([]Counter, []UserCounter, error) {
 	var parsed nftListOutput
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("解析 nft 计数失败: %v", err)
+		return nil, nil, fmt.Errorf("解析 nft 计数失败: %v", err)
 	}
 	var counters []Counter
+	var users []UserCounter
 	for _, item := range parsed.Nftables {
 		c := item.Counter
 		if c == nil || c.Table != nftTable {
 			continue
 		}
 		parts := strings.Split(c.Name, "_")
+		if len(parts) == 2 && (parts[0] == "uup" || parts[0] == "udown") {
+			if id, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				users = append(users, UserCounter{ID: id, Dir: parts[0][1:], Bytes: c.Bytes})
+			}
+			continue
+		}
 		if len(parts) != 3 || (parts[0] != "in" && parts[0] != "out") {
 			continue
 		}
@@ -301,7 +343,7 @@ func parseCounters(raw []byte) ([]Counter, error) {
 		}
 		counters = append(counters, Counter{InboundID: id, Proto: parts[2], Dir: parts[0], Bytes: c.Bytes})
 	}
-	return counters, nil
+	return counters, users, nil
 }
 
 func newEpoch() string {

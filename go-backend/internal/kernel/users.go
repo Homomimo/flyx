@@ -1,6 +1,9 @@
 package kernel
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // User is an extra client of an inbound (a subscription user). Each user
 // has its own credentials so it can be cut off without touching others.
@@ -110,3 +113,51 @@ func singboxUsers(in Inbound) []interface{} {
 	}
 	return out
 }
+
+// userMarkBase tags the sockets of a user's outgoing connections ("FV" +
+// user id). The agent counts each mark in nftables: packets out with the
+// mark are the user's upload, packets back on the marked connection the
+// download. This works on official builds of both kernels (sing-box ships
+// without a per-user stats API).
+const (
+	userMarkBase = 0x46560000
+	userMarkMax  = 0xffff
+)
+
+// UserMark is the socket mark of the user's traffic; 0 when the id does not
+// fit, and the user is then not counted.
+func UserMark(id int64) int64 {
+	if id <= 0 || id > userMarkMax {
+		return 0
+	}
+	return userMarkBase | id
+}
+
+// UserFromMark is the inverse of UserMark (0 for other marks).
+func UserFromMark(mark int64) int64 {
+	if mark&^userMarkMax != userMarkBase {
+		return 0
+	}
+	return mark & userMarkMax
+}
+
+// markedUsers returns the ids of the counted users, sorted.
+func markedUsers(inbounds []Inbound) []int64 {
+	seen := map[int64]bool{}
+	var ids []int64
+	for _, in := range inbounds {
+		if !in.SupportsUsers() {
+			continue
+		}
+		for _, u := range in.Users {
+			if UserMark(u.ID) != 0 && !seen[u.ID] {
+				seen[u.ID] = true
+				ids = append(ids, u.ID)
+			}
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func userOutboundTag(id int64) string { return fmt.Sprintf("flvx-u%d", id) }

@@ -24,6 +24,20 @@ func renderXray(inbounds []Inbound) (string, error) {
 			obj{"protocol": "blackhole", "tag": "block"},
 		},
 	}
+	// Each user leaves through a direct outbound whose sockets carry the
+	// user's mark (see UserMark).
+	if ids := markedUsers(inbounds); len(ids) > 0 {
+		outbounds := cfg["outbounds"].([]interface{})
+		rules := make([]interface{}, 0, len(ids))
+		for _, id := range ids {
+			tag := userOutboundTag(id)
+			outbounds = append(outbounds, obj{"protocol": "freedom", "tag": tag,
+				"streamSettings": obj{"sockopt": obj{"mark": UserMark(id)}}})
+			rules = append(rules, obj{"type": "field", "user": []string{User{ID: id}.Email()}, "outboundTag": tag})
+		}
+		cfg["outbounds"] = outbounds
+		cfg["routing"] = obj{"rules": rules}
+	}
 	return marshalConfig(cfg)
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-backend/internal/auth"
+	"go-backend/internal/store/repo"
 )
 
 func TestSubscriptionContract(t *testing.T) {
@@ -110,6 +111,35 @@ func TestSubscriptionContract(t *testing.T) {
 			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(future)+`,"enabled":true}`)
 		if code, _, hdr := sub(path); code != 200 || !strings.Contains(hdr, "expire="+jsonInt64(future/1000)) {
 			t.Fatalf("re-enabled: %d %s", code, hdr)
+		}
+
+		// Traffic limit: reported in the header, cut off once reached.
+		out = kernelContractPost(t, router, admin, "/api/v1/subscription/save",
+			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(future)+`,"trafficLimit":1000,"resetDay":5}`)
+		if v := out.Data.(map[string]interface{}); out.Code != 0 || valueAsInt(v["trafficLimit"]) != 1000 || valueAsInt(v["resetDay"]) != 5 {
+			t.Fatalf("limit save: %+v", out)
+		}
+		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
+			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"resetDay":31}`); out.Code == 0 {
+			t.Fatal("reset day 31 must be rejected")
+		}
+		if err := r.ApplySubscriptionCounterSamples(landing, "e", []repo.SubscriptionCounterSample{
+			{SubscriptionID: id, Direction: "up", Bytes: 200}, {SubscriptionID: id, Direction: "down", Bytes: 500}}, time.Now().UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		if code, _, hdr := sub(path); code != 200 || !strings.HasPrefix(hdr, "upload=200; download=500; total=1000;") {
+			t.Fatalf("share traffic header: %d %s", code, hdr)
+		}
+		_ = r.ApplySubscriptionCounterSamples(landing, "e", []repo.SubscriptionCounterSample{{SubscriptionID: id, Direction: "down", Bytes: 900}}, time.Now().UnixMilli())
+		if code, _, _ := sub(path); code != http.StatusForbidden {
+			t.Fatalf("over the limit: %d", code)
+		}
+		out = kernelContractPost(t, router, admin, "/api/v1/subscription/reset-traffic", `{"id":`+jsonInt64(id)+`}`)
+		if v := out.Data.(map[string]interface{}); out.Code != 0 || valueAsInt(v["downloadBytes"]) != 0 || v["active"] != true {
+			t.Fatalf("reset traffic: %+v", out)
+		}
+		if code, _, _ := sub(path); code != 200 {
+			t.Fatalf("after reset: %d", code)
 		}
 
 		out = kernelContractPost(t, router, admin, "/api/v1/subscription/reset", `{"id":`+jsonInt64(id)+`}`)
