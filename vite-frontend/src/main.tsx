@@ -7,6 +7,24 @@ import App from "./App.tsx";
 import { Provider } from "./provider.tsx";
 import "@/styles/globals.css";
 
+// A page chunk from the previous build is gone after an upgrade: reload
+// to pick up the new build instead of showing a blank page. At most once
+// a minute, so a chunk that is really missing doesn't loop.
+window.addEventListener("vite:preloadError", (event) => {
+  const key = "flvx_chunk_reload";
+
+  try {
+    const last = Number(sessionStorage.getItem(key) || 0);
+
+    if (Date.now() - last < 60000) return;
+    sessionStorage.setItem(key, String(Date.now()));
+  } catch {
+    return;
+  }
+  event.preventDefault();
+  window.location.reload();
+});
+
 const updateSW = registerSW({
   immediate: true,
   onNeedRefresh() {
