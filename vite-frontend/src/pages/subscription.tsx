@@ -279,7 +279,9 @@ function draftFrom(s?: SubscriptionItem): Draft {
   if (!s) {
     return {
       name: "",
-      kind: "own",
+      // New subscriptions get their own credentials, so any of them can
+      // expire, be capped or cut off; older own-credential ones keep working.
+      kind: "share",
       sourceAll: true,
       inboundIds: [],
       sourceIds: [],
@@ -437,29 +439,19 @@ function Editor({
       </ModalHeader>
       <ModalBody className="space-y-4">
         <Section title="基本">
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">给谁用</p>
-            <Segmented
-              options={[
-                ["own", "自己"],
-                ["share", "别人"],
-              ]}
-              value={draft.kind}
-              onChange={(kind) => set({ kind })}
-            />
-          </div>
           <Input
             label="名称"
-            placeholder={share ? "例如 小明" : "例如 我的手机"}
+            placeholder="例如 我的手机 / 小明"
             value={draft.name}
             variant="bordered"
             onChange={(e) => set({ name: e.target.value })}
           />
-          <p className="text-xs text-default-500">
-            {share
-              ? "对方拿到独立的 UUID / 密码，到期或停用后从节点上删除，已导入的配置也连不上"
-              : "用你自己的凭据，适合自己的设备；可以建多个，各自筛选不同的节点"}
-          </p>
+          {share && (
+            <p className="text-xs text-default-500">
+              有独立的 UUID /
+              密码：停用、到期或流量用完后从节点上删除，已导入的配置也连不上
+            </p>
+          )}
           {share && (
             <div className="space-y-1">
               <label className="text-sm font-medium" htmlFor="sub-expire">
@@ -945,12 +937,6 @@ export default function SubscriptionPage() {
 
   if (loading) return <PageLoadingState message="正在加载..." />;
 
-  // Own subscriptions first, then the shared ones.
-  const ordered = [
-    ...subs.filter((s) => s.kind !== "share"),
-    ...subs.filter((s) => s.kind === "share"),
-  ];
-
   const card = (s: SubscriptionItem) => (
     <div
       key={s.id}
@@ -972,14 +958,6 @@ export default function SubscriptionPage() {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate font-medium">{s.name}</span>
-          <Chip
-            className="shrink-0"
-            color={s.kind === "share" ? "secondary" : "default"}
-            size="sm"
-            variant="flat"
-          >
-            {s.kind === "share" ? "分享" : "自用"}
-          </Chip>
           {!s.enabled ? (
             <Chip size="sm" variant="flat">
               已停用
@@ -1064,13 +1042,13 @@ export default function SubscriptionPage() {
         </Card>
       )}
 
-      {ordered.length === 0 ? (
+      {subs.length === 0 ? (
         <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs text-default-500">
-          给自己的设备，或分享给别人：分享的订阅有独立凭据，到期、停用或流量用完自动断开
+          每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开
         </p>
       ) : (
         <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
-          {ordered.map(card)}
+          {subs.map(card)}
         </div>
       )}
 
@@ -1090,7 +1068,6 @@ export default function SubscriptionPage() {
                 <ModalHeader className="flex flex-col gap-1">
                   <h2 className="text-lg font-bold break-all">{detail.name}</h2>
                   <p className="text-small font-normal text-default-500">
-                    {detail.kind === "share" ? "分享" : "自用"} ·{" "}
                     {detail.nodeCount} 个节点
                     {detail.kind === "share"
                       ? ` · ${expiryLabel(detail.expireTime)}`
