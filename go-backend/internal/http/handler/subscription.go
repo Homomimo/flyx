@@ -41,6 +41,8 @@ type subPipeline struct {
 	RegionGroups bool     `json:"regionGroups"`
 	ChainLanding string   `json:"chainLanding"`
 	ChainRelay   string   `json:"chainRelay"`
+	Rules        bool     `json:"rules"`
+	RuleGroups   []string `json:"ruleGroups"`
 }
 
 func (p subPipeline) options() kernel.SubOptions {
@@ -48,6 +50,7 @@ func (p subPipeline) options() kernel.SubOptions {
 		Lines: p.Lines, Regions: p.Regions, Protocols: p.Protocols, Include: p.Include, Exclude: p.Exclude,
 		Rename: p.Rename, AddFlag: p.AddFlag, Prefix: p.Prefix, Dedupe: p.Dedupe, Sort: p.Sort,
 		RegionGroups: p.RegionGroups, ChainLanding: p.ChainLanding, ChainRelay: p.ChainRelay,
+		Rules: p.Rules, RuleGroups: p.RuleGroups,
 	}
 }
 
@@ -76,6 +79,7 @@ func (p *subPipeline) normalize() error {
 	if p.Protocols == nil {
 		p.Protocols = []string{}
 	}
+	p.RuleGroups = kernel.NormalizeRuleGroups(p.RuleGroups)
 	return p.options().Validate()
 }
 
@@ -87,6 +91,9 @@ func parsePipeline(raw string) subPipeline {
 	}
 	if p.Protocols == nil {
 		p.Protocols = []string{}
+	}
+	if p.RuleGroups == nil {
+		p.RuleGroups = []string{}
 	}
 	return p
 }
@@ -445,8 +452,9 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 		items = append(items, h.subscriptionView(&subs[i], rows, now))
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"items":   items,
-		"regions": append(kernel.RegionNames(), kernel.RegionOther),
+		"items":      items,
+		"regions":    append(kernel.RegionNames(), kernel.RegionOther),
+		"ruleGroups": kernel.RuleGroups(),
 	}))
 }
 

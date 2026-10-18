@@ -2,6 +2,7 @@ import type {
   RemoteSourceItem,
   SubPipeline,
   SubPreviewItem,
+  SubRuleGroup,
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
@@ -70,6 +71,8 @@ const EMPTY_PIPELINE: SubPipeline = {
   regionGroups: false,
   chainLanding: "",
   chainRelay: "",
+  rules: false,
+  ruleGroups: [],
 };
 
 function toDateInput(ms: number): string {
@@ -334,6 +337,7 @@ function Editor({
   inbounds,
   sources,
   regions,
+  ruleGroups,
   saving,
   onSave,
   onClose,
@@ -343,6 +347,7 @@ function Editor({
   inbounds: InboundApiItem[];
   sources: RemoteSourceItem[];
   regions: string[];
+  ruleGroups: SubRuleGroup[];
   saving: boolean;
   onSave: () => void;
   onClose: () => void;
@@ -691,7 +696,7 @@ function Editor({
             />
           </div>
           <ToggleRow
-            hint="Clash / sing-box / Surge 里每个地区一个自动测速组"
+            hint="Clash / sing-box / Surge 里每个地区一个自动测速组；开启分流规则时自动加上"
             id="sub-groups"
             label="按地区分组"
             value={o.regionGroups}
@@ -724,6 +729,54 @@ function Editor({
               onChange={(e) => setOpts({ chainRelay: e.target.value })}
             />
           </div>
+        </Section>
+
+        <Section
+          collapsible
+          defaultOpen={o.rules}
+          hint="给 Clash（mihomo 内核）、sing-box（1.12 及以上）、Surge、Shadowrocket、Loon、Quantumult X 加上分流规则，并自动按地区分组；后三个会改为下发完整配置。Stash 和通用链接只有节点"
+          summary={o.rules ? `已开启，${o.ruleGroups.length} 个分组` : "未开启"}
+          title="分流规则"
+        >
+          <ToggleRow
+            hint="国内直连、境外走代理，另加下面勾选的分组"
+            id="sub-rules"
+            label="开启分流规则"
+            value={o.rules}
+            onChange={(rules) =>
+              setOpts(
+                rules && !o.rules && o.ruleGroups.length === 0
+                  ? { rules, ruleGroups: ruleGroups.map((g) => g.key) }
+                  : { rules },
+              )
+            }
+          />
+          {o.rules && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium">分组</p>
+              <p className="text-xs text-default-500">
+                每组可在客户端里单独选节点：AI
+                服务默认美国，微软、苹果、游戏默认直连，广告拦截默认拦截
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {ruleGroups.map((g) => (
+                  <Checkbox
+                    key={g.key}
+                    isSelected={o.ruleGroups.includes(g.key)}
+                    onValueChange={(on) =>
+                      setOpts({
+                        ruleGroups: on
+                          ? [...o.ruleGroups, g.key]
+                          : o.ruleGroups.filter((x) => x !== g.key),
+                      })
+                    }
+                  >
+                    <span className="text-sm">{g.name}</span>
+                  </Checkbox>
+                ))}
+              </div>
+            </div>
+          )}
         </Section>
 
         <Section title="预览">
@@ -801,6 +854,7 @@ export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
+  const [ruleGroups, setRuleGroups] = useState<SubRuleGroup[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -823,6 +877,7 @@ export default function SubscriptionPage() {
       if (subRes.code === 0 && subRes.data) {
         setSubs(subRes.data.items ?? []);
         setRegions(subRes.data.regions ?? []);
+        setRuleGroups(subRes.data.ruleGroups ?? []);
       } else {
         toast.error(subRes.msg || "加载订阅失败");
       }
@@ -1086,11 +1141,21 @@ export default function SubscriptionPage() {
                   <div className="grid grid-cols-2 gap-2">
                     {SUB_CLIENTS.map((c) => {
                       const link = url(detail, c.format);
+                      const isConfig =
+                        detail.options.rules && c.configImportURL !== undefined;
+                      const importURL = isConfig
+                        ? (c.configImportURL ?? null)
+                        : c.importURL;
                       const open = () => {
-                        if (c.importURL) {
-                          window.location.href = c.importURL(link, detail.name);
+                        if (importURL) {
+                          window.location.href = importURL(link, detail.name);
                         } else {
-                          copyText(link, `${c.label}订阅已复制`);
+                          copyText(
+                            link,
+                            isConfig
+                              ? `${c.label}配置链接已复制，在 App 的配置里从 URL 下载`
+                              : `${c.label}订阅已复制`,
+                          );
                         }
                       };
 
@@ -1102,7 +1167,11 @@ export default function SubscriptionPage() {
                           <button
                             className="h-full min-w-0 flex-1 truncate pl-3 pr-9 text-left text-sm font-medium"
                             title={
-                              c.importURL ? `导入到 ${c.label}` : "复制通用订阅"
+                              importURL
+                                ? `导入到 ${c.label}`
+                                : isConfig
+                                  ? `复制 ${c.label} 配置链接`
+                                  : "复制通用订阅"
                             }
                             type="button"
                             onClick={open}
@@ -1126,6 +1195,13 @@ export default function SubscriptionPage() {
                   <p className="text-center text-xs text-default-400">
                     点客户端直接导入，右侧按钮复制链接
                   </p>
+                  {detail.options.rules && (
+                    <p className="text-xs text-default-500">
+                      已开启分流规则：Shadowrocket、Loon、Quantumult X
+                      导入的是完整配置，会替换 App 里原来的配置；Loon 和
+                      Quantumult X 复制链接后在 App 的配置里从 URL 下载
+                    </p>
+                  )}
                   {detail.sharedIds.length > 0 && (
                     <p className="text-xs text-warning">
                       其中 {detail.sharedIds.length}{" "}
@@ -1185,6 +1261,7 @@ export default function SubscriptionPage() {
                 draft={draft}
                 inbounds={inbounds}
                 regions={regions}
+                ruleGroups={ruleGroups}
                 saving={saving}
                 setDraft={setDraft}
                 sources={sources}

@@ -42,6 +42,9 @@ const (
 	FormatClash   = "clash"
 	FormatSingbox = "singbox"
 	FormatSurge   = "surge"
+	// FormatStash is a Clash profile without routing rules: Stash cannot
+	// read the .mrs rule sets they use.
+	FormatStash = "stash"
 )
 
 func (e Endpoint) selfSigned() bool {
@@ -580,7 +583,9 @@ func FormatForUserAgent(ua string) string {
 		return FormatQX
 	case strings.Contains(ua, "sing-box") || strings.Contains(ua, "singbox") || strings.Contains(ua, "sfa") || strings.Contains(ua, "sfi") || strings.Contains(ua, "sfm"):
 		return FormatSingbox
-	case strings.Contains(ua, "clash") || strings.Contains(ua, "mihomo") || strings.Contains(ua, "stash") || strings.Contains(ua, "meta"):
+	case strings.Contains(ua, "stash"):
+		return FormatStash
+	case strings.Contains(ua, "clash") || strings.Contains(ua, "mihomo") || strings.Contains(ua, "meta"):
 		return FormatClash
 	case strings.Contains(ua, "surge"):
 		return FormatSurge
@@ -591,8 +596,8 @@ func FormatForUserAgent(ua string) string {
 // Subscription renders every supported endpoint in the requested format and
 // returns the body with its content type.
 func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string, string, error) {
-	endpoints = uniqueNames(ApplySubOptions(endpoints, opts))
-	groups := opts.RegionGroups
+	endpoints = uniqueNames(ApplySubOptions(endpoints, opts), opts.Rules)
+	groups := opts.RegionGroups || opts.Rules
 	switch format {
 	case FormatBase64:
 		lines := make([]string, 0, len(endpoints))
@@ -603,15 +608,28 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		}
 		return base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n"))), "text/plain; charset=utf-8", nil
 	case FormatClash:
-		return clashProfile(endpoints, groups), "text/yaml; charset=utf-8", nil
+		return clashProfile(endpoints, groups, opts), "text/yaml; charset=utf-8", nil
+	case FormatStash:
+		stash := opts
+		stash.Rules = false
+		return clashProfile(endpoints, opts.RegionGroups, stash), "text/yaml; charset=utf-8", nil
 	case FormatShadowrocket:
+		if opts.Rules {
+			return shadowrocketConfig(endpoints, opts), "text/yaml; charset=utf-8", nil
+		}
 		return shadowrocketProfile(endpoints), "text/yaml; charset=utf-8", nil
 	case FormatLoon:
+		if opts.Rules {
+			return loonConfig(endpoints, opts), "text/plain; charset=utf-8", nil
+		}
 		return loonList(endpoints), "text/plain; charset=utf-8", nil
 	case FormatQX:
+		if opts.Rules {
+			return qxConfig(endpoints, opts), "text/plain; charset=utf-8", nil
+		}
 		return qxList(endpoints), "text/plain; charset=utf-8", nil
 	case FormatSingbox:
-		body, err := singboxProfile(endpoints, groups)
+		body, err := singboxProfile(endpoints, groups, opts)
 		return body, "application/json; charset=utf-8", err
 	case FormatSurge:
 		lines := []string{"[Proxy]"}
@@ -635,9 +653,9 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		}
 		lines = append(lines, "", "[Proxy Group]")
 		var regionLines []string
+		var regionNames []string
 		choices := names
 		if groups {
-			var regionNames []string
 			for _, g := range regionGroups(names) {
 				regionNames = append(regionNames, g.name)
 				regionLines = append(regionLines, g.name+" = url-test, "+strings.Join(g.members, ", ")+
@@ -657,14 +675,21 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 			lines = append(lines, ChainLandingGroup+" = select, "+strings.Join(landing, ", "),
 				ChainRelayGroup+" = select, "+strings.Join(relay, ", "))
 		}
+		rules := []string{"GEOIP,LAN,DIRECT", "FINAL,节点选择"}
+		if opts.Rules {
+			for _, g := range rulePolicyGroups(opts, regionNames) {
+				lines = append(lines, g.name+" = select, "+strings.Join(g.members, ", "))
+			}
+			rules = surgeRules(opts)
+		}
 		lines = append(lines, regionLines...)
-		lines = append(lines, "", "[Rule]", "GEOIP,LAN,DIRECT", "FINAL,节点选择", "")
+		lines = append(append(append(lines, "", "[Rule]"), rules...), "")
 		return strings.Join(lines, "\n"), "text/plain; charset=utf-8", nil
 	}
 	return "", "", fmt.Errorf("不支持的订阅格式 %s", format)
 }
 
-func clashProfile(endpoints []Endpoint, withRegions bool) string {
+func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) string {
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
@@ -696,10 +721,12 @@ func clashProfile(endpoints []Endpoint, withRegions bool) string {
 	selectList := append([]interface{}{"自动选择"}, names...)
 	autoList := names
 	var regionNodes []interface{}
+	var regionNames []interface{}
+	var regionList []string
 	if withRegions {
-		var regionNames []interface{}
 		for _, g := range regionGroups(plain) {
 			regionNames = append(regionNames, g.name)
+			regionList = append(regionList, g.name)
 			members := make([]interface{}, len(g.members))
 			for i, m := range g.members {
 				members[i] = m
@@ -716,23 +743,39 @@ func clashProfile(endpoints []Endpoint, withRegions bool) string {
 		selectList = []interface{}{"DIRECT"}
 		autoList = []interface{}{"DIRECT"}
 	}
+	groups := []interface{}{
+		yamlNode{{"name", "节点选择"}, {"type", "select"}, {"proxies", selectList}},
+		yamlNode{{"name", "自动选择"}, {"type", "url-test"}, {"url", "https://www.gstatic.com/generate_204"},
+			{"interval", 300}, {"proxies", autoList}},
+	}
+	rules := []interface{}{"GEOIP,LAN,DIRECT,no-resolve", "MATCH,节点选择"}
+	var providers yamlNode
+	if opts.Rules {
+		for _, g := range rulePolicyGroups(opts, regionList) {
+			groups = append(groups, yamlNode{{"name", g.name}, {"type", "select"}, {"proxies", g.members}})
+		}
+		providers, rules = clashRules(opts)
+	}
 	profile := yamlNode{
 		{"mixed-port", 7890},
 		{"allow-lan", false},
 		{"mode", "rule"},
 		{"log-level", "warning"},
-		{"proxies", proxies},
-		{"proxy-groups", append([]interface{}{
-			yamlNode{{"name", "节点选择"}, {"type", "select"}, {"proxies", selectList}},
-			yamlNode{{"name", "自动选择"}, {"type", "url-test"}, {"url", "https://www.gstatic.com/generate_204"},
-				{"interval", 300}, {"proxies", autoList}},
-		}, append(chainNodes, regionNodes...)...)},
-		{"rules", []interface{}{"GEOIP,LAN,DIRECT,no-resolve", "MATCH,节点选择"}},
 	}
+	if opts.Rules {
+		profile = append(profile, clashRuleSettings()...)
+	}
+	profile = append(profile,
+		yamlField{"proxies", proxies},
+		yamlField{"proxy-groups", append(groups, append(chainNodes, regionNodes...)...)})
+	if opts.Rules {
+		profile = append(profile, yamlField{"rule-providers", providers})
+	}
+	profile = append(profile, yamlField{"rules", rules})
 	return marshalYAML(profile)
 }
 
-func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
+func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (string, error) {
 	var rendered []Endpoint
 	var obsList [][]map[string]interface{}
 	for _, e := range endpoints {
@@ -774,10 +817,12 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 	selectList := append([]interface{}{"自动选择"}, names...)
 	autoList := names
 	var regionOutbounds []interface{}
+	var regionNames []interface{}
+	var regionList []string
 	if withRegions {
-		var regionNames []interface{}
 		for _, g := range regionGroups(plain) {
 			regionNames = append(regionNames, g.name)
+			regionList = append(regionList, g.name)
 			regionOutbounds = append(regionOutbounds, map[string]interface{}{"type": "urltest", "tag": g.name,
 				"outbounds": g.members, "url": "https://www.gstatic.com/generate_204", "interval": "5m"})
 		}
@@ -790,11 +835,24 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 		selectList = []interface{}{"direct"}
 		autoList = []interface{}{"direct"}
 	}
-	groups := append([]interface{}{
+	groups := []interface{}{
 		map[string]interface{}{"type": "selector", "tag": "节点选择", "outbounds": selectList},
 		map[string]interface{}{"type": "urltest", "tag": "自动选择", "outbounds": autoList,
 			"url": "https://www.gstatic.com/generate_204", "interval": "5m"},
-	}, append(chainOutbounds, regionOutbounds...)...)
+	}
+	if opts.Rules {
+		for _, g := range rulePolicyGroups(opts, regionList) {
+			if g.members[0] == "REJECT" {
+				continue // sing-box rejects ads in the route instead
+			}
+			members := make([]string, len(g.members))
+			for i, m := range g.members {
+				members[i] = ruleTarget(m, "direct")
+			}
+			groups = append(groups, map[string]interface{}{"type": "selector", "tag": g.name, "outbounds": members})
+		}
+	}
+	groups = append(groups, append(chainOutbounds, regionOutbounds...)...)
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{"level": "warn"},
 		"inbounds": []interface{}{
@@ -813,6 +871,15 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 			},
 		},
 	}
+	if opts.Rules {
+		rules, sets, dns := singboxRules(opts)
+		route := cfg["route"].(map[string]interface{})
+		route["rules"] = append(route["rules"].([]interface{})[:2], rules...)
+		route["rule_set"] = sets
+		route["final"] = ruleFinalGroup
+		route["default_domain_resolver"] = "dns-local"
+		cfg["dns"] = dns
+	}
 	if len(wgEndpoints) > 0 {
 		cfg["endpoints"] = wgEndpoints
 	}
@@ -824,11 +891,17 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 }
 
 // uniqueNames suffixes duplicate endpoint names; Clash proxy names and
-// sing-box tags must be unique or the whole profile is rejected.
-func uniqueNames(endpoints []Endpoint) []Endpoint {
+// sing-box tags must be unique or the whole profile is rejected. With
+// rules, the rule groups' names are taken too.
+func uniqueNames(endpoints []Endpoint, rules bool) []Endpoint {
 	out := make([]Endpoint, len(endpoints))
 	seen := map[string]bool{"节点选择": true, "自动选择": true, "direct": true, "DIRECT": true, "REJECT": true,
 		ChainLandingGroup: true, ChainRelayGroup: true}
+	if rules {
+		for _, n := range ruleGroupNames() {
+			seen[n] = true
+		}
+	}
 	for _, r := range regions {
 		seen[r.name] = true
 	}
