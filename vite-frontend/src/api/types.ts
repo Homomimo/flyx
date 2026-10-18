@@ -713,6 +713,14 @@ export interface InboundSettings {
   backendPort?: number;
   portHopping?: string;
   username?: string;
+  decryption?: string;
+  encryption?: string;
+  privateKey?: string;
+  publicKey?: string;
+  peerPrivateKey?: string;
+  peerPublicKey?: string;
+  peerAddress?: string;
+  mtu?: number;
 }
 
 export interface InboundTransport {
@@ -831,6 +839,8 @@ export interface InboundShareEntry {
   port: number;
   uri: string;
   surge: string;
+  /** WireGuard client config (wg-quick format). */
+  conf?: string;
 }
 
 export interface InboundRelayApiItem {

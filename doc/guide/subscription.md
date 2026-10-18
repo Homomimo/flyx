@@ -28,7 +28,7 @@
 | Stash | Clash 配置 | `stash://` | ✓ |
 | 通用 | Base64 分享链接（v2rayN、NekoBox 等） | 仅复制 | ✗ |
 
-- 客户端不支持的协议会自动略过，例如 Loon 没有 TUIC，Quantumult X 没有 Hysteria2 / TUIC，Surge 没有 VLESS
+- 客户端不支持的协议会自动略过，例如 Loon 没有 TUIC，Quantumult X 没有 Hysteria2 / TUIC，Surge 没有 VLESS；VLESS Encryption 只在 Clash / Mihomo 和通用订阅里，WireGuard 只在 Clash / Mihomo、sing-box 和通用订阅里
 - Loon 和 Quantumult X 的节点格式没有前置代理参数，订阅里的落地节点是直连
 - 指定格式的链接：在订阅链接后加 `?format=clash`（或 `singbox`、`shadowrocket`、`loon`、`qx`、`surge`、`stash`、`base64`）
 
@@ -117,7 +117,7 @@ proxies:
 - 每个订阅有自己的 UUID / 密码，和你的凭据同时写进节点配置，互不影响
 - **停用**、**删除** 或 **到期** 后，面板会把它的凭据从节点上删掉，已导入的配置也连不上了
 - **重置链接和凭据**：旧链接和对方已导入的配置立即失效，适合链接泄露时使用
-- 支持单独凭据的协议：VLESS、VMess、Trojan、Hysteria2、TUIC、AnyTLS、NaïveProxy。Shadowsocks、Snell 和导入的节点只能共用原来的密码：停用后订阅失效，但对方已经导入的配置仍能连接（界面上会标出“共用凭据”）
+- 支持单独凭据的协议：VLESS、VMess、Trojan、Hysteria2、TUIC、AnyTLS、NaïveProxy、SOCKS5、HTTP。Shadowsocks、Snell、WireGuard 和导入的节点只能共用原来的密码：停用后订阅失效，但对方已经导入的配置仍能连接（界面上会标出“共用凭据”）
 - 3 天内到期会推送 [通知](./notify.md)
 
 ### 流量上限

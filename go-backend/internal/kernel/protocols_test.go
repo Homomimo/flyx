@@ -120,6 +120,10 @@ func TestShareNewProtocols(t *testing.T) {
 	if uri, _ := ShareURI(eps[2]); !strings.HasPrefix(uri, "wireguard://") || !strings.Contains(uri, "address=10.66.66.2%2F32") {
 		t.Fatalf("wireguard link: %s", uri)
 	}
+	if conf, ok := WireGuardConf(eps[2]); !ok || !strings.Contains(conf, "Endpoint = 203.0.113.1:51820") ||
+		!strings.Contains(conf, "PublicKey = "+eps[2].Inbound.Settings.PublicKey) {
+		t.Fatalf("wireguard conf: %s", conf)
+	}
 	if uri, _ := ShareURI(eps[3]); !strings.Contains(uri, "encryption=mlkem768x25519plus.native.0rtt.") {
 		t.Fatalf("vless encryption link: %s", uri)
 	}

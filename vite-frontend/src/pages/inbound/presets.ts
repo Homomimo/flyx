@@ -16,6 +16,9 @@ export const PROTOCOL_LABELS: Record<string, string> = {
   anytls: "AnyTLS",
   snell: "Snell",
   naive: "NaïveProxy",
+  socks: "SOCKS5",
+  http: "HTTP",
+  wireguard: "WireGuard",
 };
 
 export const KERNEL_LABELS: Record<string, string> = {
@@ -30,6 +33,7 @@ export const TRANSPORT_LABELS: Record<string, string> = {
   grpc: "gRPC",
   xhttp: "XHTTP",
   quic: "QUIC",
+  udp: "UDP",
 };
 
 export const SECURITY_LABELS: Record<string, string> = {
@@ -78,6 +82,13 @@ export interface InboundForm {
   backendPort: number;
   portHopping: string;
   username: string;
+  /** VLESS Encryption (Xray); decryption keeps the stored server key. */
+  vlessEnc: boolean;
+  decryption: string;
+  wgPrivateKey: string;
+  wgPeerPrivateKey: string;
+  wgPeerAddress: string;
+  wgMtu: string;
   transportType: string;
   path: string;
   host: string;
@@ -122,6 +133,7 @@ export interface Preset {
   transport: string;
   security: string;
   vision?: boolean;
+  vlessEnc?: boolean;
   needsDomain?: boolean;
   certMode?: string;
 }
@@ -135,6 +147,17 @@ export const PRESETS: Preset[] = [
     transport: "tcp",
     security: "reality",
     vision: true,
+  },
+  {
+    key: "vless-enc-vision",
+    label: "VLESS + Encryption + Vision",
+    description: "抗量子加密，无需域名和证书；客户端需 Xray 25.9+ 或 Mihomo",
+    kernel: "xray",
+    protocol: "vless",
+    transport: "tcp",
+    security: "none",
+    vision: true,
+    vlessEnc: true,
   },
   {
     key: "vless-xhttp-reality",
@@ -218,6 +241,31 @@ export const PRESETS: Preset[] = [
     certMode: "acme",
   },
   {
+    key: "wireguard",
+    label: "WireGuard",
+    description:
+      "组网，或给只支持 WireGuard 的设备用；所有人共用一份客户端配置",
+    protocol: "wireguard",
+    transport: "udp",
+    security: "none",
+  },
+  {
+    key: "socks5",
+    label: "SOCKS5",
+    description: "普通代理，不加密；适合内网或给其他程序用",
+    protocol: "socks",
+    transport: "tcp",
+    security: "none",
+  },
+  {
+    key: "http",
+    label: "HTTP 代理",
+    description: "普通 HTTP 代理，不加密；适合内网或给其他程序用",
+    protocol: "http",
+    transport: "tcp",
+    security: "none",
+  },
+  {
     key: "snell",
     label: "Snell",
     description: "Surge 专用协议",
@@ -274,6 +322,12 @@ export function emptyForm(
     backendPort: 0,
     portHopping: "",
     username: "",
+    vlessEnc: false,
+    decryption: "",
+    wgPrivateKey: "",
+    wgPeerPrivateKey: "",
+    wgPeerAddress: "",
+    wgMtu: "",
     transportType: "tcp",
     path: "",
     host: "",
@@ -343,6 +397,7 @@ export function applyPreset(
     transportType: preset.transport,
     securityType: preset.security,
     flowVision: Boolean(preset.vision),
+    vlessEnc: Boolean(preset.vlessEnc),
     sni,
     certMode:
       preset.certMode ?? (form.certMode === "acme" ? "self" : form.certMode),
@@ -370,6 +425,12 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     backendPort: item.settings.backendPort ?? 0,
     portHopping: item.settings.portHopping ?? "",
     username: item.settings.username ?? "",
+    vlessEnc: Boolean(item.settings.decryption),
+    decryption: item.settings.decryption ?? "",
+    wgPrivateKey: item.settings.privateKey ?? "",
+    wgPeerPrivateKey: item.settings.peerPrivateKey ?? "",
+    wgPeerAddress: item.settings.peerAddress ?? "",
+    wgMtu: item.settings.mtu ? String(item.settings.mtu) : "",
     transportType: item.transport.type || "tcp",
     path: item.transport.path ?? "",
     host: item.transport.host ?? "",
@@ -437,7 +498,12 @@ export const passwordProtocols = [
   "anytls",
   "snell",
   "naive",
+  "socks",
+  "http",
 ];
+
+/** Protocols with a username next to the password. */
+export const usernameProtocols = ["naive", "socks", "http"];
 
 /** TLS on these protocols defaults its SNI server-side, so it is optional. */
 export const sniOptionalProtocols = ["hysteria2", "tuic", "anytls"];
@@ -453,8 +519,13 @@ export function visionAllowed(form: InboundForm): boolean {
   return (
     form.protocol === "vless" &&
     form.transportType === "tcp" &&
-    form.securityType !== "none"
+    (form.securityType !== "none" || (vlessEncAllowed(form) && form.vlessEnc))
   );
+}
+
+/** VLESS Encryption is an Xray feature. */
+export function vlessEncAllowed(form: InboundForm): boolean {
+  return form.protocol === "vless" && form.kernelType === "xray";
 }
 
 export function toPayload(form: InboundForm): InboundMutationPayload {
@@ -486,9 +557,28 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
         form.protocol === "hysteria2"
           ? form.portHopping.trim() || undefined
           : undefined,
-      username:
-        form.protocol === "naive"
-          ? form.username.trim() || undefined
+      username: usernameProtocols.includes(form.protocol)
+        ? form.username.trim() || undefined
+        : undefined,
+      decryption:
+        vlessEncAllowed(form) && form.vlessEnc
+          ? form.decryption || "auto"
+          : undefined,
+      privateKey:
+        form.protocol === "wireguard"
+          ? form.wgPrivateKey || undefined
+          : undefined,
+      peerPrivateKey:
+        form.protocol === "wireguard"
+          ? form.wgPeerPrivateKey || undefined
+          : undefined,
+      peerAddress:
+        form.protocol === "wireguard"
+          ? form.wgPeerAddress.trim() || undefined
+          : undefined,
+      mtu:
+        form.protocol === "wireguard" && form.wgMtu.trim()
+          ? Number(form.wgMtu)
           : undefined,
     },
     transport: {
@@ -563,6 +653,9 @@ export function describeInbound(item: InboundApiItem): string {
     "tuic",
     "anytls",
     "naive",
+    "socks",
+    "http",
+    "wireguard",
   ];
 
   if (!implicitTransport.includes(item.protocol)) {
@@ -573,6 +666,9 @@ export function describeInbound(item: InboundApiItem): string {
   }
   if (item.security.type && item.security.type !== "none") {
     parts.push(SECURITY_LABELS[item.security.type] ?? item.security.type);
+  }
+  if (item.settings.decryption) {
+    parts.push("Encryption");
   }
   if (item.settings.flow) {
     parts.push("Vision");

@@ -163,6 +163,19 @@ func ShareURI(e Endpoint) (string, bool) {
 	return "", false
 }
 
+// WireGuardConf renders the standard client config (wg-quick format) the
+// official WireGuard apps import or scan as a QR code.
+func WireGuardConf(e Endpoint) (string, bool) {
+	in := e.Inbound
+	if e.Proxy != nil || in.Protocol != ProtocolWireGuard {
+		return "", false
+	}
+	s := in.Settings
+	return fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = %s/32\nDNS = 1.1.1.1, 8.8.8.8\nMTU = %d\n\n"+
+		"[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = %s\nPersistentKeepalive = 25\n",
+		s.PeerPrivateKey, s.PeerAddress, s.MTU, s.PublicKey, hostPort(e.Host, e.Port)), true
+}
+
 // clientProxy describes the protocols whose client side the imported-node
 // producers already cover as a Mihomo proxy, so every subscription format
 // renders them the same way.
