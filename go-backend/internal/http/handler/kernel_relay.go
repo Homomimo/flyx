@@ -516,9 +516,6 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
-	if format == "stash" {
-		format = kernel.FormatClash // Stash reads Clash profiles
-	}
 	if format == "" {
 		format = kernel.FormatForUserAgent(r.UserAgent())
 	}

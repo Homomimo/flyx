@@ -11,22 +11,22 @@
 - 新建的订阅都有自己的 UUID / 密码，和你的凭据同时写进节点配置，互不影响
 - 可以设到期日期（到期当天 23:59 后断开）和流量上限，留空就是不限；停用、到期或流量用完后，面板会把它的凭据从节点上删掉
 
-编辑时“处理”和“链式代理”默认收起（已设置的会展开），标题旁显示已开启的项目。
+编辑时“处理”“链式代理”和“分流规则”默认收起（已设置的会展开），标题旁显示已开启的项目。
 
 ## 导入到客户端
 
 点订阅打开详情，按客户端选择：**点客户端直接唤起 App 导入**，右侧按钮复制该格式的链接。也可以复制上面的通用链接，客户端按 UA 自动拿到对应格式。
 
-| 客户端 | 格式 | 一键导入 | 链式代理 |
-|--------|------|----------|----------|
-| Clash（Clash Verge、Mihomo Party、FlClash 等） | Clash / Mihomo 配置 | `clash://` | ✓ |
-| sing-box（SFA / SFI / SFM） | sing-box 配置 | `sing-box://` | ✓ |
-| Shadowrocket | Clash 节点列表 | `shadowrocket://` | ✓（每个中转各生成一个“落地（经 中转）”节点） |
-| Loon | Loon 节点 | `loon://` | ✗ |
-| Quantumult X | QX 节点 | `quantumult-x://` | ✗ |
-| Surge | Surge 配置 | `surge://` | ✓ |
-| Stash | Clash 配置 | `stash://` | ✓ |
-| 通用 | Base64 分享链接（v2rayN、NekoBox 等） | 仅复制 | ✗ |
+| 客户端 | 格式 | 一键导入 | 链式代理 | 分流规则 |
+|--------|------|----------|----------|----------|
+| Clash（Clash Verge、Mihomo Party、FlClash 等） | Clash / Mihomo 配置 | `clash://` | ✓ | ✓（需 mihomo 内核） |
+| sing-box（SFA / SFI / SFM） | sing-box 配置 | `sing-box://` | ✓ | ✓（需 1.12 及以上） |
+| Shadowrocket | Clash 节点列表 | `shadowrocket://` | ✓（每个中转各生成一个“落地（经 中转）”节点） | ✗ |
+| Loon | Loon 节点 | `loon://` | ✗ | ✗ |
+| Quantumult X | QX 节点 | `quantumult-x://` | ✗ | ✗ |
+| Surge | Surge 配置 | `surge://` | ✓ | ✓ |
+| Stash | Clash 配置 | `stash://` | ✓ | ✗ |
+| 通用 | Base64 分享链接（v2rayN、NekoBox 等） | 仅复制 | ✗ | ✗ |
 
 - 客户端不支持的协议会自动略过，例如 Loon 没有 TUIC，Quantumult X 没有 Hysteria2 / TUIC，Surge 没有 VLESS；VLESS Encryption 只在 Clash / Mihomo 和通用订阅里，WireGuard 只在 Clash / Mihomo、sing-box 和通用订阅里
 - Loon 和 Quantumult X 的节点格式没有前置代理参数，订阅里的落地节点是直连
@@ -111,6 +111,32 @@ proxies:
 - 延迟叠加，速度取决于最慢的一段；落地是 Hysteria2 / TUIC 等 UDP 协议时，中转节点要能转发 UDP
 
 > 这是客户端侧的链式。想让服务器自己把流量转到另一个节点出去（客户端无感），用入站的 [分流](./nodes.md#分流)。
+
+## 分流规则
+
+默认生成的配置只有“局域网直连、其余走节点选择”两条规则。在订阅的 **分流规则** 里打开后，Clash（mihomo）、sing-box 和 Surge 配置会带上：
+
+- **基础规则**：局域网和国内域名 / IP 走“全球直连”，境外网站走“节点选择”，剩下的走“漏网之鱼”
+- **勾选的分组**：每组是一个可单独选节点的策略组
+
+| 分组 | 默认 | 包含 |
+|------|------|------|
+| 广告拦截 | 拦截 | 常见广告域名（sing-box 里直接拦截，没有可切换的组） |
+| AI 服务 | 美国地区组 | OpenAI、Claude、Gemini 及其他境外 AI |
+| YouTube | 节点选择 | YouTube |
+| Netflix | 节点选择 | Netflix |
+| 国外媒体 | 节点选择 | Disney+、Spotify、TikTok |
+| Telegram | 节点选择 | Telegram |
+| Google | 节点选择 | Google |
+| 微软服务 | 直连 | 微软、OneDrive（GitHub 仍走节点选择） |
+| 苹果服务 | 直连 | Apple |
+| 游戏平台 | 直连 | Steam 等游戏平台（国内 CDN 始终直连） |
+
+- 打开后自动按地区分组，每个分组都能直接选地区；没有美国节点时，AI 服务默认走节点选择
+- Clash 和 sing-box 还会带上 DNS：国内域名用阿里 / 腾讯 DoH 解析，其余经节点用 Google / Cloudflare DoH 解析，避免 DNS 泄漏；Clash 另开启 fake-ip 和域名嗅探
+- 规则集是 GitHub 上的远程文件，客户端定期自动更新：Clash 用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 `.mrs`，sing-box 用同一仓库的 `.srs`，Surge 用 [blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script)
+- Clash 和 sing-box 经“节点选择”下载规则集，在国内也能下载；Surge 自己下载规则集，网络连不上 GitHub 时规则会暂时缺失
+- `.mrs` 只有 mihomo 内核能读，Stash 订阅不带分流规则；已停更的 Clash Premium / Clash for Windows 原版内核不支持
 
 ## 独立凭据
 

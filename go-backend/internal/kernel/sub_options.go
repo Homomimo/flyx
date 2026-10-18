@@ -38,6 +38,11 @@ type SubOptions struct {
 	// are dialed through the relay group (see markChain).
 	ChainLanding string
 	ChainRelay   string
+	// Rules adds routing rules, DNS and the service groups in RuleGroups
+	// (see sub_rules.go) to Mihomo, sing-box and Surge profiles; it implies
+	// RegionGroups there.
+	Rules      bool
+	RuleGroups []string
 }
 
 // RegionOther is the filter value for names without a recognized region.

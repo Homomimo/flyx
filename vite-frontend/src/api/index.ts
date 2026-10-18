@@ -672,6 +672,13 @@ export interface SubPipeline {
   /** Client-side chain: names matching chainLanding dial through the relay group. */
   chainLanding: string;
   chainRelay: string;
+  /** Routing rules, DNS and the picked service groups (Mihomo / sing-box / Surge). */
+  rules: boolean;
+  ruleGroups: string[];
+}
+export interface SubRuleGroup {
+  key: string;
+  name: string;
 }
 export interface SubscriptionItem {
   id: number;
@@ -720,9 +727,11 @@ export interface SubPreviewItem {
   chain?: "landing" | "relay";
 }
 export const getSubscriptions = () =>
-  Network.post<{ items: SubscriptionItem[]; regions: string[] }>(
-    "/subscription/list",
-  );
+  Network.post<{
+    items: SubscriptionItem[];
+    regions: string[];
+    ruleGroups: SubRuleGroup[];
+  }>("/subscription/list");
 export const saveSubscription = (data: SubscriptionDraft) =>
   Network.post<SubscriptionItem>("/subscription/save", data);
 export const deleteSubscription = (id: number) =>

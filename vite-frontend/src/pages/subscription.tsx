@@ -2,6 +2,7 @@ import type {
   RemoteSourceItem,
   SubPipeline,
   SubPreviewItem,
+  SubRuleGroup,
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
@@ -70,6 +71,8 @@ const EMPTY_PIPELINE: SubPipeline = {
   regionGroups: false,
   chainLanding: "",
   chainRelay: "",
+  rules: false,
+  ruleGroups: [],
 };
 
 function toDateInput(ms: number): string {
@@ -334,6 +337,7 @@ function Editor({
   inbounds,
   sources,
   regions,
+  ruleGroups,
   saving,
   onSave,
   onClose,
@@ -343,6 +347,7 @@ function Editor({
   inbounds: InboundApiItem[];
   sources: RemoteSourceItem[];
   regions: string[];
+  ruleGroups: SubRuleGroup[];
   saving: boolean;
   onSave: () => void;
   onClose: () => void;
@@ -691,7 +696,7 @@ function Editor({
             />
           </div>
           <ToggleRow
-            hint="Clash / sing-box / Surge 里每个地区一个自动测速组"
+            hint="Clash / sing-box / Surge 里每个地区一个自动测速组；开启分流规则时自动加上"
             id="sub-groups"
             label="按地区分组"
             value={o.regionGroups}
@@ -724,6 +729,54 @@ function Editor({
               onChange={(e) => setOpts({ chainRelay: e.target.value })}
             />
           </div>
+        </Section>
+
+        <Section
+          collapsible
+          defaultOpen={o.rules}
+          hint="给 Clash（mihomo 内核）、sing-box（1.12 及以上）、Surge 加上分流规则和防泄漏 DNS，并自动按地区分组；规则集从 GitHub 经「节点选择」下载。Stash、Shadowrocket、Loon、Quantumult X 和通用链接只有节点"
+          summary={o.rules ? `已开启，${o.ruleGroups.length} 个分组` : "未开启"}
+          title="分流规则"
+        >
+          <ToggleRow
+            hint="国内直连、境外走代理，另加下面勾选的分组"
+            id="sub-rules"
+            label="开启分流规则"
+            value={o.rules}
+            onChange={(rules) =>
+              setOpts(
+                rules && !o.rules && o.ruleGroups.length === 0
+                  ? { rules, ruleGroups: ruleGroups.map((g) => g.key) }
+                  : { rules },
+              )
+            }
+          />
+          {o.rules && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium">分组</p>
+              <p className="text-xs text-default-500">
+                每组可在客户端里单独选节点：AI
+                服务默认美国，微软、苹果、游戏默认直连，广告拦截默认拦截
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {ruleGroups.map((g) => (
+                  <Checkbox
+                    key={g.key}
+                    isSelected={o.ruleGroups.includes(g.key)}
+                    onValueChange={(on) =>
+                      setOpts({
+                        ruleGroups: on
+                          ? [...o.ruleGroups, g.key]
+                          : o.ruleGroups.filter((x) => x !== g.key),
+                      })
+                    }
+                  >
+                    <span className="text-sm">{g.name}</span>
+                  </Checkbox>
+                ))}
+              </div>
+            </div>
+          )}
         </Section>
 
         <Section title="预览">
@@ -801,6 +854,7 @@ export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
+  const [ruleGroups, setRuleGroups] = useState<SubRuleGroup[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -823,6 +877,7 @@ export default function SubscriptionPage() {
       if (subRes.code === 0 && subRes.data) {
         setSubs(subRes.data.items ?? []);
         setRegions(subRes.data.regions ?? []);
+        setRuleGroups(subRes.data.ruleGroups ?? []);
       } else {
         toast.error(subRes.msg || "加载订阅失败");
       }
@@ -1185,6 +1240,7 @@ export default function SubscriptionPage() {
                 draft={draft}
                 inbounds={inbounds}
                 regions={regions}
+                ruleGroups={ruleGroups}
                 saving={saving}
                 setDraft={setDraft}
                 sources={sources}
