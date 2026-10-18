@@ -1083,7 +1083,7 @@ export default function SubscriptionPage() {
                   >
                     复制订阅链接（自动识别客户端）
                   </Button>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-2">
                     {SUB_CLIENTS.map((c) => {
                       const link = url(detail, c.format);
                       const open = () => {
