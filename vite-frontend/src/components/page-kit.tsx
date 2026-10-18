@@ -110,6 +110,7 @@ export function PageToolbar({
   placeholder = "搜索",
   children,
   more,
+  primary,
 }: {
   search?: string;
   onSearch?: (v: string) => void;
@@ -118,6 +119,11 @@ export function PageToolbar({
   children?: React.ReactNode;
   /** Secondary actions, behind a "更多" menu. */
   more?: PageAction[];
+  /**
+   * The main action, for a tab inside a page whose header holds no
+   * action of its own.
+   */
+  primary?: PageAction;
 }) {
   const actions = (more ?? []).filter(Boolean);
 
@@ -172,6 +178,17 @@ export function PageToolbar({
             </DropdownMenu>
           </Dropdown>
         </div>
+      )}
+      {primary && (
+        <Button
+          className={actions.length > 0 ? "shrink-0" : "ml-auto shrink-0"}
+          color="primary"
+          isDisabled={primary.disabled}
+          size="sm"
+          onPress={primary.onPress}
+        >
+          {primary.label}
+        </Button>
       )}
     </div>
   );
