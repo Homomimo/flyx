@@ -23,12 +23,8 @@ import {
   saveSubscription,
 } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
-import {
-  EmptyHint,
-  ListRow,
-  PageHeader,
-  listGridClass,
-} from "@/components/page-kit";
+import { EmptyHint, PageHeader } from "@/components/page-kit";
+import { CARD_GRID, InfoCard } from "@/components/info-card";
 import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import { PageLoadingState } from "@/components/page-state";
 import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
@@ -1070,32 +1066,59 @@ export default function SubscriptionPage() {
     </>
   );
   const subCard = (s: SubscriptionItem) => (
-    <ListRow
+    <InfoCard
       key={s.id}
-      card
+      actions={[
+        {
+          key: "copy",
+          label: "复制链接",
+          color: "primary",
+          onPress: () => copyText(url(s), "订阅链接已复制"),
+        },
+        {
+          key: "import",
+          label: "导入客户端",
+          color: "secondary",
+          onPress: () => setDetail(s),
+        },
+      ]}
       badges={
-        <>
-          {stateChip(s)}
-          {s.options.rules && (
-            <Chip color="primary" size="sm" variant="flat">
-              分流
-            </Chip>
-          )}
-        </>
+        s.options.rules && (
+          <Chip color="primary" size="sm" variant="flat">
+            分流
+          </Chip>
+        )
       }
-      footer={<Usage s={s} />}
-      meta={[
-        `${s.nodeCount} 个节点 · ${sourceText(s)}`,
-        expiryLabel(s.expireTime),
-        s.remark,
-      ]
-        .filter(Boolean)
-        .join(" · ")}
-      right={actions(s)}
-      status={s.active ? "ok" : "off"}
+      headerRight={
+        <Switch
+          aria-label={`${s.enabled ? "停用" : "启用"} ${s.name}`}
+          isDisabled={toggling === s.id}
+          isSelected={s.enabled}
+          size="sm"
+          onValueChange={() => toggle(s)}
+        />
+      }
+      rows={[
+        ["节点", `${s.nodeCount} 个`],
+        ["来源", sourceText(s)],
+        ["到期", s.expireTime ? expiryLabel(s.expireTime) : "永不过期"],
+        ...(s.remark ? ([["备注", s.remark]] as Array<[string, string]>) : []),
+      ]}
+      status={
+        !s.enabled
+          ? "已停用"
+          : s.active
+            ? "生效中"
+            : s.overQuota
+              ? "流量用完"
+              : "已过期"
+      }
       title={s.name}
+      tone={!s.enabled ? "default" : s.active ? "success" : "danger"}
       onPress={() => setDetail(s)}
-    />
+    >
+      <Usage s={s} />
+    </InfoCard>
   );
   const row = (s: SubscriptionItem) => (
     <div
@@ -1164,7 +1187,13 @@ export default function SubscriptionPage() {
           <div className="flex justify-end">
             <ViewModeToggle value={viewMode} onChange={setViewMode} />
           </div>
-          <div className={listGridClass(viewMode === "card")}>
+          <div
+            className={
+              viewMode === "card"
+                ? CARD_GRID
+                : "grid grid-cols-1 gap-2 2xl:grid-cols-2"
+            }
+          >
             {subs.map(viewMode === "card" ? subCard : row)}
           </div>
         </>
