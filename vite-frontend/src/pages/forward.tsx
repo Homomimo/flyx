@@ -15,6 +15,10 @@ import {
   useSensor,
   useSensors,
   DragEndEvent,
+  type DraggableAttributes,
+  type DraggableSyntheticListeners,
+  type SensorDescriptor,
+  type SensorOptions,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -25,24 +29,27 @@ import {
 } from "@dnd-kit/sortable";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { ChevronDown, GripVertical } from "lucide-react";
 
 import { copyWithToast } from "@/utils/clipboard";
+import { ActionSheet } from "@/components/action-sheet";
+import {
+  EmptyHint,
+  ListGroup,
+  ListRow,
+  PageHeader,
+  PageToolbar,
+  type RowStatus,
+  SelectionBar,
+  formatDate,
+} from "@/components/page-kit";
 import { AnimatedPage } from "@/components/animated-page";
 import { formatTraffic } from "@/utils/traffic";
 import { BatchActionResultModal } from "@/components/batch-action-result-modal";
-import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import { Textarea } from "@/shadcn-bridge/heroui/input";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableColumn,
-  TableHeader,
-  TableRow,
-} from "@/shadcn-bridge/heroui/table";
 import {
   Modal,
   ModalContent,
@@ -52,10 +59,8 @@ import {
 } from "@/shadcn-bridge/heroui/modal";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Spinner } from "@/shadcn-bridge/heroui/spinner";
-import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { Alert } from "@/shadcn-bridge/heroui/alert";
 import { Progress } from "@/shadcn-bridge/heroui/progress";
-import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Accordion, AccordionItem } from "@/shadcn-bridge/heroui/accordion";
 import {
   createForward,
@@ -223,19 +228,6 @@ const FORWARD_GROUP_COLLAPSED_CONFIG_KEY = "forward_group_collapsed_map";
 const FORWARD_GROUP_ORDER_LOCAL_STORAGE_PREFIX = "forward-group-order";
 const FORWARD_GROUP_COLLAPSED_LOCAL_STORAGE_PREFIX = "forward-group-collapsed";
 const FORWARD_TUNNEL_GROUP_SORTABLE_PREFIX = "forward-tunnel-group";
-const FORWARD_GROUPED_TABLE_MIN_WIDTH_CLASS = "min-w-[1320px]";
-const FORWARD_GROUPED_TABLE_COLUMN_CLASS = {
-  select: "w-14",
-  drag: "w-10 pl-4",
-  name: "w-[200px]",
-  inbound: "w-[280px]",
-  target: "w-[280px]",
-  strategy: "w-[100px]",
-  totalFlow: "w-[120px]",
-  status: "w-[100px]",
-  actions: "w-[176px] text-right",
-} as const;
-
 const normalizeForwardUserName = (userName?: string): string => {
   const normalized = (userName || UNKNOWN_FORWARD_USER_NAME).trim();
 
@@ -621,27 +613,60 @@ const mapForwardApiItems = (items: ForwardApiItem[]): Forward[] => {
   }));
 };
 
-const SortableTunnelGroupContainer = ({
+const DragHandle = ({
+  attributes,
+  listeners,
+  title,
+}: {
+  attributes?: DraggableAttributes;
+  listeners?: DraggableSyntheticListeners;
+  title: string;
+}) => (
+  <span
+    className="inline-flex cursor-grab touch-none p-1 text-default-300 hover:text-default-500 active:cursor-grabbing"
+    title={title}
+    {...attributes}
+    {...listeners}
+  >
+    <GripVertical className="h-4 w-4" />
+  </span>
+);
+
+const buildSortableStyle = (
+  transform: ReturnType<typeof useSortable>["transform"],
+  transition: string | undefined,
+  isDragging: boolean,
+): React.CSSProperties => ({
+  transform: transform
+    ? CSS.Transform.toString({
+        ...transform,
+        x: Math.round(transform.x),
+        y: Math.round(transform.y),
+      })
+    : undefined,
+  transition: isDragging ? undefined : transition || undefined,
+  opacity: isDragging ? 0.55 : 1,
+  willChange: isDragging ? "transform" : undefined,
+  zIndex: isDragging ? 1 : undefined,
+  position: isDragging ? "relative" : undefined,
+});
+
+// 可拖拽的隧道分组
+const SortableTunnelGroup = ({
   groupUserId,
   tunnel,
   collapsed,
   onToggleCollapsed,
-  wrapperClassName,
-  headerClassName,
-  titleClassName,
-  countClassName,
-  bodyClassName,
+  sensors,
+  onDragEnd,
   children,
 }: {
   groupUserId: number;
   tunnel: ForwardTunnelGroup;
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  wrapperClassName: string;
-  headerClassName: string;
-  titleClassName: string;
-  countClassName: string;
-  bodyClassName: string;
+  sensors: SensorDescriptor<SensorOptions>[];
+  onDragEnd: (event: DragEndEvent) => void;
   children: React.ReactNode;
 }) => {
   const sortableId = buildTunnelGroupSortableId(groupUserId, tunnel.tunnelKey);
@@ -653,571 +678,124 @@ const SortableTunnelGroupContainer = ({
     transition,
     isDragging,
   } = useSortable({ id: sortableId });
-
-  const style: React.CSSProperties = {
-    transform: transform
-      ? CSS.Transform.toString({
-          ...transform,
-          x: Math.round(transform.x),
-          y: Math.round(transform.y),
-        })
-      : undefined,
-    transition: isDragging ? undefined : transition || undefined,
-    opacity: isDragging ? 0.55 : 1,
-    willChange: isDragging ? "transform" : undefined,
-    zIndex: isDragging ? 1 : undefined,
-  };
+  const ratio = normalizeTunnelTrafficRatio(tunnel.tunnelTrafficRatio);
 
   return (
-    <div ref={setNodeRef} className={wrapperClassName} style={style}>
-      <div className={headerClassName}>
-        <div className="flex items-center gap-2 min-w-0">
-          <Button
-            isIconOnly
-            aria-label={collapsed ? "展开分组" : "折叠分组"}
-            className="h-7 w-7 min-w-7"
-            size="sm"
-            variant="light"
-            onPress={onToggleCollapsed}
-          >
-            <svg
-              aria-hidden="true"
-              className={`h-4 w-4 transition-transform ${collapsed ? "-rotate-90" : "rotate-0"}`}
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              viewBox="0 0 24 24"
-            >
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          </Button>
-          {/* 倍率 */}
-          <span className={titleClassName}>{tunnel.tunnelName}</span>
-          <span className="text-default-500 font-semibold text-[10px] mr-1.5">
-            [{formatTunnelTrafficRatio(tunnel.tunnelTrafficRatio)}]
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={countClassName}>{tunnel.items.length} 条规则</span>
-          <div
-            className="cursor-grab active:cursor-grabbing p-1 text-default-400 hover:text-default-600 transition-colors"
-            title="拖拽分组排序"
-            {...attributes}
-            {...listeners}
-          >
-            <svg
-              aria-hidden="true"
-              className="w-4 h-4"
-              fill="currentColor"
-              viewBox="0 0 20 20"
-            >
-              <path d="M7 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 2zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 14zm6-8a2 2 0 1 1-.001-4.001A2 2 0 0 1 13 6zm0 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 14z" />
-            </svg>
-          </div>
-        </div>
-      </div>
-      {!collapsed && <div className={bodyClassName}>{children}</div>}
-    </div>
-  );
-};
-
-// 可拖拽的规则卡片组件
-const SortableForwardCard = ({ forward, renderCard }: any) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: forward.id });
-
-  const style: React.CSSProperties = {
-    transform: transform
-      ? CSS.Transform.toString({
-          ...transform,
-          x: Math.round(transform.x),
-          y: Math.round(transform.y),
-        })
-      : undefined,
-    transition: isDragging ? undefined : transition || undefined,
-    opacity: isDragging ? 0.5 : 1,
-    willChange: isDragging ? "transform" : undefined,
-  };
-
-  return (
-    <div ref={setNodeRef} className="h-full" style={style} {...attributes}>
-      {renderCard(forward, listeners)}
-    </div>
-  );
-};
-
-// 可拖拽的表格行组件
-const SortableTableRow = ({
-  copyToClipboard,
-  forward,
-  selectedIds,
-  toggleSelect,
-  getStrategyDisplay,
-  formatInAddress,
-  formatRemoteAddress,
-  handleServiceToggle,
-  handleEdit,
-  handleDelete,
-  handleDiagnose,
-  handleResetFlow,
-  showAddressModal,
-  formatFlow,
-}: any) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: forward.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition: isDragging ? "none" : transition,
-    opacity: isDragging ? 0.6 : 1,
-    zIndex: isDragging ? 50 : undefined,
-    position: isDragging ? ("relative" as const) : undefined,
-    willChange: "transform",
-    backgroundColor: isDragging ? "var(--nextui-default-100)" : undefined,
-  };
-
-  const strategyDisplay = getStrategyDisplay(forward.strategy);
-
-  return (
-    <TableRow key={forward.id} ref={setNodeRef} style={style}>
-      {true && (
-        <TableCell className={FORWARD_GROUPED_TABLE_COLUMN_CLASS.select}>
-          <Checkbox
-            isSelected={selectedIds.has(forward.id)}
-            onValueChange={(checked) => toggleSelect(forward.id, checked)}
-          />
-        </TableCell>
-      )}
-      <TableCell className={FORWARD_GROUPED_TABLE_COLUMN_CLASS.drag}>
-        <div
-          className="cursor-grab active:cursor-grabbing p-1 text-default-400 hover:text-default-600 transition-colors"
-          {...attributes}
-          {...listeners}
-          title="拖拽排序"
+    <div
+      ref={setNodeRef}
+      style={buildSortableStyle(transform, transition, isDragging)}
+    >
+      {/* 组内规则单独排序；放在 ListGroup 外，免得 DndContext 的辅助节点落进网格 */}
+      <DndContext
+        collisionDetection={pointerWithin}
+        sensors={sensors}
+        onDragEnd={onDragEnd}
+      >
+        <SortableContext
+          items={tunnel.items.map((item) => item.id).filter((id) => id > 0)}
+          strategy={rectSortingStrategy}
         >
-          <svg
-            aria-hidden="true"
-            className="w-4 h-4"
-            fill="currentColor"
-            viewBox="0 0 20 20"
-          >
-            <path d="M7 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 2zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 14zm6-8a2 2 0 1 1-.001-4.001A2 2 0 0 1 13 6zm0 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 14z" />
-          </svg>
-        </div>
-      </TableCell>
-      <TableCell
-        className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.name} whitespace-nowrap text-foreground cursor-pointer hover:text-primary transition-colors`}
-        onClick={() => copyToClipboard(forward.name, "规则名")}
-      >
-        {forward.name}
-      </TableCell>
-      <TableCell
-        className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.inbound} max-w-[280px]`}
-      >
-        <button
-          className="w-full truncate rounded-md bg-default-100/50 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
-          title={formatInAddress(forward.inIp, forward.inPort)}
-          type="button"
-          onClick={() =>
-            showAddressModal(forward.inIp, forward.inPort, "入口端口")
-          }
-        >
-          {formatInAddress(forward.inIp, forward.inPort)}
-        </button>
-      </TableCell>
-      <TableCell
-        className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.target} max-w-[280px]`}
-      >
-        <button
-          className="w-full truncate rounded-md bg-default-100/50 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all hover:bg-default-200 hover:shadow-sm cursor-pointer"
-          title={formatRemoteAddress(forward.remoteAddr)}
-          type="button"
-          onClick={() => showAddressModal(forward.remoteAddr, null, "目标地址")}
-        >
-          {formatRemoteAddress(forward.remoteAddr)}
-        </button>
-      </TableCell>
-      <TableCell className={FORWARD_GROUPED_TABLE_COLUMN_CLASS.strategy}>
-        <Chip
-          className="text-xs font-medium shrink-0 whitespace-nowrap"
-          color={strategyDisplay.color as any}
-          size="sm"
-          variant="flat"
-        >
-          {strategyDisplay.text}
-        </Chip>
-      </TableCell>
-      <TableCell
-        className={`${FORWARD_GROUPED_TABLE_COLUMN_CLASS.totalFlow} whitespace-nowrap`}
-      >
-        <span className="text-sm font-medium text-default-600 font-mono">
-          {formatFlow(getForwardDisplayFlow(forward))}
-        </span>
-      </TableCell>
-      <TableCell className={FORWARD_GROUPED_TABLE_COLUMN_CLASS.status}>
-        <div className="flex items-center gap-2.5 whitespace-nowrap">
-          <Switch
-            color="success"
-            isDisabled={forward.status !== 1 && forward.status !== 0}
-            isSelected={forward.serviceRunning}
-            size="sm"
-            onValueChange={() => handleServiceToggle(forward)}
-          />
-        </div>
-      </TableCell>
-      <TableCell className={FORWARD_GROUPED_TABLE_COLUMN_CLASS.actions}>
-        <div className="flex justify-start gap-2 pl-2">
-          <Button
-            isIconOnly
-            className="bg-primary/10 text-primary hover:bg-primary/20"
-            size="sm"
-            title="编辑"
-            onPress={() => handleEdit(forward)}
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-              />
-            </svg>
-          </Button>
-          <Button
-            isIconOnly
-            className="bg-warning/10 text-warning hover:bg-warning/20"
-            size="sm"
-            title="诊断"
-            onPress={() => handleDiagnose(forward)}
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-              />
-            </svg>
-          </Button>
-          <Button
-            isIconOnly
-            className="bg-secondary/10 text-secondary hover:bg-secondary/20"
-            isDisabled={(forward.inFlow || 0) + (forward.outFlow || 0) <= 0}
-            size="sm"
-            title="流量清零"
-            onPress={() => handleResetFlow(forward)}
-          >
-            <svg
-              aria-hidden="true"
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 00-13.657-3.657L4 8m16 8-2.343 2.657A8 8 0 014 15"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-              />
-            </svg>
-          </Button>
-          <Button
-            isIconOnly
-            className="bg-danger/10 text-danger hover:bg-danger/20"
-            size="sm"
-            title="删除"
-            onPress={() => handleDelete(forward)}
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-              />
-            </svg>
-          </Button>
-        </div>
-      </TableCell>
-    </TableRow>
-  );
-};
-
-const SortableCompactTableRow = ({
-  copyToClipboard,
-  forward,
-  selectedIds,
-  toggleSelect,
-  getStrategyDisplay,
-  formatInAddress,
-  formatRemoteAddress,
-  handleServiceToggle,
-  handleEdit,
-  handleDelete,
-  handleDiagnose,
-  handleResetFlow,
-  showAddressModal,
-  hasMultipleAddresses,
-  formatFlow,
-}: any) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: forward.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition: isDragging ? "none" : transition,
-    opacity: isDragging ? 0.6 : 1,
-    zIndex: isDragging ? 50 : undefined,
-    position: isDragging ? ("relative" as const) : undefined,
-    willChange: "transform",
-    backgroundColor: isDragging ? "var(--nextui-default-100)" : undefined,
-  };
-
-  const strategyDisplay = getStrategyDisplay(forward.strategy);
-
-  return (
-    <TableRow key={forward.id} ref={setNodeRef} style={style}>
-      {true && (
-        <TableCell>
-          <Checkbox
-            isSelected={selectedIds.has(forward.id)}
-            onValueChange={(checked) => toggleSelect(forward.id, checked)}
-          />
-        </TableCell>
-      )}
-      <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <div
-          className="cursor-grab active:cursor-grabbing p-1 text-default-400 hover:text-default-600 transition-colors"
-          {...attributes}
-          {...listeners}
-        >
-          <svg
-            aria-hidden="true"
-            className="w-4 h-4"
-            fill="currentColor"
-            viewBox="0 0 20 20"
-          >
-            <path d="M7 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 2zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 14zm6-8a2 2 0 1 1-.001-4.001A2 2 0 0 1 13 6zm0 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 14z" />
-          </svg>
-        </div>
-      </TableCell>
-      <TableCell
-        className={`whitespace-nowrap text-foreground ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <button
-          className="cursor-pointer hover:text-primary transition-colors text-left bg-transparent border-none p-0 outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 rounded-sm"
-          type="button"
-          onClick={() => copyToClipboard(forward.name, "规则名")}
-        >
-          {forward.name}
-        </button>
-      </TableCell>
-      <TableCell
-        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <div className="flex items-center">
-          <span className="font-medium text-default-700 text-sm">
-            {forward.tunnelName}
-          </span>
-          {forward.tunnelTrafficRatio !== undefined &&
-            normalizeTunnelTrafficRatio(forward.tunnelTrafficRatio) !== 1 && (
-              <span className="text-success font-bold text-[12px] ml-1.5 border border-success/30 rounded px-1 bg-success/10">
-                {formatTunnelTrafficRatio(forward.tunnelTrafficRatio)}
+          <ListGroup
+            title={
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                <button
+                  aria-expanded={!collapsed}
+                  className="flex min-w-0 items-center gap-1 text-left"
+                  title={collapsed ? "展开分组" : "折叠分组"}
+                  type="button"
+                  onClick={onToggleCollapsed}
+                >
+                  <ChevronDown
+                    className={`h-4 w-4 shrink-0 text-default-400 transition-transform ${
+                      collapsed ? "-rotate-90" : ""
+                    }`}
+                  />
+                  <span className="truncate">{tunnel.tunnelName}</span>
+                </button>
+                {ratio !== 1 && (
+                  <span className="shrink-0 text-xs font-normal text-default-500">
+                    倍率 {formatTunnelTrafficRatio(ratio)}
+                  </span>
+                )}
+                <span className="shrink-0 text-xs font-normal text-default-400">
+                  {tunnel.items.length}
+                </span>
+                <span className="-my-1 ml-auto flex shrink-0">
+                  <DragHandle
+                    attributes={attributes}
+                    listeners={listeners}
+                    title="拖动分组排序"
+                  />
+                </span>
               </span>
-            )}
-        </div>
-      </TableCell>
-      <TableCell
-        className={`max-w-[220px] ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <button
-          className={`w-full truncate rounded-md bg-default-100/50 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
-            hasMultipleAddresses(forward.inIp)
-              ? "hover:bg-default-200 hover:shadow-sm cursor-pointer"
-              : "cursor-default"
-          }`}
-          title={formatInAddress(forward.inIp, forward.inPort)}
-          type="button"
-          onClick={() =>
-            showAddressModal(forward.inIp, forward.inPort, "入口端口")
-          }
-        >
-          {formatInAddress(forward.inIp, forward.inPort)}
-        </button>
-      </TableCell>
-      <TableCell
-        className={`max-w-[240px] ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <button
-          className={`w-full truncate rounded-md bg-default-100/50 px-2.5 py-1.5 text-left font-mono text-xs font-medium text-default-700 transition-all ${
-            hasMultipleAddresses(forward.remoteAddr)
-              ? "hover:bg-default-200 hover:shadow-sm cursor-pointer"
-              : "cursor-default"
-          }`}
-          title={formatRemoteAddress(forward.remoteAddr)}
-          type="button"
-          onClick={() => showAddressModal(forward.remoteAddr, null, "目标地址")}
-        >
-          {formatRemoteAddress(forward.remoteAddr)}
-        </button>
-      </TableCell>
-
-      <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <Chip
-          className="text-sm font-medium shrink-0 whitespace-nowrap"
-          color={strategyDisplay.color as any}
-          size="sm"
-          variant="flat"
-        >
-          {strategyDisplay.text}
-        </Chip>
-      </TableCell>
-      <TableCell
-        className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <span className="text-sm font-medium text-default-600 font-mono">
-          {formatFlow(getForwardDisplayFlow(forward))}
-        </span>
-      </TableCell>
-      <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <div className="flex items-center gap-2.5 whitespace-nowrap">
-          <Switch
-            color="success"
-            isDisabled={forward.status !== 1 && forward.status !== 0}
-            isSelected={forward.serviceRunning}
-            size="sm"
-            onValueChange={() => handleServiceToggle(forward)}
-          />
-        </div>
-      </TableCell>
-      <TableCell
-        className={`${selectedIds.has(forward.id) ? "bg-primary-50/70 dark:bg-primary-900/40" : ""}`}
-      >
-        <div className="flex justify-start gap-2 pl-2">
-          <Button
-            isIconOnly
-            className="bg-primary/10 text-primary hover:bg-primary/20"
-            size="sm"
-            onPress={() => handleEdit(forward)}
+            }
           >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                strokeWidth={2}
-              />
-            </svg>
-          </Button>
-          <Button
-            isIconOnly
-            className="bg-warning/10 text-warning hover:bg-warning/20"
-            size="sm"
-            onPress={() => handleDiagnose(forward)}
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
-                strokeWidth={2}
-              />
-            </svg>
-          </Button>
-          <Button
-            isIconOnly
-            className="bg-secondary/10 text-secondary hover:bg-secondary/20"
-            isDisabled={(forward.inFlow || 0) + (forward.outFlow || 0) <= 0}
-            size="sm"
-            title="流量清零"
-            onPress={() => handleResetFlow(forward)}
-          >
-            <svg
-              aria-hidden="true"
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 00-13.657-3.657L4 8m16 8-2.343 2.657A8 8 0 014 15"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-              />
-            </svg>
-          </Button>
-          <Button
-            isIconOnly
-            className="bg-danger/10 text-danger hover:bg-danger/20"
-            size="sm"
-            onPress={() => handleDelete(forward)}
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                strokeWidth={2}
-              />
-            </svg>
-          </Button>
-        </div>
-      </TableCell>
-    </TableRow>
+            {collapsed ? null : children}
+          </ListGroup>
+        </SortableContext>
+      </DndContext>
+    </div>
   );
 };
+
+// 可拖拽的规则行
+const SortableForwardRow = ({
+  id,
+  children,
+}: {
+  id: number;
+  children: (handle: React.ReactNode) => React.ReactNode;
+}) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={buildSortableStyle(transform, transition, isDragging)}
+    >
+      {children(
+        <DragHandle
+          attributes={attributes}
+          listeners={listeners}
+          title="拖动排序"
+        />,
+      )}
+    </div>
+  );
+};
+
+const getForwardRowStatus = (status: number): RowStatus => {
+  switch (status) {
+    case 1:
+      return "ok";
+    case 0:
+      return "off";
+    case -1:
+      return "bad";
+    default:
+      return "warn";
+  }
+};
+
+const ForwardPageShell = ({
+  embedded,
+  children,
+}: {
+  embedded: boolean;
+  children: React.ReactNode;
+}) =>
+  embedded ? (
+    <div>{children}</div>
+  ) : (
+    <AnimatedPage className="px-3 lg:px-6 py-6">{children}</AnimatedPage>
+  );
 
 const getForwardDisplayFlow = (forward: Forward): number => {
   const directFlow = (forward.inFlow || 0) + (forward.outFlow || 0);
@@ -1229,7 +807,12 @@ const getForwardDisplayFlow = (forward: Forward): number => {
   return forward.federationShareFlow || 0;
 };
 
-export default function ForwardPage() {
+export default function ForwardPage({
+  embedded = false,
+}: {
+  /** Shown as a tab inside another page: no header or page padding. */
+  embedded?: boolean;
+} = {}) {
   const tokenUserId = JwtUtil.getUserIdFromToken();
   const tokenRoleId = JwtUtil.getRoleIdFromToken();
   const isAdmin = tokenRoleId === 0;
@@ -1317,17 +900,6 @@ export default function ForwardPage() {
   //   const isMobile = useMobileBreakpoint();
   // searchKeyword removed
   // isSearchVisible removed
-
-  // 显示模式状态 - 从localStorage读取，默认为平铺显示
-  const [viewMode, setViewMode] = useState<"grouped" | "direct">(() => {
-    try {
-      const savedMode = localStorage.getItem("forward-view-mode");
-
-      return (savedMode as "grouped" | "direct") || "direct";
-    } catch {
-      return "direct";
-    }
-  });
 
   // 筛选状态
   // filterUserId removed
@@ -1417,6 +989,7 @@ export default function ForwardPage() {
 
   // 批量操作相关状态
   const [selectMode, setSelectMode] = useState(false);
+  const [sheetForwardId, setSheetForwardId] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
   const [batchChangeTunnelModalOpen, setBatchChangeTunnelModalOpen] =
@@ -1966,16 +1539,6 @@ export default function ForwardPage() {
     },
     [],
   );
-
-  // 切换显示模式并保存到localStorage
-  const handleViewModeChange = () => {
-    const newMode = viewMode === "grouped" ? "direct" : "grouped";
-
-    setViewMode(newMode);
-    try {
-      localStorage.setItem("forward-view-mode", newMode);
-    } catch {}
-  };
 
   const applyForwardList = useCallback(
     async (items: Forward[]) => {
@@ -3744,24 +3307,6 @@ export default function ForwardPage() {
     );
   }, [sortedForwards, selectedIds]);
 
-  const isIndeterminate = useMemo(() => {
-    return (
-      selectedIds.size > 0 &&
-      sortedForwards &&
-      selectedIds.size < sortedForwards.length
-    );
-  }, [sortedForwards, selectedIds]);
-
-  const handleSelectAllToggle = (isSelected: boolean) => {
-    if (isSelected) {
-      const allIds = sortedForwards.map((f) => f.id);
-
-      setSelectedIds(new Set(allIds));
-    } else {
-      setSelectedIds(new Set());
-    }
-  };
-
   const toggleTunnelGroupCollapsed = (userId: number, tunnelKey: string) => {
     const collapseKey = buildTunnelGroupCollapseKey(userId, tunnelKey);
     const nextCollapsedMap: ForwardGroupCollapsedMap = {
@@ -3826,304 +3371,78 @@ export default function ForwardPage() {
     return users;
   }, [forwards, isAdmin, tokenUserId]);
 
-  // 渲染规则卡片
-  const renderForwardCard = (forward: Forward, listeners?: any) => {
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const addAction = { key: "add", label: "新建规则", onPress: handleAdd };
+  const filterCount = activeFilterCount - (searchParams.name.trim() ? 1 : 0);
+
+  const getForwardFlowText = (forward: Forward): string => {
+    if ((forward.inFlow || 0) + (forward.outFlow || 0) > 0) {
+      return `↑${formatFlow(forward.inFlow || 0)} ↓${formatFlow(forward.outFlow || 0)}`;
+    }
+
+    if ((forward.federationShareFlow || 0) > 0) {
+      return `共享 ${formatFlow(forward.federationShareFlow || 0)}`;
+    }
+
+    return formatFlow(0);
+  };
+
+  // 渲染规则行
+  const renderForwardRow = (forward: Forward, showTunnel: boolean) => {
+    const ratio = normalizeTunnelTrafficRatio(forward.tunnelTrafficRatio);
     const statusDisplay = getStatusDisplay(forward.status);
-    const strategyDisplay = getStrategyDisplay(forward.strategy);
+    const meta = [
+      `${formatInAddress(forward.inIp, forward.inPort) || "-"} → ${
+        formatRemoteAddress(forward.remoteAddr) || "-"
+      }`,
+      showTunnel ? forward.tunnelName : "",
+      formatFlow(getForwardDisplayFlow(forward)),
+    ];
 
     return (
-      <Card
-        key={forward.id}
-        className="group h-full flex flex-col overflow-hidden bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]"
-      >
-        <CardHeader className="pb-2 md:pb-2">
-          <div className="flex justify-between items-start w-full">
-            {true && (
-              <Checkbox
-                className="mr-2"
-                isSelected={selectedIds.has(forward.id)}
-                onValueChange={(checked) => toggleSelect(forward.id, checked)}
-              />
-            )}
-            <div className="flex-1 min-w-0">
-              <h3 className="font-semibold text-foreground truncate text-sm">
-                {forward.name}
-              </h3>
-            </div>
-            <div className="flex items-center gap-1.5 ml-2">
-              <Switch
-                isDisabled={forward.status !== 1 && forward.status !== 0}
-                isSelected={forward.serviceRunning}
-                size="sm"
-                onValueChange={() => handleServiceToggle(forward)}
-              />
-              <Chip
-                className="text-xs"
-                color={statusDisplay.color as any}
-                size="sm"
-                variant="flat"
-              >
-                {statusDisplay.text}
-              </Chip>
-              {viewMode === "direct" && (
-                <div
-                  className="cursor-grab active:cursor-grabbing p-1 -mr-1 text-default-400 hover:text-default-600 transition-colors touch-manipulation flex-shrink-0"
-                  {...listeners}
-                  style={{ touchAction: "none" }}
-                  title="拖拽排序"
-                >
-                  <svg
-                    aria-hidden="true"
-                    className="w-4 h-4"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path d="M7 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 2zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 7 14zm6-8a2 2 0 1 1-.001-4.001A2 2 0 0 1 13 6zm0 2a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 8zm0 6a2 2 0 1 1 .001 4.001A2 2 0 0 1 13 14z" />
-                  </svg>
-                </div>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardBody className="flex flex-1 flex-col pt-0 pb-3 md:pt-0 md:pb-3">
-          <div className="space-y-2 flex-1">
-            {/* 地址信息 */}
-            <div className="space-y-1">
-              <button
-                className={`cursor-pointer px-2 py-1 bg-white/20 dark:bg-black/20 backdrop-blur-md rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
-                  hasMultipleAddresses(forward.inIp)
-                    ? "hover:bg-default-100 dark:hover:bg-default-200/50"
-                    : ""
-                }`}
-                title={formatInAddress(forward.inIp, forward.inPort)}
-                type="button"
-                onClick={() =>
-                  showAddressModal(forward.inIp, forward.inPort, "入口端口")
-                }
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                    <span className="text-xs font-medium text-default-600 flex-shrink-0">
-                      入口:
-                    </span>
-                    <code className="text-xs font-mono text-foreground truncate min-w-0">
-                      {formatInAddress(forward.inIp, forward.inPort)}
-                    </code>
-                  </div>
-                  {hasMultipleAddresses(forward.inIp) && (
-                    <svg
-                      aria-hidden="true"
-                      className="w-3 h-3 text-default-400 flex-shrink-0"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                      />
-                    </svg>
-                  )}
-                </div>
-              </button>
-
-              <button
-                className={`cursor-pointer px-2 py-1 bg-white/20 dark:bg-black/20 backdrop-blur-md rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
-                  hasMultipleAddresses(forward.remoteAddr)
-                    ? "hover:bg-default-100 dark:hover:bg-default-200/50"
-                    : ""
-                }`}
-                title={formatRemoteAddress(forward.remoteAddr)}
-                type="button"
-                onClick={() =>
-                  showAddressModal(forward.remoteAddr, null, "目标地址")
-                }
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                    <span className="text-xs font-medium text-default-600 flex-shrink-0">
-                      目标:
-                    </span>
-                    <code className="text-xs font-mono text-foreground truncate min-w-0">
-                      {formatRemoteAddress(forward.remoteAddr)}
-                    </code>
-                  </div>
-                  {hasMultipleAddresses(forward.remoteAddr) && (
-                    <svg
-                      aria-hidden="true"
-                      className="w-3 h-3 text-default-400 flex-shrink-0"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                      />
-                    </svg>
-                  )}
-                </div>
-              </button>
-            </div>
-
-            {/* 统计信息 */}
-            <div className="flex flex-wrap items-center justify-between pt-2 border-t border-divider gap-1">
-              <Chip
-                className="text-xs whitespace-nowrap shrink-0"
-                color={strategyDisplay.color as any}
-                size="sm"
-                variant="flat"
-              >
-                {strategyDisplay.text}
-              </Chip>
-              {(forward.inFlow || 0) + (forward.outFlow || 0) > 0 ? (
-                <>
-                  <div className="flex items-center gap-1">
-                    <Chip
-                      className="text-xs whitespace-nowrap"
-                      color="primary"
-                      size="sm"
-                      variant="flat"
-                    >
-                      ↑{formatFlow(forward.inFlow || 0)}
-                    </Chip>
-                  </div>
+      <SortableForwardRow key={forward.id} id={forward.id}>
+        {(handle) => (
+          <ListRow
+            badges={
+              <>
+                {forward.status !== 1 && (
                   <Chip
-                    className="text-xs whitespace-nowrap"
-                    color="success"
+                    className="shrink-0"
+                    color={forward.status === -1 ? "danger" : "default"}
                     size="sm"
                     variant="flat"
                   >
-                    ↓{formatFlow(forward.outFlow || 0)}
+                    {statusDisplay.text}
                   </Chip>
-                </>
-              ) : (forward.federationShareFlow || 0) > 0 ? (
-                <Chip
-                  className="text-xs whitespace-nowrap"
-                  color="secondary"
-                  size="sm"
-                  variant="flat"
-                >
-                  共享 {formatFlow(forward.federationShareFlow || 0)}
-                </Chip>
-              ) : (
-                <Chip
-                  className="text-xs whitespace-nowrap"
-                  color="default"
-                  size="sm"
-                  variant="flat"
-                >
-                  总流量 {formatFlow(0)}
-                </Chip>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5 mt-3">
-            <Button
-              className="flex-1 min-h-8"
-              color="primary"
-              size="sm"
-              startContent={
-                <svg
-                  aria-hidden="true"
-                  className="w-3 h-3"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                </svg>
-              }
-              variant="flat"
-              onPress={() => handleEdit(forward)}
-            >
-              编辑
-            </Button>
-            <Button
-              className="flex-1 min-h-8"
-              color="warning"
-              size="sm"
-              startContent={
-                <svg
-                  aria-hidden="true"
-                  className="w-3 h-3"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path
-                    clipRule="evenodd"
-                    d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                    fillRule="evenodd"
-                  />
-                </svg>
-              }
-              variant="flat"
-              onPress={() => handleDiagnose(forward)}
-            >
-              诊断
-            </Button>
-            <Button
-              className="flex-1 min-h-8"
-              color="secondary"
-              isDisabled={(forward.inFlow || 0) + (forward.outFlow || 0) <= 0}
-              size="sm"
-              startContent={
-                <svg
-                  aria-hidden="true"
-                  className="w-3 h-3"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 00-13.657-3.657L4 8m16 8-2.343 2.657A8 8 0 014 15"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                  />
-                </svg>
-              }
-              variant="flat"
-              onPress={() => handleResetFlow(forward)}
-            >
-              清零
-            </Button>
-            <Button
-              className="flex-1 min-h-8"
-              color="danger"
-              size="sm"
-              startContent={
-                <svg
-                  aria-hidden="true"
-                  className="w-3 h-3"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path
-                    clipRule="evenodd"
-                    d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"
-                    fillRule="evenodd"
-                  />
-                  <path
-                    clipRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 012 0v4a1 1 0 11-2 0V7zM12 7a1 1 0 012 0v4a1 1 0 11-2 0V7z"
-                    fillRule="evenodd"
-                  />
-                </svg>
-              }
-              variant="flat"
-              onPress={() => handleDelete(forward)}
-            >
-              删除
-            </Button>
-          </div>
-        </CardBody>
-      </Card>
+                )}
+                {hasMultipleAddresses(forward.remoteAddr) && (
+                  <Chip className="shrink-0" size="sm" variant="flat">
+                    {getStrategyDisplay(forward.strategy).text}
+                  </Chip>
+                )}
+                {showTunnel && ratio !== 1 && (
+                  <Chip className="shrink-0" size="sm" variant="flat">
+                    {formatTunnelTrafficRatio(ratio)}
+                  </Chip>
+                )}
+              </>
+            }
+            meta={meta.filter(Boolean).join(" · ")}
+            right={handle}
+            selectMode={selectMode}
+            selected={selectedIds.has(forward.id)}
+            status={getForwardRowStatus(forward.status)}
+            statusTitle={statusDisplay.text}
+            title={forward.name}
+            onPress={() => setSheetForwardId(forward.id)}
+            onSelect={() => toggleSelect(forward.id)}
+          />
+        )}
+      </SortableForwardRow>
     );
   };
 
@@ -4132,193 +3451,91 @@ export default function ForwardPage() {
   }
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8">
-      {/* 页面头部 */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between mb-6 gap-3">
-        <div className="flex-1 flex items-center gap-2">
+    <ForwardPageShell embedded={embedded}>
+      {!embedded && (
+        <PageHeader
+          description="把入口端口收到的流量经隧道转发到目标地址"
+          primary={addAction}
+          title="转发规则"
+        />
+      )}
+
+      {selectMode ? (
+        <SelectionBar
+          actions={[
+            {
+              key: "enable",
+              label: "启用",
+              disabled: batchLoading,
+              onPress: () => handleBatchToggleService(true),
+            },
+            {
+              key: "disable",
+              label: "停用",
+              disabled: batchLoading,
+              onPress: () => handleBatchToggleService(false),
+            },
+            {
+              key: "redeploy",
+              label: "重新下发",
+              disabled: batchLoading,
+              onPress: handleBatchRedeploy,
+            },
+            {
+              key: "tunnel",
+              label: "换隧道",
+              disabled: batchLoading,
+              onPress: () => setBatchChangeTunnelModalOpen(true),
+            },
+            {
+              key: "delete",
+              label: "删除",
+              danger: true,
+              disabled: batchLoading,
+              onPress: () => setBatchDeleteModalOpen(true),
+            },
+          ]}
+          allSelected={isAllSelected}
+          count={selectedIds.size}
+          onExit={exitSelectMode}
+          onToggleAll={() => (isAllSelected ? deselectAll() : selectAll())}
+        />
+      ) : (
+        <PageToolbar
+          more={[
+            { key: "import", label: "导入", onPress: handleImport },
+            {
+              key: "export",
+              label: "导出",
+              disabled: exportLoading,
+              onPress: handleExport,
+            },
+            {
+              key: "batch",
+              label: "批量操作",
+              disabled: sortedForwards.length === 0,
+              onPress: () => setSelectMode(true),
+            },
+          ]}
+          placeholder="搜索规则名称"
+          primary={embedded ? addAction : undefined}
+          search={searchParams.name}
+          onSearch={(name) => setSearchParams((prev) => ({ ...prev, name }))}
+        >
           <Button
-            className="bg-default/10 dark:bg-default/20 backdrop-blur-md text-default-700 dark:text-default-300 font-semibold hover:bg-default/20 dark:hover:bg-default/30"
-            startContent={
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                />
-              </svg>
-            }
+            className="shrink-0"
+            color={filterCount > 0 ? "primary" : "default"}
+            size="sm"
+            variant="flat"
             onPress={() => setIsSearchModalOpen(true)}
           >
-            高级筛选 {activeFilterCount > 0 ? `(${activeFilterCount})` : ""}
+            {filterCount > 0 ? `筛选 · ${filterCount}` : "筛选"}
           </Button>
-          {activeFilterCount > 0 && (
-            <Button
-              color="danger"
-              size="sm"
-              variant="light"
-              onPress={resetSearchParams}
-            >
-              清空条件
-            </Button>
-          )}
-        </div>
-        <div className="min-h-9 min-w-0 max-w-full overflow-x-auto touch-pan-x">
-          <div className="flex min-h-9 w-max min-w-full items-center justify-end gap-2 whitespace-nowrap sm:gap-3 [&>*]:shrink-0">
-            {selectedIds.size > 0 ? (
-              <>
-                <span className="text-sm text-default-600 shrink-0">
-                  已选择 {selectedIds.size} 项
-                </span>
-                <Button
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={selectAll}
-                >
-                  全选
-                </Button>
-                <Button
-                  color="secondary"
-                  size="sm"
-                  variant="flat"
-                  onPress={deselectAll}
-                >
-                  清空
-                </Button>
-                <Button
-                  color="danger"
-                  isDisabled={selectedIds.size === 0}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => setBatchDeleteModalOpen(true)}
-                >
-                  删除
-                </Button>
-                <Button
-                  color="warning"
-                  isDisabled={selectedIds.size === 0}
-                  isLoading={batchLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => handleBatchToggleService(false)}
-                >
-                  停用
-                </Button>
-                <Button
-                  color="success"
-                  isDisabled={selectedIds.size === 0}
-                  isLoading={batchLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => handleBatchToggleService(true)}
-                >
-                  启用
-                </Button>
-                <Button
-                  color="primary"
-                  isDisabled={selectedIds.size === 0}
-                  isLoading={batchLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={handleBatchRedeploy}
-                >
-                  下发
-                </Button>
-                <Button
-                  color="secondary"
-                  isDisabled={selectedIds.size === 0}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => setBatchChangeTunnelModalOpen(true)}
-                >
-                  隧道
-                </Button>
-              </>
-            ) : (
-              <>
-                {/* 显示模式切换按钮 */}
-                <Button
-                  isIconOnly
-                  aria-label={
-                    viewMode === "grouped" ? "切换到直接显示" : "切换到分类显示"
-                  }
-                  className="text-sm"
-                  color="default"
-                  size="sm"
-                  title={
-                    viewMode === "grouped" ? "切换到直接显示" : "切换到分类显示"
-                  }
-                  variant="flat"
-                  onPress={handleViewModeChange}
-                >
-                  {viewMode === "grouped" ? (
-                    <svg
-                      aria-hidden="true"
-                      className="w-4 h-4"
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path
-                        clipRule="evenodd"
-                        d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2zM3 16a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2z"
-                        fillRule="evenodd"
-                      />
-                    </svg>
-                  ) : (
-                    <svg
-                      aria-hidden="true"
-                      className="w-4 h-4"
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
-                    </svg>
-                  )}
-                </Button>
-
-                {/* 导入按钮 */}
-                <Button
-                  color="warning"
-                  size="sm"
-                  variant="flat"
-                  onPress={handleImport}
-                >
-                  导入
-                </Button>
-
-                {/* 导出按钮 */}
-                <Button
-                  color="success"
-                  isLoading={exportLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={handleExport}
-                >
-                  导出
-                </Button>
-
-                <Button
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={handleAdd}
-                >
-                  新增
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
+        </PageToolbar>
+      )}
 
       {batchProgress.active && (
-        <div className="mb-4">
+        <div className="mb-3">
           <Alert
             color="primary"
             description={batchProgress.label}
@@ -4334,423 +3551,37 @@ export default function ForwardPage() {
         </div>
       )}
 
-      {/* 根据显示模式渲染不同内容 */}
-      {compactMode ? (
-        viewMode === "grouped" ? (
-          sortedForwards.length > 0 ? (
-            <>
-              <div className="flex items-center justify-between px-1 mb-3">
-                <span className="text-sm font-semibold text-foreground">
-                  全部规则
-                </span>
-                <span className="text-xs text-default-600">
-                  {sortedForwards.length} 条规则
-                </span>
-              </div>
-              <Card className="rounded-2xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_15px_35px_rgba(0,0,0,0.1)]">
-                <DndContext
-                  collisionDetection={pointerWithin}
-                  sensors={sensors}
-                  onDragEnd={handleDragEnd}
-                >
-                  <SortableContext
-                    items={sortableForwardIds}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    <Table
-                      aria-label="全部规则列表"
-                      className="table-fixed min-w-[1160px]"
-                      classNames={{
-                        wrapper:
-                          "bg-transparent p-0 shadow-none border-none overflow-auto rounded-[24px]",
-                        th: "bg-default-100/50 text-default-600 font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
-                        td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                        tr: "hover:bg-white/10 dark:hover:bg-white/5 transition-colors group",
-                      }}
-                    >
-                      <TableHeader>
-                        {true && (
-                          <TableColumn className="w-14">
-                            {/* @ts-ignore */}
-                            <Checkbox
-                              aria-label="全选"
-                              isIndeterminate={isIndeterminate}
-                              isSelected={isAllSelected}
-                              onValueChange={handleSelectAllToggle}
-                            />
-                          </TableColumn>
-                        )}
-                        <TableColumn className="w-16 pl-2 whitespace-nowrap min-w-[60px]">
-                          排序
-                        </TableColumn>
-                        <TableColumn className="w-[180px]">规则名</TableColumn>
-                        <TableColumn className="w-[180px]">
-                          隧道
-                          <sup className="text-success font-bold text-[10px] mr-1">
-                            ‾倍率
-                          </sup>
-                        </TableColumn>
-                        <TableColumn className="w-[180px]">入口</TableColumn>
-                        <TableColumn className="w-[180px]">目标</TableColumn>
-                        <TableColumn className="w-[80px]">策略</TableColumn>
-                        <TableColumn className="w-[100px]">用量</TableColumn>
-                        <TableColumn className="w-[80px]">状态</TableColumn>
-                        <TableColumn align="left" className="w-[160px] pl-4">
-                          操作
-                        </TableColumn>
-                      </TableHeader>
-                      <TableBody
-                        emptyContent="暂无规则配置"
-                        items={sortedForwards}
-                      >
-                        {(forward) => (
-                          <SortableCompactTableRow
-                            copyToClipboard={copyToClipboard}
-                            formatFlow={formatFlow}
-                            formatInAddress={formatInAddress}
-                            formatRemoteAddress={formatRemoteAddress}
-                            forward={forward}
-                            getStrategyDisplay={getStrategyDisplay}
-                            handleDelete={handleDelete}
-                            handleDiagnose={handleDiagnose}
-                            handleEdit={handleEdit}
-                            handleResetFlow={handleResetFlow}
-                            handleServiceToggle={handleServiceToggle}
-                            hasMultipleAddresses={hasMultipleAddresses}
-                            selectMode={selectMode}
-                            selectedIds={selectedIds}
-                            showAddressModal={showAddressModal}
-                            toggleSelect={toggleSelect}
-                          />
-                        )}
-                      </TableBody>
-                    </Table>
-                  </SortableContext>
-                </DndContext>
-              </Card>
-            </>
-          ) : (
-            <Card className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]">
-              <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
-                <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-                  暂无规则配置
-                </h3>
-                <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
-                  还没有创建任何规则配置，点击上方按钮开始创建
-                </p>
-              </CardBody>
-            </Card>
-          )
-        ) : sortedForwards.length > 0 ? (
-          <>
-            <div className="flex items-center justify-between px-1 mb-3">
-              <span className="text-sm font-semibold text-foreground">
-                全部规则
-              </span>
-              <span className="text-xs text-default-600">
-                {sortedForwards.length} 条规则
-              </span>
-            </div>
-            <DndContext
-              collisionDetection={pointerWithin}
-              sensors={sensors}
-              onDragEnd={handleDragEnd}
-              onDragStart={() => {}}
-            >
-              <SortableContext
-                items={sortableForwardIds}
-                strategy={rectSortingStrategy}
-              >
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                  {sortedForwards.map((forward) =>
-                    forward && forward.id ? (
-                      <SortableForwardCard
-                        key={forward.id}
-                        forward={forward}
-                        renderCard={renderForwardCard}
-                      />
-                    ) : null,
-                  )}
-                </div>
-              </SortableContext>
-            </DndContext>
-          </>
-        ) : (
-          <Card className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]">
-            <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
-              <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-                暂无规则配置
-              </h3>
-              <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
-                还没有创建任何规则配置，点击上方按钮开始创建
-              </p>
-            </CardBody>
-          </Card>
-        )
-      ) : viewMode === "grouped" ? (
-        sortedForwards.length > 0 ? (
-          <div className="space-y-4">
-            {groupedForwards.map((group) => {
-              const isSelfGroup =
-                isAdmin && tokenUserId !== null && group.userId === tokenUserId;
-              const groupForwardCount = group.tunnels.reduce(
-                (total, tunnel) => total + tunnel.items.length,
-                0,
-              );
-
-              return (
-                <div
-                  key={`grouped-table-${group.userId}-${group.userName}`}
-                  className="rounded-2xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_15px_35px_rgba(0,0,0,0.1)]"
-                >
-                  <div className="flex items-center justify-between border-b border-white/20 dark:border-white/10 bg-white/20 dark:bg-black/20 backdrop-blur-3xl px-5 py-4">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">
-                        {group.userName}
-                      </span>
-                      {isSelfGroup && (
-                        <Chip color="primary" size="sm" variant="flat">
-                          管理员本人
-                        </Chip>
-                      )}
-                    </div>
-                    <span className="text-xs text-default-600">
-                      {groupForwardCount} 条规则
-                    </span>
-                  </div>
-
-                  <div className="space-y-4 p-4">
-                    <DndContext
-                      collisionDetection={pointerWithin}
-                      sensors={sensors}
-                      onDragEnd={handleDragEnd}
-                    >
-                      <SortableContext
-                        items={group.tunnels.map((tunnel) =>
-                          buildTunnelGroupSortableId(
-                            group.userId,
-                            tunnel.tunnelKey,
-                          ),
-                        )}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        {group.tunnels.map((tunnel) => {
-                          const tunnelSortableForwardIds = tunnel.items
-                            .map((item) => item.id)
-                            .filter((id) => id > 0);
-                          const tunnelSelectedCount =
-                            tunnelSortableForwardIds.reduce(
-                              (count, id) =>
-                                count + (selectedIds.has(id) ? 1 : 0),
-                              0,
-                            );
-                          const isTunnelAllSelected =
-                            tunnelSortableForwardIds.length > 0 &&
-                            tunnelSelectedCount ===
-                              tunnelSortableForwardIds.length;
-                          const isTunnelIndeterminate =
-                            tunnelSelectedCount > 0 &&
-                            tunnelSelectedCount <
-                              tunnelSortableForwardIds.length;
-
-                          const handleTunnelSelectAllToggle = (
-                            isSelected: boolean,
-                          ) => {
-                            setSelectedIds((prev) => {
-                              const next = new Set(prev);
-
-                              if (isSelected) {
-                                tunnelSortableForwardIds.forEach((id) => {
-                                  next.add(id);
-                                });
-
-                                return next;
-                              }
-
-                              tunnelSortableForwardIds.forEach((id) => {
-                                next.delete(id);
-                              });
-
-                              return next;
-                            });
-                          };
-                          const collapsed =
-                            sanitizedCollapsedTunnelGroups[
-                              buildTunnelGroupCollapseKey(
-                                group.userId,
-                                tunnel.tunnelKey,
-                              )
-                            ] === true;
-
-                          return (
-                            <SortableTunnelGroupContainer
-                              key={`grouped-table-${group.userId}-${tunnel.tunnelKey}`}
-                              bodyClassName=""
-                              collapsed={collapsed}
-                              countClassName="text-xs text-default-600"
-                              groupUserId={group.userId}
-                              headerClassName="flex items-center justify-between border-b border-white/20 dark:border-white/10 bg-white/20 dark:bg-black/20 backdrop-blur-3xl px-4 py-2.5"
-                              titleClassName="truncate text-sm font-semibold text-default-700"
-                              tunnel={tunnel}
-                              wrapperClassName="rounded-2xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_15px_35px_rgba(0,0,0,0.1)]"
-                              onToggleCollapsed={() =>
-                                toggleTunnelGroupCollapsed(
-                                  group.userId,
-                                  tunnel.tunnelKey,
-                                )
-                              }
-                            >
-                              <DndContext
-                                collisionDetection={pointerWithin}
-                                sensors={sensors}
-                                onDragEnd={handleDragEnd}
-                              >
-                                <SortableContext
-                                  items={tunnelSortableForwardIds}
-                                  strategy={verticalListSortingStrategy}
-                                >
-                                  <Table
-                                    aria-label={`${group.userName}-${tunnel.tunnelName}规则列表`}
-                                    className={`table-fixed ${FORWARD_GROUPED_TABLE_MIN_WIDTH_CLASS}`}
-                                    classNames={{
-                                      wrapper:
-                                        "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                                      th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
-                                      td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                                      tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
-                                    }}
-                                  >
-                                    <TableHeader>
-                                      {true && (
-                                        <TableColumn className="w-14">
-                                          {/* @ts-ignore */}
-                                          <Checkbox
-                                            aria-label="全选"
-                                            isIndeterminate={
-                                              isTunnelIndeterminate
-                                            }
-                                            isSelected={isTunnelAllSelected}
-                                            onValueChange={
-                                              handleTunnelSelectAllToggle
-                                            }
-                                          />
-                                        </TableColumn>
-                                      )}
-                                      <TableColumn
-                                        className={
-                                          FORWARD_GROUPED_TABLE_COLUMN_CLASS.drag
-                                        }
-                                      />
-                                      <TableColumn
-                                        className={
-                                          FORWARD_GROUPED_TABLE_COLUMN_CLASS.name
-                                        }
-                                      >
-                                        名称
-                                      </TableColumn>
-                                      <TableColumn
-                                        className={
-                                          FORWARD_GROUPED_TABLE_COLUMN_CLASS.inbound
-                                        }
-                                      >
-                                        入口
-                                      </TableColumn>
-                                      <TableColumn
-                                        className={
-                                          FORWARD_GROUPED_TABLE_COLUMN_CLASS.target
-                                        }
-                                      >
-                                        目标
-                                      </TableColumn>
-                                      <TableColumn
-                                        className={
-                                          FORWARD_GROUPED_TABLE_COLUMN_CLASS.strategy
-                                        }
-                                      >
-                                        策略
-                                      </TableColumn>
-                                      <TableColumn
-                                        className={
-                                          FORWARD_GROUPED_TABLE_COLUMN_CLASS.totalFlow
-                                        }
-                                      >
-                                        总流量
-                                      </TableColumn>
-                                      <TableColumn
-                                        className={
-                                          FORWARD_GROUPED_TABLE_COLUMN_CLASS.status
-                                        }
-                                      >
-                                        状态
-                                      </TableColumn>
-                                      <TableColumn
-                                        className={
-                                          FORWARD_GROUPED_TABLE_COLUMN_CLASS.actions
-                                        }
-                                      >
-                                        操作
-                                      </TableColumn>
-                                    </TableHeader>
-                                    <TableBody
-                                      emptyContent="暂无规则配置"
-                                      items={tunnel.items}
-                                    >
-                                      {(forward) => (
-                                        <SortableTableRow
-                                          copyToClipboard={copyToClipboard}
-                                          formatFlow={formatFlow}
-                                          formatInAddress={formatInAddress}
-                                          formatRemoteAddress={
-                                            formatRemoteAddress
-                                          }
-                                          forward={forward}
-                                          getStrategyDisplay={
-                                            getStrategyDisplay
-                                          }
-                                          handleDelete={handleDelete}
-                                          handleDiagnose={handleDiagnose}
-                                          handleEdit={handleEdit}
-                                          handleResetFlow={handleResetFlow}
-                                          handleServiceToggle={
-                                            handleServiceToggle
-                                          }
-                                          hasMultipleAddresses={
-                                            hasMultipleAddresses
-                                          }
-                                          selectMode={selectMode}
-                                          selectedIds={selectedIds}
-                                          showAddressModal={showAddressModal}
-                                          toggleSelect={toggleSelect}
-                                        />
-                                      )}
-                                    </TableBody>
-                                  </Table>
-                                </SortableContext>
-                              </DndContext>
-                            </SortableTunnelGroupContainer>
-                          );
-                        })}
-                      </SortableContext>
-                    </DndContext>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <Card className="bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl border border-white/80 dark:border-white/10 shadow-[0_15px_35px_rgba(0,0,0,0.1)]">
-            <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
-              <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-                暂无规则配置
-              </h3>
-              <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
-                还没有创建任何规则配置，点击上方按钮开始创建
-              </p>
-            </CardBody>
-          </Card>
-        )
-      ) : sortedForwards.length > 0 ? (
-        <div className="space-y-5">
+      {forwards.length === 0 ? (
+        <EmptyHint
+          action={addAction}
+          text="还没有转发规则。新建一条，把入口端口的流量转发到目标地址"
+        />
+      ) : sortedForwards.length === 0 ? (
+        <EmptyHint
+          action={{
+            key: "reset",
+            label: "清空条件",
+            onPress: resetSearchParams,
+          }}
+          text="没有匹配的规则"
+        />
+      ) : compactMode ? (
+        <DndContext
+          collisionDetection={pointerWithin}
+          sensors={sensors}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={sortableForwardIds}
+            strategy={rectSortingStrategy}
+          >
+            <ListGroup>
+              {sortedForwards.map((forward) => renderForwardRow(forward, true))}
+            </ListGroup>
+          </SortableContext>
+        </DndContext>
+      ) : (
+        <div className="space-y-6">
           {groupedForwards.map((group) => {
             const isSelfGroup =
               isAdmin && tokenUserId !== null && group.userId === tokenUserId;
@@ -4760,116 +3591,211 @@ export default function ForwardPage() {
             );
 
             return (
-              <div
-                key={`direct-group-${group.userId}-${group.userName}`}
-                className="space-y-3"
+              <section
+                key={`group-${group.userId}-${group.userName}`}
+                className="space-y-4"
               >
-                <div className="flex items-center justify-between px-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-foreground">
+                {groupedForwards.length > 1 && (
+                  <div className="flex items-center gap-2 px-1">
+                    <span className="text-sm font-semibold">
                       {group.userName}
                     </span>
                     {isSelfGroup && (
-                      <Chip color="primary" size="sm" variant="flat">
-                        管理员本人
+                      <Chip size="sm" variant="flat">
+                        我的
                       </Chip>
                     )}
+                    <span className="text-xs text-default-400">
+                      {groupForwardCount} 条规则
+                    </span>
                   </div>
-                  <span className="text-xs text-default-600">
-                    {groupForwardCount} 条规则
-                  </span>
-                </div>
-
-                <div className="space-y-4">
-                  <DndContext
-                    collisionDetection={pointerWithin}
-                    sensors={sensors}
-                    onDragEnd={handleDragEnd}
+                )}
+                <DndContext
+                  collisionDetection={pointerWithin}
+                  sensors={sensors}
+                  onDragEnd={handleDragEnd}
+                >
+                  <SortableContext
+                    items={group.tunnels.map((tunnel) =>
+                      buildTunnelGroupSortableId(
+                        group.userId,
+                        tunnel.tunnelKey,
+                      ),
+                    )}
+                    strategy={verticalListSortingStrategy}
                   >
-                    <SortableContext
-                      items={group.tunnels.map((tunnel) =>
-                        buildTunnelGroupSortableId(
-                          group.userId,
-                          tunnel.tunnelKey,
-                        ),
-                      )}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      {group.tunnels.map((tunnel) => {
-                        const tunnelSortableForwardIds = tunnel.items
-                          .map((item) => item.id)
-                          .filter((id) => id > 0);
-                        const collapsed =
-                          sanitizedCollapsedTunnelGroups[
-                            buildTunnelGroupCollapseKey(
-                              group.userId,
-                              tunnel.tunnelKey,
-                            )
-                          ] === true;
-
-                        return (
-                          <SortableTunnelGroupContainer
-                            key={`direct-group-${group.userId}-${tunnel.tunnelKey}`}
-                            bodyClassName="p-3"
-                            collapsed={collapsed}
-                            countClassName="text-xs text-default-600"
-                            groupUserId={group.userId}
-                            headerClassName="flex items-center justify-between rounded-lg bg-white/10 dark:bg-black/10 backdrop-blur-md border border-white/20 dark:border-white/10 px-3 py-2"
-                            titleClassName="truncate text-sm font-semibold text-default-700"
-                            tunnel={tunnel}
-                            wrapperClassName="rounded-xl border border-divider bg-white/5 dark:bg-black/5 space-y-3"
-                            onToggleCollapsed={() =>
-                              toggleTunnelGroupCollapsed(
+                    <div className="space-y-4">
+                      {group.tunnels.map((tunnel) => (
+                        <SortableTunnelGroup
+                          key={`group-${group.userId}-${tunnel.tunnelKey}`}
+                          collapsed={
+                            sanitizedCollapsedTunnelGroups[
+                              buildTunnelGroupCollapseKey(
                                 group.userId,
                                 tunnel.tunnelKey,
                               )
-                            }
-                          >
-                            <DndContext
-                              collisionDetection={pointerWithin}
-                              sensors={sensors}
-                              onDragEnd={handleDragEnd}
-                              onDragStart={() => {}}
-                            >
-                              <SortableContext
-                                items={tunnelSortableForwardIds}
-                                strategy={rectSortingStrategy}
-                              >
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                                  {tunnel.items.map((forward) =>
-                                    forward && forward.id ? (
-                                      <SortableForwardCard
-                                        key={forward.id}
-                                        forward={forward}
-                                        renderCard={renderForwardCard}
-                                      />
-                                    ) : null,
-                                  )}
-                                </div>
-                              </SortableContext>
-                            </DndContext>
-                          </SortableTunnelGroupContainer>
-                        );
-                      })}
-                    </SortableContext>
-                  </DndContext>
-                </div>
-              </div>
+                            ] === true
+                          }
+                          groupUserId={group.userId}
+                          sensors={sensors}
+                          tunnel={tunnel}
+                          onDragEnd={handleDragEnd}
+                          onToggleCollapsed={() =>
+                            toggleTunnelGroupCollapsed(
+                              group.userId,
+                              tunnel.tunnelKey,
+                            )
+                          }
+                        >
+                          {tunnel.items.map((forward) =>
+                            renderForwardRow(forward, false),
+                          )}
+                        </SortableTunnelGroup>
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+              </section>
             );
           })}
         </div>
-      ) : (
-        <Card>
-          <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
-            <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-              暂无规则配置
-            </h3>
-            <p className="text-default-500 text-sm max-w-xs mx-auto leading-relaxed">
-              还没有创建任何规则配置，点击上方按钮开始创建
-            </p>
-          </CardBody>
-        </Card>
       )}
+
+      {(() => {
+        const forward = forwards.find((f) => f.id === sheetForwardId) ?? null;
+        const close = () => setSheetForwardId(null);
+        const directFlow = forward
+          ? (forward.inFlow || 0) + (forward.outFlow || 0)
+          : 0;
+        const rows: Array<[string, React.ReactNode]> = forward
+          ? ([
+              [
+                "入口",
+                forward.inIp
+                  .split(",")
+                  .map((ip) => ip.trim())
+                  .filter(Boolean)
+                  .map((ip) => formatInAddress(ip, forward.inPort))
+                  .join("\n") || "-",
+              ],
+              [
+                "目标",
+                forward.remoteAddr
+                  .split(",")
+                  .map((addr) => addr.trim())
+                  .filter(Boolean)
+                  .join("\n") || "-",
+              ],
+              [
+                "隧道",
+                `${forward.tunnelName || UNCATEGORIZED_FORWARD_TUNNEL_NAME}${
+                  normalizeTunnelTrafficRatio(forward.tunnelTrafficRatio) !== 1
+                    ? `（倍率 ${formatTunnelTrafficRatio(forward.tunnelTrafficRatio)}）`
+                    : ""
+                }`,
+              ],
+              isAdmin
+                ? ["用户", normalizeForwardUserName(forward.userName)]
+                : null,
+              hasMultipleAddresses(forward.remoteAddr)
+                ? ["策略", getStrategyDisplay(forward.strategy).text]
+                : null,
+              ["流量", getForwardFlowText(forward)],
+              (forward.maxConn || 0) > 0
+                ? ["最大连接", String(forward.maxConn)]
+                : null,
+              (forward.ipMaxConn || 0) > 0
+                ? ["每 IP 连接", String(forward.ipMaxConn)]
+                : null,
+              forward.ipSpeedLimitName
+                ? ["每 IP 限速", forward.ipSpeedLimitName]
+                : null,
+              formatDate(forward.createdTime, true)
+                ? ["创建时间", formatDate(forward.createdTime, true)]
+                : null,
+            ].filter(Boolean) as Array<[string, React.ReactNode]>)
+          : [];
+
+        return (
+          <ActionSheet
+            actions={
+              !forward
+                ? []
+                : [
+                    {
+                      key: "edit",
+                      label: "编辑",
+                      color: "primary" as const,
+                      onPress: () => handleEdit(forward),
+                    },
+                    {
+                      key: "toggle",
+                      label: forward.serviceRunning ? "暂停" : "启用",
+                      disabled: forward.status !== 1 && forward.status !== 0,
+                      onPress: () => handleServiceToggle(forward),
+                    },
+                    {
+                      key: "diagnose",
+                      label: "诊断",
+                      onPress: () => handleDiagnose(forward),
+                    },
+                    {
+                      key: "copy-in",
+                      label: "复制入口",
+                      disabled: !formatInAddress(forward.inIp, forward.inPort),
+                      onPress: () =>
+                        showAddressModal(
+                          forward.inIp,
+                          forward.inPort,
+                          "入口端口",
+                        ),
+                    },
+                    {
+                      key: "copy-target",
+                      label: "复制目标",
+                      disabled: !forward.remoteAddr,
+                      onPress: () =>
+                        showAddressModal(forward.remoteAddr, null, "目标地址"),
+                    },
+                    {
+                      key: "copy-name",
+                      label: "复制名称",
+                      onPress: () => copyToClipboard(forward.name, "规则名"),
+                    },
+                    {
+                      key: "reset-flow",
+                      label: "流量清零",
+                      disabled: directFlow <= 0,
+                      onPress: () => handleResetFlow(forward),
+                    },
+                    {
+                      key: "delete",
+                      label: "删除",
+                      color: "danger" as const,
+                      onPress: () => handleDelete(forward),
+                    },
+                  ]
+            }
+            isOpen={Boolean(forward)}
+            subtitle={forward && getStatusDisplay(forward.status).text}
+            title={forward?.name ?? ""}
+            onClose={close}
+          >
+            {forward && (
+              <div className="space-y-2 text-sm">
+                {rows.map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-3">
+                    <span className="shrink-0 text-default-500">{k}</span>
+                    <span className="min-w-0 whitespace-pre-line break-all text-right font-mono text-xs leading-5">
+                      {v}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ActionSheet>
+        );
+      })()}
 
       {/* 新增/编辑模态框 */}
       <Modal
@@ -6420,26 +5346,13 @@ export default function ForwardPage() {
         onOpenChange={setIsSearchModalOpen}
       >
         <ModalContent>
-          {() => (
+          {(onClose) => (
             <>
               <ModalHeader className="flex flex-col gap-1">
-                搜索筛选用户规则
+                筛选规则
               </ModalHeader>
               <ModalBody>
                 <div className="flex flex-col gap-4 py-2">
-                  <Input
-                    label="规则名称 (模糊)"
-                    placeholder="请输入规则名称关键字"
-                    value={searchParams.name}
-                    variant="bordered"
-                    onChange={(e) =>
-                      setSearchParams((prev) => ({
-                        ...prev,
-                        name: e.target.value,
-                      }))
-                    }
-                  />
-
                   {isAdmin && (
                     <Select
                       label="所属用户"
@@ -6515,12 +5428,11 @@ export default function ForwardPage() {
                 </div>
               </ModalBody>
               <ModalFooter>
-                <Button
-                  color="primary"
-                  variant="flat"
-                  onPress={resetSearchParams}
-                >
+                <Button variant="flat" onPress={resetSearchParams}>
                   重置
+                </Button>
+                <Button color="primary" onPress={onClose}>
+                  完成
                 </Button>
               </ModalFooter>
             </>
@@ -6543,6 +5455,6 @@ export default function ForwardPage() {
           setBatchResultModal(EMPTY_BATCH_RESULT_MODAL_STATE);
         }}
       />
-    </AnimatedPage>
+    </ForwardPageShell>
   );
 }
