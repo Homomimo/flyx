@@ -68,6 +68,11 @@ func singboxChainOutbounds(via Endpoint, tag string, mark int64) ([]interface{},
 	if !ok {
 		return nil, fmt.Errorf("sing-box 无法连接 %s 类型的出站节点", chainTargetLabel(via))
 	}
+	for _, o := range obs {
+		if o["type"] == "wireguard" {
+			return nil, errors.New("WireGuard 节点不能用作出站，请选其他节点")
+		}
+	}
 	out := make([]interface{}, 0, len(obs))
 	for _, o := range obs {
 		if _, detour := o["detour"]; !detour && mark != 0 {
@@ -204,6 +209,8 @@ type chainTarget struct {
 	PinSHA256      string
 	RealityPublic  string
 	RealityShortID string
+	// Encryption is the VLESS Encryption client setting ("" for none).
+	Encryption string
 }
 
 func chainTargetLabel(e Endpoint) string {
@@ -226,6 +233,7 @@ func chainTargetFromInbound(e Endpoint) (chainTarget, error) {
 	switch in.Protocol {
 	case ProtocolVLESS:
 		t.Protocol, t.UUID, t.Flow = "vless", in.Settings.UUID, in.Settings.Flow
+		t.Encryption = in.Settings.Encryption
 	case ProtocolVMess:
 		t.Protocol, t.UUID, t.Cipher = "vmess", in.Settings.UUID, "auto"
 	case ProtocolTrojan:
@@ -271,6 +279,11 @@ func chainTargetFromProxy(e Endpoint) (chainTarget, error) {
 	switch p.Type() {
 	case "vless":
 		t.Protocol, t.UUID, t.Flow = "vless", p.str("uuid"), p.str("flow")
+		if hasVLESSEncryption(p) {
+			t.Encryption = p.str("encryption")
+		}
+	case "wireguard":
+		return t, errors.New("WireGuard 节点不能用作出站，请选其他节点")
 	case "vmess":
 		t.Protocol, t.UUID, t.Cipher = "vmess", p.str("uuid"), firstNonEmptyString(p.str("cipher"), "auto")
 	case "trojan":
@@ -332,6 +345,9 @@ func chainTargetFromProxy(e Endpoint) (chainTarget, error) {
 func xrayChainOutbound(e Endpoint, tag string) (obj, error) {
 	var t chainTarget
 	var err error
+	if p, ok := clientProxy(e); ok && e.Proxy == nil {
+		e.Proxy = p
+	}
 	if e.Proxy != nil {
 		t, err = chainTargetFromProxy(e)
 	} else {
@@ -347,7 +363,7 @@ func xrayChainOutbound(e Endpoint, tag string) (obj, error) {
 	var settings obj
 	switch t.Protocol {
 	case "vless":
-		user := obj{"id": t.UUID, "encryption": "none"}
+		user := obj{"id": t.UUID, "encryption": firstNonEmptyString(t.Encryption, "none")}
 		if t.Flow != "" {
 			user["flow"] = t.Flow
 		}

@@ -235,7 +235,7 @@ func Normalize(kernelType string, in *Inbound) error {
 
 	in.Transport.Type = strings.ToLower(strings.TrimSpace(in.Transport.Type))
 	if in.Transport.Type == "" {
-		in.Transport.Type = TransportTCP
+		in.Transport.Type = proto.Transports[0].Type
 	}
 	tcap, ok := proto.transport(in.Transport.Type)
 	if !ok {

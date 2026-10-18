@@ -730,6 +730,7 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 	}
 	landing, relay, chain := chainGroups(rendered)
 	outbounds := []interface{}{}
+	var wgEndpoints []interface{}
 	names := []interface{}{}
 	var plain []string
 	for i, e := range rendered {
@@ -738,6 +739,12 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 			// group; a ShadowTLS pair's inner one already detours.
 			if _, detour := o["detour"]; chain && e.ChainRole == ChainRoleLanding && !detour {
 				o["detour"] = ChainRelayGroup
+			}
+			if o["type"] == "wireguard" {
+				// WireGuard is an endpoint in sing-box 1.11+; groups still
+				// reference it by tag.
+				wgEndpoints = append(wgEndpoints, o)
+				continue
 			}
 			outbounds = append(outbounds, o)
 		}
@@ -792,6 +799,9 @@ func singboxProfile(endpoints []Endpoint, withRegions bool) (string, error) {
 				map[string]interface{}{"ip_is_private": true, "outbound": "direct"},
 			},
 		},
+	}
+	if len(wgEndpoints) > 0 {
+		cfg["endpoints"] = wgEndpoints
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

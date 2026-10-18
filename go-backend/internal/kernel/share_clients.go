@@ -48,7 +48,7 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
-		if p, ok := ClashProxy(e); ok {
+		if p, ok := ClashProxy(e); ok && !shadowrocketSkips(Proxy(yamlToMap(p))) {
 			rendered = append(rendered, e)
 			nodes = append(nodes, p)
 		}
@@ -100,7 +100,16 @@ var loonSSCiphers = toSet([]string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", 
 	"xchacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "aes-128-cfb", "aes-256-cfb",
 	"chacha20", "chacha20-ietf", "rc4-md5"})
 
+// shadowrocketSkips lists what the Shadowrocket profile leaves out because
+// its Clash-list import is not known to handle it.
+func shadowrocketSkips(p Proxy) bool {
+	return hasVLESSEncryption(p) || p.Type() == "wireguard"
+}
+
 func loonLine(p Proxy) (string, bool) {
+	if hasVLESSEncryption(p) || p.Type() == "wireguard" {
+		return "", false
+	}
 	server, port := p.str("server"), p.num("port")
 	parts := []string{}
 	add := func(s ...string) { parts = append(parts, s...) }
@@ -263,6 +272,9 @@ var qxSSCiphers = toSet([]string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "c
 	"chacha20", "chacha20-ietf", "rc4-md5", "none"})
 
 func qxLine(p Proxy) (string, bool) {
+	if hasVLESSEncryption(p) || p.Type() == "wireguard" {
+		return "", false
+	}
 	parts := []string{fmt.Sprintf("%s:%d", p.str("server"), p.num("port"))}
 	add := func(s ...string) { parts = append(parts, s...) }
 	addIf := func(key, v string) {
