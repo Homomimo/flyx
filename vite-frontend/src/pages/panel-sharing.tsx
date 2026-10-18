@@ -1,10 +1,22 @@
+import type { RowStatus } from "@/components/page-kit";
+
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "react-hot-toast";
 
 import { copyWithToast } from "@/utils/clipboard";
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
-import { Tabs, Tab } from "@/shadcn-bridge/heroui/tabs";
+import { Chip } from "@/shadcn-bridge/heroui/chip";
+import { AnimatedPage } from "@/components/animated-page";
+import { ActionSheet } from "@/components/action-sheet";
+import { PageLoadingState } from "@/components/page-state";
+import {
+  EmptyHint,
+  ListGroup,
+  ListRow,
+  PageHeader,
+  PageTabs,
+  formatDate,
+} from "@/components/page-kit";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import { TrafficLimitField } from "@/components/traffic-limit-field";
 import {
@@ -95,7 +107,11 @@ interface RemoteUsageNode {
 const MAX_SAFE_BANDWIDTH_MIB = Math.floor(Number.MAX_SAFE_INTEGER / MIB);
 
 export default function PanelSharingPage() {
-  const [selectedTab, setSelectedTab] = useState("my-shares");
+  const [selectedTab, setSelectedTab] = useState<"my-shares" | "remote-nodes">(
+    "my-shares",
+  );
+  const [sheetShareId, setSheetShareId] = useState<number | null>(null);
+  const [sheetRemoteId, setSheetRemoteId] = useState<number | null>(null);
   const [shares, setShares] = useState<PeerShare[]>([]);
   const [remoteUsageNodes, setRemoteUsageNodes] = useState<RemoteUsageNode[]>(
     [],
@@ -417,287 +433,304 @@ export default function PanelSharingPage() {
     return "未知链路";
   };
 
+  const isShareExpired = (share: PeerShare) =>
+    share.expiryTime > 0 && share.expiryTime < Date.now();
+
+  const shareStatus = (share: PeerShare): [RowStatus, string] => {
+    if (share.isActive !== 1) return ["off", "已停用"];
+    if (isShareExpired(share)) return ["bad", "已过期"];
+
+    return ["ok", "生效中"];
+  };
+
+  const formatSyncError = (syncError: string) =>
+    syncError === "provider_share_deleted"
+      ? "提供方已删除该分享"
+      : syncError === "provider_share_disabled"
+        ? "提供方已禁用该分享"
+        : syncError === "provider_share_expired"
+          ? "提供方分享已过期"
+          : `远程同步失败: ${syncError}`;
+
+  const formatPortRange = (start: number, end: number) =>
+    start > 0 && end > 0 ? `${start}-${end}` : "-";
+
+  const formatFlowUsage = (current: number, max: number) =>
+    `${formatFlowGB(current || 0)} / ${max > 0 ? formatFlowGB(max) : "不限"}`;
+
+  const sheetShare = shares.find((item) => item.id === sheetShareId) ?? null;
+  const sheetRemote =
+    remoteUsageNodes.find((item) => item.nodeId === sheetRemoteId) ?? null;
+
+  const renderDetails = (rows: Array<[string, React.ReactNode]>) => (
+    <div className="space-y-2 text-sm">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex justify-between gap-3">
+          <span className="shrink-0 text-default-500">{k}</span>
+          <span className="min-w-0 break-all text-right font-mono text-xs leading-5">
+            {v}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
-    <div className="p-4 md:p-6 space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">面板共享 (Panel Peering)</h1>
-      </div>
+    <AnimatedPage className="px-3 lg:px-6 py-6">
+      <PageHeader
+        description="分享本地节点给其他面板，或导入别人的节点"
+        primary={
+          selectedTab === "my-shares"
+            ? {
+                key: "create",
+                label: "新建分享",
+                onPress: () => setCreateShareOpen(true),
+              }
+            : {
+                key: "import",
+                label: "导入远程节点",
+                onPress: () => setImportNodeOpen(true),
+              }
+        }
+        title="面板共享"
+      />
+      <PageTabs
+        tabs={[
+          { key: "my-shares", label: "我分享的" },
+          { key: "remote-nodes", label: "远程节点" },
+        ]}
+        value={selectedTab}
+        onChange={setSelectedTab}
+      />
 
-      <Tabs
-        disableCursorAnimation
-        aria-label="Options"
-        selectedKey={selectedTab}
-        onSelectionChange={(k) => setSelectedTab(k as string)}
+      {selectedTab === "my-shares" &&
+        (loading ? (
+          <PageLoadingState message="正在加载..." />
+        ) : shares.length === 0 ? (
+          <EmptyHint text="还没有分享。新建一个分享，把本地节点开放给其他面板使用" />
+        ) : (
+          <ListGroup>
+            {shares.map((share) => {
+              const [status, statusTitle] = shareStatus(share);
+
+              return (
+                <ListRow
+                  key={share.id}
+                  badges={
+                    status !== "ok" && (
+                      <Chip
+                        className="shrink-0"
+                        color={status === "bad" ? "danger" : "default"}
+                        size="sm"
+                        variant="flat"
+                      >
+                        {statusTitle}
+                      </Chip>
+                    )
+                  }
+                  meta={[
+                    `端口 ${formatPortRange(share.portRangeStart, share.portRangeEnd)}`,
+                    formatFlowUsage(share.currentFlow, share.maxBandwidth),
+                    share.expiryTime === 0
+                      ? "永久"
+                      : `${formatDate(share.expiryTime)} 到期`,
+                  ].join(" · ")}
+                  status={status}
+                  statusTitle={statusTitle}
+                  title={share.name}
+                  onPress={() => setSheetShareId(share.id)}
+                />
+              );
+            })}
+          </ListGroup>
+        ))}
+
+      {selectedTab === "remote-nodes" &&
+        (remoteUsageLoading ? (
+          <PageLoadingState message="正在加载..." />
+        ) : remoteUsageNodes.length === 0 ? (
+          <EmptyHint text="还没有远程节点。导入其他面板分享的节点并创建隧道后，这里会显示端口占用" />
+        ) : (
+          <ListGroup>
+            {remoteUsageNodes.map((node) => (
+              <ListRow
+                key={node.nodeId}
+                meta={[
+                  `绑定 ${node.activeBindingNum || 0} 条`,
+                  `端口 ${formatPortRange(node.portRangeStart, node.portRangeEnd)}`,
+                  formatFlowUsage(node.currentFlow, node.maxBandwidth),
+                ].join(" · ")}
+                status={node.syncError ? "warn" : "ok"}
+                statusTitle={
+                  node.syncError ? formatSyncError(node.syncError) : "同步正常"
+                }
+                title={node.nodeName}
+                onPress={() => setSheetRemoteId(node.nodeId)}
+              />
+            ))}
+          </ListGroup>
+        ))}
+
+      <ActionSheet
+        actions={
+          sheetShare
+            ? [
+                {
+                  key: "copy",
+                  label: "复制 Token",
+                  color: "primary",
+                  onPress: () => copyToken(sheetShare.token),
+                },
+                {
+                  key: "edit",
+                  label: "编辑",
+                  onPress: () => openEditShare(sheetShare),
+                },
+                {
+                  key: "reset",
+                  label: "重置流量",
+                  onPress: () => handleResetShareFlow(sheetShare.id),
+                },
+                {
+                  key: "delete",
+                  label: "删除",
+                  color: "danger",
+                  onPress: () => handleDeleteShare(sheetShare.id),
+                },
+              ]
+            : []
+        }
+        isOpen={Boolean(sheetShare)}
+        subtitle={sheetShare ? shareStatus(sheetShare)[1] : undefined}
+        title={sheetShare?.name ?? ""}
+        onClose={() => setSheetShareId(null)}
       >
-        <Tab
-          key="my-shares"
-          title={
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-foreground">
-                Provider
-              </span>
-              <span className="text-xs text-default-500">我分享的</span>
-            </div>
-          }
-        >
-          <Card>
-            <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50/60 dark:bg-default-100/20 p-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
-                  <h2 className="text-lg font-semibold text-foreground">
-                    Provider 共享
-                  </h2>
-                  <p className="text-sm text-default-500">
-                    将本地节点分享给其他面板，统一管理
-                    Token、端口范围和到期策略。
-                  </p>
-                </div>
-                <Button
-                  className="self-start md:self-auto"
-                  color="primary"
-                  onPress={() => setCreateShareOpen(true)}
-                >
-                  创建分享
-                </Button>
-              </div>
-
-              {loading ? (
-                <div className="text-center py-12 text-default-500">
-                  加载中...
-                </div>
-              ) : shares.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-divider bg-default-50/60 dark:bg-default-100/20 px-6 py-10 text-center">
-                  <p className="text-base font-semibold text-foreground">
-                    暂无分享
-                  </p>
-                  <p className="mt-2 text-sm text-default-500">
-                    先创建一个分享，把本地节点开放给其他面板使用。
-                  </p>
-                  <div className="mt-5 flex justify-center">
-                    <Button
-                      color="primary"
-                      variant="flat"
-                      onPress={() => setCreateShareOpen(true)}
-                    >
-                      创建第一个分享
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {shares.map((share) => (
-                    <Card key={share.id} className="overflow-hidden">
-                      <CardHeader className="flex justify-between pb-2 md:pb-2">
-                        <h3 className="font-bold">{share.name}</h3>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="flat"
-                            onPress={() => openEditShare(share)}
-                          >
-                            编辑
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="flat"
-                            onPress={() => handleResetShareFlow(share.id)}
-                          >
-                            重置流量
-                          </Button>
-                          <Button
-                            color="danger"
-                            size="sm"
-                            variant="flat"
-                            onPress={() => handleDeleteShare(share.id)}
-                          >
-                            删除
-                          </Button>
-                        </div>
-                      </CardHeader>
-                      <CardBody className="text-sm space-y-2 pt-0 md:pt-0">
-                        <p>
-                          端口范围: {share.portRangeStart} -{" "}
-                          {share.portRangeEnd}
-                        </p>
-                        <p>
-                          流量上限:{" "}
-                          {share.maxBandwidth > 0
-                            ? formatFlowGB(share.maxBandwidth)
-                            : "不限制"}
-                        </p>
-                        <p>当前流量: {formatFlowGB(share.currentFlow || 0)}</p>
-                        <p>
-                          远程占用端口:{" "}
-                          {share.usedPorts && share.usedPorts.length > 0
-                            ? share.usedPorts.join(", ")
-                            : "暂无"}
-                        </p>
-                        {share.usedPortDetails &&
-                          share.usedPortDetails.length > 0 && (
-                            <div className="flex flex-wrap gap-2">
-                              {share.usedPortDetails.map((item) => (
-                                <span
-                                  key={item.runtimeId}
-                                  className="text-xs rounded-full px-2 py-1 bg-default-100"
-                                >
-                                  {item.port} / {item.role || "reserved"}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        {share.allowedDomains && (
-                          <p>允许域名: {share.allowedDomains}</p>
-                        )}
-                        {share.allowedIps && (
-                          <p>允许API IP: {share.allowedIps}</p>
-                        )}
-                        <p>
-                          过期时间:{" "}
-                          {share.expiryTime === 0
-                            ? "永久"
-                            : new Date(share.expiryTime).toLocaleDateString()}
-                        </p>
-                        <div className="flex gap-2">
-                          <Input readOnly size="sm" value={share.token} />
-                          <Button
-                            size="sm"
-                            onPress={() => copyToken(share.token)}
-                          >
-                            复制
-                          </Button>
-                        </div>
-                      </CardBody>
-                    </Card>
+        {sheetShare && (
+          <>
+            {renderDetails([
+              ["Token", sheetShare.token],
+              [
+                "端口范围",
+                formatPortRange(
+                  sheetShare.portRangeStart,
+                  sheetShare.portRangeEnd,
+                ),
+              ],
+              [
+                "流量",
+                formatFlowUsage(
+                  sheetShare.currentFlow,
+                  sheetShare.maxBandwidth,
+                ),
+              ],
+              [
+                "到期",
+                sheetShare.expiryTime === 0
+                  ? "永久"
+                  : formatDate(sheetShare.expiryTime, true),
+              ],
+              [
+                "已占用端口",
+                sheetShare.usedPorts && sheetShare.usedPorts.length > 0
+                  ? sheetShare.usedPorts.join(", ")
+                  : "无",
+              ],
+              ...(sheetShare.allowedDomains
+                ? ([["允许域名", sheetShare.allowedDomains]] as Array<
+                    [string, React.ReactNode]
+                  >)
+                : []),
+              ...(sheetShare.allowedIps
+                ? ([["允许 API IP", sheetShare.allowedIps]] as Array<
+                    [string, React.ReactNode]
+                  >)
+                : []),
+            ])}
+            {sheetShare.usedPortDetails &&
+              sheetShare.usedPortDetails.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {sheetShare.usedPortDetails.map((item) => (
+                    <Chip key={item.runtimeId} size="sm" variant="flat">
+                      {item.port} / {item.role || "预留"}
+                    </Chip>
                   ))}
                 </div>
               )}
-            </CardBody>
-          </Card>
-        </Tab>
-        <Tab
-          key="remote-nodes"
-          title={
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-foreground">
-                Consumer
-              </span>
-              <span className="text-xs text-default-500">远程节点</span>
-            </div>
-          }
-        >
-          <Card>
-            <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider bg-default-50/60 dark:bg-default-100/20 p-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
-                  <h2 className="text-lg font-semibold text-foreground">
-                    Consumer 接入
-                  </h2>
-                  <p className="text-sm text-default-500">
-                    导入远程节点后，可在这里查看端口占用和同步状态。
-                  </p>
-                </div>
-                <Button
-                  className="self-start md:self-auto"
-                  color="secondary"
-                  onPress={() => setImportNodeOpen(true)}
-                >
-                  导入远程节点
-                </Button>
-              </div>
+          </>
+        )}
+      </ActionSheet>
 
-              {remoteUsageLoading ? (
-                <div className="text-center py-12 text-default-500">
-                  加载中...
-                </div>
-              ) : remoteUsageNodes.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-divider bg-default-50/60 dark:bg-default-100/20 px-6 py-10 text-center">
-                  <p className="text-base font-semibold text-foreground">
-                    暂无远程节点占用记录
+      <ActionSheet
+        actions={
+          sheetRemote?.remoteUrl
+            ? [
+                {
+                  key: "copy",
+                  label: "复制地址",
+                  onPress: () =>
+                    void copyWithToast(sheetRemote.remoteUrl, "地址已复制"),
+                },
+              ]
+            : []
+        }
+        isOpen={Boolean(sheetRemote)}
+        subtitle={
+          sheetRemote &&
+          (sheetRemote.syncError ? "同步异常" : "远程节点 · 同步正常")
+        }
+        title={sheetRemote?.nodeName ?? ""}
+        onClose={() => setSheetRemoteId(null)}
+      >
+        {sheetRemote && (
+          <>
+            {sheetRemote.syncError && (
+              <p className="rounded-lg bg-warning-50 px-2 py-1.5 text-xs text-warning-700 dark:bg-warning-100/10 dark:text-warning-400">
+                {formatSyncError(sheetRemote.syncError)}
+              </p>
+            )}
+            {renderDetails([
+              ["远程地址", sheetRemote.remoteUrl || "-"],
+              ["分享 ID", sheetRemote.shareId || "-"],
+              [
+                "端口范围",
+                formatPortRange(
+                  sheetRemote.portRangeStart,
+                  sheetRemote.portRangeEnd,
+                ),
+              ],
+              [
+                "共享流量",
+                formatFlowUsage(
+                  sheetRemote.currentFlow,
+                  sheetRemote.maxBandwidth,
+                ),
+              ],
+              [
+                "已占用端口",
+                sheetRemote.usedPorts && sheetRemote.usedPorts.length > 0
+                  ? sheetRemote.usedPorts.join(", ")
+                  : "无",
+              ],
+            ])}
+            {sheetRemote.bindings && sheetRemote.bindings.length > 0 && (
+              <div className="space-y-1 border-t border-divider pt-2">
+                {sheetRemote.bindings.map((binding) => (
+                  <p
+                    key={binding.bindingId}
+                    className="text-xs text-default-600"
+                  >
+                    隧道 {binding.tunnelName || `#${binding.tunnelId}`}
+                    {" · "}
+                    端口 {binding.allocatedPort}
+                    {" · "}
+                    {formatChainType(binding.chainType, binding.hopInx)}
                   </p>
-                  <p className="mt-2 text-sm text-default-500">
-                    导入远程节点并创建隧道后，这里会显示远端端口占用情况。
-                  </p>
-                  <div className="mt-5 flex justify-center">
-                    <Button
-                      color="secondary"
-                      variant="flat"
-                      onPress={() => setImportNodeOpen(true)}
-                    >
-                      去导入远程节点
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {remoteUsageNodes.map((node) => (
-                    <Card key={node.nodeId} className="overflow-hidden">
-                      <CardHeader className="flex justify-between pb-2 md:pb-2">
-                        <h3 className="font-bold">{node.nodeName}</h3>
-                        <span className="text-xs text-default-500">
-                          绑定 {node.activeBindingNum || 0}
-                        </span>
-                      </CardHeader>
-                      <CardBody className="text-sm space-y-2 pt-0 md:pt-0">
-                        {node.syncError && (
-                          <div className="px-2 py-1.5 rounded-md bg-warning-50 dark:bg-warning-100/10 text-warning-700 dark:text-warning-400 text-xs">
-                            {node.syncError === "provider_share_deleted"
-                              ? "提供方已删除该分享"
-                              : node.syncError === "provider_share_disabled"
-                                ? "提供方已禁用该分享"
-                                : node.syncError === "provider_share_expired"
-                                  ? "提供方分享已过期"
-                                  : `远程同步失败: ${node.syncError}`}
-                          </div>
-                        )}
-                        {node.remoteUrl && <p>远程地址: {node.remoteUrl}</p>}
-                        <p>共享ID: {node.shareId || "-"}</p>
-                        <p>
-                          端口范围:{" "}
-                          {node.portRangeStart > 0 && node.portRangeEnd > 0
-                            ? `${node.portRangeStart} - ${node.portRangeEnd}`
-                            : "-"}
-                        </p>
-                        <p>
-                          共享流量:{" "}
-                          {node.maxBandwidth > 0
-                            ? `${formatFlowGB(node.currentFlow || 0)} / ${formatFlowGB(node.maxBandwidth)}`
-                            : `${formatFlowGB(node.currentFlow || 0)} / 不限制`}
-                        </p>
-                        <p>
-                          远端占用端口:{" "}
-                          {node.usedPorts && node.usedPorts.length > 0
-                            ? node.usedPorts.join(", ")
-                            : "暂无"}
-                        </p>
-                        {node.bindings && node.bindings.length > 0 && (
-                          <div className="space-y-1 pt-1">
-                            {node.bindings.map((binding) => (
-                              <p
-                                key={binding.bindingId}
-                                className="text-xs text-default-600"
-                              >
-                                隧道{" "}
-                                {binding.tunnelName || `#${binding.tunnelId}`}
-                                {" · "}
-                                端口 {binding.allocatedPort}
-                                {" · "}
-                                {formatChainType(
-                                  binding.chainType,
-                                  binding.hopInx,
-                                )}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-                      </CardBody>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </CardBody>
-          </Card>
-        </Tab>
-      </Tabs>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </ActionSheet>
 
       {/* Create Share Modal */}
       <Modal
@@ -938,7 +971,7 @@ export default function PanelSharingPage() {
             />
             <Input
               label="Token"
-              placeholder="Bearer Token"
+              placeholder="对方面板分享的 Token"
               value={importForm.token}
               onChange={(e) =>
                 setImportForm({ ...importForm, token: e.target.value })
@@ -947,12 +980,12 @@ export default function PanelSharingPage() {
           </ModalBody>
           <ModalFooter>
             <Button onPress={() => setImportNodeOpen(false)}>取消</Button>
-            <Button color="secondary" onPress={handleImportNode}>
+            <Button color="primary" onPress={handleImportNode}>
               导入
             </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
-    </div>
+    </AnimatedPage>
   );
 }

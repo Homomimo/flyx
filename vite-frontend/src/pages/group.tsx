@@ -3,7 +3,16 @@ import toast from "react-hot-toast";
 
 import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
-import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
+import { ActionSheet } from "@/components/action-sheet";
+import {
+  EmptyHint,
+  ListGroup,
+  ListRow,
+  PageHeader,
+  PageTabs,
+  PageToolbar,
+  formatDate,
+} from "@/components/page-kit";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import {
@@ -15,15 +24,6 @@ import {
   useDisclosure,
 } from "@/shadcn-bridge/heroui/modal";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableColumn,
-  TableHeader,
-  TableRow,
-} from "@/shadcn-bridge/heroui/table";
-import { Chip } from "@/shadcn-bridge/heroui/chip";
 import {
   assignGroupPermission,
   assignTunnelsToGroup,
@@ -80,17 +80,16 @@ interface GroupPermission {
   createdTime: number;
 }
 
-const formatDate = (timestamp?: number): string => {
-  if (!timestamp) {
-    return "-";
-  }
-
-  return new Date(timestamp).toLocaleString();
-};
+type GroupTab = "tunnel" | "user" | "perm";
 
 export default function GroupPage() {
   const [loading, setLoading] = useState(true);
   const [isAdmin] = useState(getAdminFlag());
+  const [activeTab, setActiveTab] = useState<GroupTab>("tunnel");
+  const [search, setSearch] = useState("");
+  const [sheet, setSheet] = useState<{ kind: GroupTab; id: number } | null>(
+    null,
+  );
 
   const [tunnelGroups, setTunnelGroups] = useState<TunnelGroup[]>([]);
   const [userGroups, setUserGroups] = useState<UserGroup[]>([]);
@@ -457,275 +456,388 @@ export default function GroupPage() {
 
   if (!isAdmin) {
     return (
-      <div className="px-3 lg:px-6 py-8">
-        <Card>
-          <CardBody>
-            <p className="text-danger">
-              权限不足，只有管理员可以访问分组管理页面。
-            </p>
-          </CardBody>
-        </Card>
+      <div className="px-3 lg:px-6 py-6">
+        <EmptyHint text="权限不足，只有管理员可以访问分组管理页面。" />
       </div>
     );
   }
 
+  const keyword = search.trim().toLowerCase();
+  const matches = (...values: Array<string | undefined>) =>
+    !keyword ||
+    values.some((value) => (value || "").toLowerCase().includes(keyword));
+
+  const filteredTunnelGroups = tunnelGroups.filter((item) =>
+    matches(item.name, ...item.tunnelNames),
+  );
+  const filteredUserGroups = userGroups.filter((item) =>
+    matches(item.name, ...item.userNames),
+  );
+  const filteredPermissions = permissions.filter((item) =>
+    matches(item.userGroupName, item.tunnelGroupName),
+  );
+
+  const groupMeta = (count: number, unit: string, createdTime: number) =>
+    [`${count} ${unit}`, formatDate(createdTime)].filter(Boolean).join(" · ");
+
+  const sheetTunnelGroup =
+    sheet?.kind === "tunnel"
+      ? (tunnelGroups.find((item) => item.id === sheet.id) ?? null)
+      : null;
+  const sheetUserGroup =
+    sheet?.kind === "user"
+      ? (userGroups.find((item) => item.id === sheet.id) ?? null)
+      : null;
+  const sheetPermission =
+    sheet?.kind === "perm"
+      ? (permissions.find((item) => item.id === sheet.id) ?? null)
+      : null;
+  const closeSheet = () => setSheet(null);
+
+  const renderDetails = (rows: Array<[string, React.ReactNode]>) => (
+    <div className="space-y-2 text-sm">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex justify-between gap-3">
+          <span className="shrink-0 text-default-500">{k}</span>
+          <span className="min-w-0 break-all text-right">{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8 space-y-6">
+    <AnimatedPage className="px-3 lg:px-6 py-6">
+      <PageHeader
+        description="把隧道和用户编组，再按组授予隧道使用权限"
+        title="分组"
+      />
+      <PageTabs
+        tabs={[
+          { key: "tunnel", label: "隧道分组", badge: tunnelGroups.length },
+          { key: "user", label: "用户分组", badge: userGroups.length },
+          { key: "perm", label: "权限分配", badge: permissions.length },
+        ]}
+        value={activeTab}
+        onChange={(key) => {
+          setActiveTab(key);
+          setSearch("");
+        }}
+      />
       {loading ? (
         <PageLoadingState message="正在加载..." />
       ) : (
         <>
-          <Card>
-            <CardHeader className="flex flex-row items-center gap-3 pb-2">
-              <h3 className="text-lg font-semibold">隧道分组</h3>
-              <Button
-                className="h-7 px-3 text-xs font-medium min-w-0 shadow-sm"
-                color="primary"
-                size="sm"
-                onPress={openCreateTunnelGroup}
-              >
-                新建
-              </Button>
-            </CardHeader>
-            <CardBody>
-              <Table
-                aria-label="隧道分组列表"
-                classNames={{
-                  wrapper:
-                    "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
-                  td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                  tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
+          {activeTab === "tunnel" && (
+            <>
+              <PageToolbar
+                placeholder="搜索分组或隧道"
+                primary={{
+                  key: "create",
+                  label: "新建隧道分组",
+                  onPress: openCreateTunnelGroup,
                 }}
-              >
-                <TableHeader>
-                  <TableColumn>名称</TableColumn>
-                  <TableColumn>隧道</TableColumn>
-                  <TableColumn>状态</TableColumn>
-                  <TableColumn>创建时间</TableColumn>
-                  <TableColumn>操作</TableColumn>
-                </TableHeader>
-                <TableBody emptyContent="暂无隧道分组" items={tunnelGroups}>
-                  {(item) => (
-                    <TableRow key={item.id}>
-                      <TableCell>{item.name}</TableCell>
-                      <TableCell>
-                        {item.tunnelNames.length > 0
-                          ? item.tunnelNames.join("、")
-                          : "-"}
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          color={item.status === 1 ? "success" : "danger"}
-                          size="sm"
-                        >
-                          {item.status === 1 ? "启用" : "停用"}
-                        </Chip>
-                      </TableCell>
-                      <TableCell>{formatDate(item.createdTime)}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="flat"
-                            onPress={() => openAssignTunnels(item)}
-                          >
-                            分配隧道
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="light"
-                            onPress={() => openEditTunnelGroup(item)}
-                          >
-                            编辑
-                          </Button>
-                          <Button
-                            color="danger"
-                            size="sm"
-                            variant="light"
-                            onPress={() => handleDeleteTunnelGroup(item.id)}
-                          >
-                            删除
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardBody>
-          </Card>
+                search={search}
+                onSearch={setSearch}
+              />
+              {filteredTunnelGroups.length === 0 ? (
+                <EmptyHint
+                  action={
+                    tunnelGroups.length === 0
+                      ? {
+                          key: "create",
+                          label: "新建隧道分组",
+                          onPress: openCreateTunnelGroup,
+                        }
+                      : undefined
+                  }
+                  text={
+                    tunnelGroups.length === 0
+                      ? "还没有隧道分组"
+                      : "没有匹配的隧道分组"
+                  }
+                />
+              ) : (
+                <ListGroup>
+                  {filteredTunnelGroups.map((item) => (
+                    <ListRow
+                      key={item.id}
+                      meta={groupMeta(
+                        item.tunnelIds.length,
+                        "条隧道",
+                        item.createdTime,
+                      )}
+                      status={item.status === 1 ? "ok" : "off"}
+                      statusTitle={item.status === 1 ? "启用" : "停用"}
+                      title={item.name}
+                      onPress={() => setSheet({ kind: "tunnel", id: item.id })}
+                    />
+                  ))}
+                </ListGroup>
+              )}
+            </>
+          )}
 
-          <Card>
-            <CardHeader className="flex flex-row items-center gap-3 pb-2">
-              <h3 className="text-lg font-semibold">用户分组</h3>
-              <Button
-                className="h-7 px-3 text-xs font-medium min-w-0 shadow-sm"
-                color="primary"
-                size="sm"
-                onPress={openCreateUserGroup}
-              >
-                新建
-              </Button>
-            </CardHeader>
-            <CardBody>
-              <Table
-                aria-label="用户分组列表"
-                classNames={{
-                  wrapper:
-                    "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
-                  td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                  tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
+          {activeTab === "user" && (
+            <>
+              <PageToolbar
+                placeholder="搜索分组或用户"
+                primary={{
+                  key: "create",
+                  label: "新建用户分组",
+                  onPress: openCreateUserGroup,
                 }}
-              >
-                <TableHeader>
-                  <TableColumn>名称</TableColumn>
-                  <TableColumn>用户</TableColumn>
-                  <TableColumn>状态</TableColumn>
-                  <TableColumn>创建时间</TableColumn>
-                  <TableColumn>操作</TableColumn>
-                </TableHeader>
-                <TableBody emptyContent="暂无用户分组" items={userGroups}>
-                  {(item) => (
-                    <TableRow key={item.id}>
-                      <TableCell>{item.name}</TableCell>
-                      <TableCell>
-                        {item.userNames.length > 0
-                          ? item.userNames.join("、")
-                          : "-"}
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          color={item.status === 1 ? "success" : "danger"}
-                          size="sm"
-                        >
-                          {item.status === 1 ? "启用" : "停用"}
-                        </Chip>
-                      </TableCell>
-                      <TableCell>{formatDate(item.createdTime)}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="flat"
-                            onPress={() => openAssignUsers(item)}
-                          >
-                            分配用户
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="light"
-                            onPress={() => openEditUserGroup(item)}
-                          >
-                            编辑
-                          </Button>
-                          <Button
-                            color="danger"
-                            size="sm"
-                            variant="light"
-                            onPress={() => handleDeleteUserGroup(item.id)}
-                          >
-                            删除
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardBody>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <h3 className="text-lg font-semibold">权限分配</h3>
-            </CardHeader>
-            <CardBody className="space-y-4">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3 md:items-end">
-                <Select
-                  items={userGroups}
-                  label="用户分组"
-                  selectedKeys={
-                    selectedUserGroupId ? [String(selectedUserGroupId)] : []
+                search={search}
+                onSearch={setSearch}
+              />
+              {filteredUserGroups.length === 0 ? (
+                <EmptyHint
+                  action={
+                    userGroups.length === 0
+                      ? {
+                          key: "create",
+                          label: "新建用户分组",
+                          onPress: openCreateUserGroup,
+                        }
+                      : undefined
                   }
-                  onSelectionChange={(keys) => {
-                    const key = Array.from(keys as Set<React.Key>)[0];
-
-                    setSelectedUserGroupId(key ? Number(key) : null);
-                  }}
-                >
-                  {(item) => <SelectItem key={item.id}>{item.name}</SelectItem>}
-                </Select>
-                <Select
-                  items={tunnelGroups}
-                  label="隧道分组"
-                  selectedKeys={
-                    selectedTunnelGroupId ? [String(selectedTunnelGroupId)] : []
+                  text={
+                    userGroups.length === 0
+                      ? "还没有用户分组"
+                      : "没有匹配的用户分组"
                   }
-                  onSelectionChange={(keys) => {
-                    const key = Array.from(keys as Set<React.Key>)[0];
+                />
+              ) : (
+                <ListGroup>
+                  {filteredUserGroups.map((item) => (
+                    <ListRow
+                      key={item.id}
+                      meta={groupMeta(
+                        item.userIds.length,
+                        "个用户",
+                        item.createdTime,
+                      )}
+                      status={item.status === 1 ? "ok" : "off"}
+                      statusTitle={item.status === 1 ? "启用" : "停用"}
+                      title={item.name}
+                      onPress={() => setSheet({ kind: "user", id: item.id })}
+                    />
+                  ))}
+                </ListGroup>
+              )}
+            </>
+          )}
 
-                    setSelectedTunnelGroupId(key ? Number(key) : null);
-                  }}
-                >
-                  {(item) => <SelectItem key={item.id}>{item.name}</SelectItem>}
-                </Select>
-                <Button
-                  className="md:self-end md:justify-self-start whitespace-nowrap px-4"
-                  color="primary"
-                  isLoading={savingPermission}
-                  size="sm"
-                  onPress={handleAssignPermission}
-                >
-                  分配
-                </Button>
+          {activeTab === "perm" && (
+            <>
+              <div className="mb-4 rounded-xl border border-divider bg-content1 p-3 shadow-sm">
+                <p className="mb-2 text-xs text-default-500">
+                  让用户分组里的用户可以使用隧道分组里的隧道
+                </p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-center">
+                  <Select
+                    aria-label="用户分组"
+                    items={userGroups}
+                    placeholder="选择用户分组"
+                    selectedKeys={
+                      selectedUserGroupId ? [String(selectedUserGroupId)] : []
+                    }
+                    size="sm"
+                    onSelectionChange={(keys) => {
+                      const key = Array.from(keys as Set<React.Key>)[0];
+
+                      setSelectedUserGroupId(key ? Number(key) : null);
+                    }}
+                  >
+                    {(item) => (
+                      <SelectItem key={item.id}>{item.name}</SelectItem>
+                    )}
+                  </Select>
+                  <Select
+                    aria-label="隧道分组"
+                    items={tunnelGroups}
+                    placeholder="选择隧道分组"
+                    selectedKeys={
+                      selectedTunnelGroupId
+                        ? [String(selectedTunnelGroupId)]
+                        : []
+                    }
+                    size="sm"
+                    onSelectionChange={(keys) => {
+                      const key = Array.from(keys as Set<React.Key>)[0];
+
+                      setSelectedTunnelGroupId(key ? Number(key) : null);
+                    }}
+                  >
+                    {(item) => (
+                      <SelectItem key={item.id}>{item.name}</SelectItem>
+                    )}
+                  </Select>
+                  <Button
+                    className="whitespace-nowrap px-4"
+                    color="primary"
+                    isLoading={savingPermission}
+                    size="sm"
+                    onPress={handleAssignPermission}
+                  >
+                    分配
+                  </Button>
+                </div>
               </div>
+              <PageToolbar
+                placeholder="搜索分组"
+                search={search}
+                onSearch={setSearch}
+              />
+              {filteredPermissions.length === 0 ? (
+                <EmptyHint
+                  text={
+                    permissions.length === 0
+                      ? "还没有权限分配，在上方选择两个分组后点击分配"
+                      : "没有匹配的权限分配"
+                  }
+                />
+              ) : (
+                <ListGroup>
+                  {filteredPermissions.map((item) => (
+                    <ListRow
+                      key={item.id}
+                      meta={[
+                        `隧道分组 ${item.tunnelGroupName || item.tunnelGroupId}`,
+                        formatDate(item.createdTime),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                      title={item.userGroupName || `#${item.userGroupId}`}
+                      onPress={() => setSheet({ kind: "perm", id: item.id })}
+                    />
+                  ))}
+                </ListGroup>
+              )}
+            </>
+          )}
 
-              <Table
-                aria-label="分组权限列表"
-                classNames={{
-                  wrapper:
-                    "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-default-600 font-semibold text-sm border-b border-white/20 dark:border-white/10 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
-                  td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                  tr: "hover:bg-white/40 dark:hover:bg-white/10 transition-colors",
-                }}
-              >
-                <TableHeader>
-                  <TableColumn>ID</TableColumn>
-                  <TableColumn>用户分组</TableColumn>
-                  <TableColumn>隧道分组</TableColumn>
-                  <TableColumn>创建时间</TableColumn>
-                  <TableColumn>操作</TableColumn>
-                </TableHeader>
-                <TableBody emptyContent="暂无权限分配记录" items={permissions}>
-                  {(item) => (
-                    <TableRow key={item.id}>
-                      <TableCell>{item.id}</TableCell>
-                      <TableCell>
-                        {item.userGroupName || item.userGroupId}
-                      </TableCell>
-                      <TableCell>
-                        {item.tunnelGroupName || item.tunnelGroupId}
-                      </TableCell>
-                      <TableCell>{formatDate(item.createdTime)}</TableCell>
-                      <TableCell>
-                        <Button
-                          color="danger"
-                          size="sm"
-                          variant="light"
-                          onPress={() => handleRemovePermission(item.id)}
-                        >
-                          回收
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardBody>
-          </Card>
+          <ActionSheet
+            actions={
+              sheetTunnelGroup
+                ? [
+                    {
+                      key: "assign",
+                      label: "分配隧道",
+                      color: "primary",
+                      onPress: () => openAssignTunnels(sheetTunnelGroup),
+                    },
+                    {
+                      key: "edit",
+                      label: "编辑",
+                      onPress: () => openEditTunnelGroup(sheetTunnelGroup),
+                    },
+                    {
+                      key: "delete",
+                      label: "删除",
+                      color: "danger",
+                      onPress: () =>
+                        handleDeleteTunnelGroup(sheetTunnelGroup.id),
+                    },
+                  ]
+                : sheetUserGroup
+                  ? [
+                      {
+                        key: "assign",
+                        label: "分配用户",
+                        color: "primary",
+                        onPress: () => openAssignUsers(sheetUserGroup),
+                      },
+                      {
+                        key: "edit",
+                        label: "编辑",
+                        onPress: () => openEditUserGroup(sheetUserGroup),
+                      },
+                      {
+                        key: "delete",
+                        label: "删除",
+                        color: "danger",
+                        onPress: () => handleDeleteUserGroup(sheetUserGroup.id),
+                      },
+                    ]
+                  : sheetPermission
+                    ? [
+                        {
+                          key: "remove",
+                          label: "回收",
+                          color: "danger",
+                          onPress: () =>
+                            handleRemovePermission(sheetPermission.id),
+                        },
+                      ]
+                    : []
+            }
+            isOpen={Boolean(
+              sheetTunnelGroup || sheetUserGroup || sheetPermission,
+            )}
+            subtitle={
+              sheetTunnelGroup
+                ? `隧道分组 · ${sheetTunnelGroup.status === 1 ? "启用" : "停用"}`
+                : sheetUserGroup
+                  ? `用户分组 · ${sheetUserGroup.status === 1 ? "启用" : "停用"}`
+                  : sheetPermission
+                    ? "权限分配"
+                    : undefined
+            }
+            title={
+              sheetTunnelGroup?.name ??
+              sheetUserGroup?.name ??
+              (sheetPermission
+                ? `${sheetPermission.userGroupName || sheetPermission.userGroupId} → ${
+                    sheetPermission.tunnelGroupName ||
+                    sheetPermission.tunnelGroupId
+                  }`
+                : "")
+            }
+            onClose={closeSheet}
+          >
+            {sheetTunnelGroup &&
+              renderDetails([
+                [
+                  "隧道",
+                  sheetTunnelGroup.tunnelNames.length > 0
+                    ? sheetTunnelGroup.tunnelNames.join("、")
+                    : "无",
+                ],
+                [
+                  "创建时间",
+                  formatDate(sheetTunnelGroup.createdTime, true) || "-",
+                ],
+              ])}
+            {sheetUserGroup &&
+              renderDetails([
+                [
+                  "用户",
+                  sheetUserGroup.userNames.length > 0
+                    ? sheetUserGroup.userNames.join("、")
+                    : "无",
+                ],
+                [
+                  "创建时间",
+                  formatDate(sheetUserGroup.createdTime, true) || "-",
+                ],
+              ])}
+            {sheetPermission &&
+              renderDetails([
+                [
+                  "用户分组",
+                  sheetPermission.userGroupName || sheetPermission.userGroupId,
+                ],
+                [
+                  "隧道分组",
+                  sheetPermission.tunnelGroupName ||
+                    sheetPermission.tunnelGroupId,
+                ],
+                [
+                  "创建时间",
+                  formatDate(sheetPermission.createdTime, true) || "-",
+                ],
+              ])}
+          </ActionSheet>
 
           <Modal
             backdrop="blur"
