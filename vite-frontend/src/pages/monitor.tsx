@@ -5,6 +5,7 @@ import toast from "react-hot-toast";
 
 import { AnimatedPage } from "@/components/animated-page";
 import { PageHeader, PageTabs } from "@/components/page-kit";
+import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import { getMonitorNodes } from "@/api";
 import { MonitorView } from "@/pages/node/monitor-view";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
@@ -34,6 +35,8 @@ export default function MonitorPage() {
   const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MonitorTab>("nodes");
+  const [viewMode, setViewMode] = useViewMode("monitor");
+  const card = viewMode === "card";
 
   const [realtimeNodeStatus, setRealtimeNodeStatus] = useState<
     Record<number, "online" | "offline">
@@ -214,14 +217,19 @@ export default function MonitorPage() {
         ))}
       </div>
 
-      <PageTabs
-        tabs={[
-          { key: "nodes", label: "节点" },
-          { key: "tunnels", label: "隧道" },
-        ]}
-        value={activeTab}
-        onChange={setActiveTab}
-      />
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <PageTabs
+            tabs={[
+              { key: "nodes", label: "节点" },
+              { key: "tunnels", label: "隧道" },
+            ]}
+            value={activeTab}
+            onChange={setActiveTab}
+          />
+        </div>
+        <ViewModeToggle value={viewMode} onChange={setViewMode} />
+      </div>
 
       {nodesError && activeTab === "nodes" && (
         <div className="mb-3 rounded-xl border border-divider bg-content1 px-3 py-2 text-sm text-default-600">
@@ -231,12 +239,13 @@ export default function MonitorPage() {
 
       {activeTab === "nodes" ? (
         <MonitorView
+          card={card}
           nodeMap={nodeMap}
           refreshing={nodesLoading}
           onRefresh={() => void loadNodes()}
         />
       ) : (
-        <TunnelMonitorView />
+        <TunnelMonitorView card={card} />
       )}
     </AnimatedPage>
   );

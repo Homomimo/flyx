@@ -70,6 +70,8 @@ interface MonitorViewProps {
   >;
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** Show the nodes as cards. */
+  card?: boolean;
 }
 
 type RealtimeNodeMetric = {
@@ -391,6 +393,7 @@ export function MonitorView({
   nodeMap,
   onRefresh,
   refreshing,
+  card,
 }: MonitorViewProps) {
   const [detailNodeId, setDetailNodeId] = useState<number | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
@@ -1183,7 +1186,7 @@ export function MonitorView({
           {nodes.length === 0 ? (
             <EmptyHint text="暂无节点" />
           ) : (
-            <ListGroup>
+            <ListGroup card={card}>
               {nodes.map((node) => {
                 const metric = realtimeNodeMetrics[node.id] || null;
                 const isOnline = node.connectionStatus === "online";
@@ -1192,8 +1195,11 @@ export function MonitorView({
                 return (
                   <ListRow
                     key={node.id}
+                    card={card}
                     meta={
-                      live ? (
+                      card && live ? (
+                        `连接 ${metric.tcpConns + metric.udpConns} · 运行 ${formatUptime(metric.uptime)}`
+                      ) : live ? (
                         <span className="flex flex-wrap gap-x-3 whitespace-normal font-mono">
                           <span>CPU {metric.cpuUsage.toFixed(1)}%</span>
                           <span>内存 {metric.memoryUsage.toFixed(1)}%</span>
@@ -1217,6 +1223,30 @@ export function MonitorView({
                       ) : (
                         "离线"
                       )
+                    }
+                    stats={
+                      card && live
+                        ? [
+                            {
+                              label: "CPU",
+                              value: `${metric.cpuUsage.toFixed(1)}%`,
+                              percent: metric.cpuUsage,
+                            },
+                            {
+                              label: "内存",
+                              value: `${metric.memoryUsage.toFixed(1)}%`,
+                              percent: metric.memoryUsage,
+                            },
+                            {
+                              label: "实时 ↑ / ↓",
+                              value: `${formatBytesPerSecond(metric.netOutSpeed)} / ${formatBytesPerSecond(metric.netInSpeed)}`,
+                            },
+                            {
+                              label: "流量 ↑ / ↓",
+                              value: `${formatBytes(metric.netOutBytes)} / ${formatBytes(metric.netInBytes)}`,
+                            },
+                          ]
+                        : undefined
                     }
                     status={isOnline ? "ok" : "bad"}
                     statusTitle={isOnline ? "在线" : "离线"}

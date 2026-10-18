@@ -63,7 +63,9 @@ import {
   PageTabs,
   PageToolbar,
   SelectionBar,
+  listGridClass,
 } from "@/components/page-kit";
+import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import {
   getConnectionStatusMeta,
   getRemoteSyncErrorMessage,
@@ -380,6 +382,8 @@ export default function NodePage() {
     : protocolDisabledReason || "等待节点上线后再设置";
 
   const [selectMode, setSelectMode] = useState(false);
+  const [viewMode, setViewMode] = useViewMode("node");
+  const card = viewMode === "card";
   const [sheetNodeId, setSheetNodeId] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
@@ -1618,6 +1622,7 @@ export default function NodePage() {
               {nodeFilterMode !== "all" ? "已筛选" : "筛选"}
             </Button>
           )}
+          <ViewModeToggle value={viewMode} onChange={setViewMode} />
         </PageToolbar>
       )}
 
@@ -1659,7 +1664,7 @@ export default function NodePage() {
             items={sortableNodeIds}
             strategy={rectSortingStrategy}
           >
-            <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
+            <div className={listGridClass(card)}>
               {displayNodes.map((node) => {
                 const isRemoteNode = node.isRemote === 1;
                 const online = node.connectionStatus === "online";
@@ -1692,6 +1697,31 @@ export default function NodePage() {
                         : "",
                     ];
 
+                const info = node.systemInfo;
+                const stats =
+                  !isRemoteNode && online && info
+                    ? [
+                        {
+                          label: "CPU",
+                          value: `${info.cpuUsage.toFixed(1)}%`,
+                          percent: info.cpuUsage,
+                        },
+                        {
+                          label: "内存",
+                          value: `${info.memoryUsage.toFixed(1)}%`,
+                          percent: info.memoryUsage,
+                        },
+                        {
+                          label: "实时 ↑ / ↓",
+                          value: `${formatSpeed(info.uploadSpeed)} / ${formatSpeed(info.downloadSpeed)}`,
+                        },
+                        {
+                          label: "流量 ↑ / ↓",
+                          value: `${formatFlow(info.uploadTraffic)} / ${formatFlow(info.downloadTraffic)}`,
+                        },
+                      ]
+                    : undefined;
+
                 return (
                   <SortableItem key={node.id} id={node.id}>
                     {(listeners) => (
@@ -1719,6 +1749,7 @@ export default function NodePage() {
                             )}
                           </>
                         }
+                        card={card}
                         meta={meta.filter(Boolean).join(" · ")}
                         right={
                           !isDisplayFiltered && (
@@ -1733,6 +1764,7 @@ export default function NodePage() {
                         }
                         selectMode={selectMode}
                         selected={selectedIds.has(node.id)}
+                        stats={stats}
                         status={upgrading ? "warn" : online ? "ok" : "bad"}
                         statusTitle={
                           getConnectionStatusMeta(node.connectionStatus).text

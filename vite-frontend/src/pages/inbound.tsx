@@ -30,7 +30,15 @@ import {
   StaggerList,
 } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
-import { PageHeader, PageTabs, PageToolbar } from "@/components/page-kit";
+import {
+  ListRow,
+  PageHeader,
+  PageTabs,
+  PageToolbar,
+  type RowStatus,
+  listGridClass,
+} from "@/components/page-kit";
+import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
 import { ActionSheet } from "@/components/action-sheet";
@@ -237,6 +245,8 @@ export default function InboundPage() {
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [toggling, setToggling] = useState<number | null>(null);
   const [selectMode, setSelectMode] = useState(false);
+  const [viewMode, setViewMode] = useViewMode("inbound");
+  const card = viewMode === "card";
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [batchDeleting, setBatchDeleting] = useState(false);
@@ -524,7 +534,7 @@ export default function InboundPage() {
     }
   };
 
-  const listGridClass = "grid grid-cols-1 2xl:grid-cols-2 gap-2";
+  const gridClass = listGridClass(card);
 
   const renderInbound = (item: InboundApiItem) => {
     const probe =
@@ -564,6 +574,131 @@ export default function InboundPage() {
         : item.enabled
           ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
           : "已停用";
+
+    const badges = (
+      <>
+        {item.relayCount > 0 && (
+          <Chip
+            className="shrink-0 whitespace-nowrap"
+            color="secondary"
+            size="sm"
+            variant="flat"
+          >
+            {item.relayCount} 中转
+          </Chip>
+        )}
+        {item.outboundId > 0 && (
+          <Chip
+            className="shrink-0 whitespace-nowrap"
+            color={item.outboundMissing ? "danger" : "warning"}
+            size="sm"
+            title={
+              item.outboundMissing
+                ? "出站节点已删除"
+                : `经 ${item.outboundName} 出站`
+            }
+            variant="flat"
+          >
+            {item.outboundMissing ? "出站已删除" : "链式"}
+          </Chip>
+        )}
+        {item.splitRules?.length > 0 && (
+          <Chip
+            className="shrink-0 whitespace-nowrap"
+            color="primary"
+            size="sm"
+            variant="flat"
+          >
+            分流
+          </Chip>
+        )}
+        {item.relayOnly && (
+          <Chip className="shrink-0 whitespace-nowrap" size="sm" variant="flat">
+            仅中转
+          </Chip>
+        )}
+        {kernelBad && (
+          <Chip color="warning" size="sm" variant="flat">
+            内核{KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}
+          </Chip>
+        )}
+        {unreachable && (
+          <Chip
+            className="shrink-0 whitespace-nowrap"
+            color="danger"
+            size="sm"
+            variant="flat"
+          >
+            {probe?.error || "连不上"}
+          </Chip>
+        )}
+      </>
+    );
+
+    if (card) {
+      const status: RowStatus = unreachable
+        ? "bad"
+        : running
+          ? "ok"
+          : item.enabled
+            ? "warn"
+            : "off";
+
+      return (
+        <ListRow
+          key={item.id}
+          card
+          badges={badges}
+          footer={
+            !selectMode && (
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  color="primary"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => setSharing(item)}
+                >
+                  分享
+                </Button>
+                <Button
+                  className="flex-1"
+                  color="secondary"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => setRelaying(item)}
+                >
+                  中转
+                </Button>
+              </div>
+            )
+          }
+          meta={`${describeInbound(item)} · ${item.port}${where ? ` · ${where}` : ""}`}
+          right={
+            <Switch
+              isDisabled={toggling === item.id}
+              isSelected={item.enabled}
+              size="sm"
+              onValueChange={() => handleToggle(item)}
+            />
+          }
+          selectMode={selectMode}
+          selected={selected}
+          stats={[
+            { label: "上传", value: formatTraffic(item.uploadBytes) },
+            { label: "下载", value: formatTraffic(item.downloadBytes) },
+            ...(probe?.ok && item.enabled
+              ? [{ label: "延迟", value: `${probe.latencyMs} ms` }]
+              : []),
+          ]}
+          status={status}
+          statusTitle={stateText}
+          title={item.name}
+          onPress={() => setSheetFor(item.id)}
+          onSelect={() => toggleSelect(item.id)}
+        />
+      );
+    }
 
     return (
       <div
@@ -605,65 +740,7 @@ export default function InboundPage() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="truncate font-medium">{item.name}</span>
-            {item.relayCount > 0 && (
-              <Chip
-                className="shrink-0 whitespace-nowrap"
-                color="secondary"
-                size="sm"
-                variant="flat"
-              >
-                {item.relayCount} 中转
-              </Chip>
-            )}
-            {item.outboundId > 0 && (
-              <Chip
-                className="shrink-0 whitespace-nowrap"
-                color={item.outboundMissing ? "danger" : "warning"}
-                size="sm"
-                title={
-                  item.outboundMissing
-                    ? "出站节点已删除"
-                    : `经 ${item.outboundName} 出站`
-                }
-                variant="flat"
-              >
-                {item.outboundMissing ? "出站已删除" : "链式"}
-              </Chip>
-            )}
-            {item.splitRules?.length > 0 && (
-              <Chip
-                className="shrink-0 whitespace-nowrap"
-                color="primary"
-                size="sm"
-                variant="flat"
-              >
-                分流
-              </Chip>
-            )}
-            {item.relayOnly && (
-              <Chip
-                className="shrink-0 whitespace-nowrap"
-                size="sm"
-                variant="flat"
-              >
-                仅中转
-              </Chip>
-            )}
-            {kernelBad && (
-              <Chip color="warning" size="sm" variant="flat">
-                内核{KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}
-              </Chip>
-            )}
-            {unreachable && (
-              <Chip
-                className="shrink-0 whitespace-nowrap"
-                color="danger"
-                size="sm"
-                variant="flat"
-              >
-                {probe?.error || "连不上"}
-              </Chip>
-            )}
+            {badges}
           </div>
           <div className="truncate text-xs text-default-500">
             {describeInbound(item)} · {item.port}
@@ -827,6 +904,7 @@ export default function InboundPage() {
                   ))}
                 </select>
               )}
+              <ViewModeToggle value={viewMode} onChange={setViewMode} />
             </PageToolbar>
           )}
 
@@ -905,7 +983,7 @@ export default function InboundPage() {
               </CardBody>
             </Card>
           ) : !grouped ? (
-            <StaggerList className={listGridClass}>
+            <StaggerList className={gridClass}>
               {filtered.map((i) => (
                 <StaggerItem key={i.id}>{renderInbound(i)}</StaggerItem>
               ))}
@@ -934,7 +1012,7 @@ export default function InboundPage() {
                       onToggle={() => toggleCollapsed(id)}
                     />
                     {!folded && (
-                      <div className={`${listGridClass} pb-3`}>
+                      <div className={`${gridClass} pb-3`}>
                         {g.items.map(renderInbound)}
                       </div>
                     )}

@@ -733,7 +733,7 @@ const ForwardingChainTopology = React.memo(function ForwardingChainTopology({
   );
 });
 
-export function TunnelMonitorView() {
+export function TunnelMonitorView({ card }: { card?: boolean } = {}) {
   const [tunnels, setTunnels] = useState<MonitorTunnelApiItem[]>([]);
   const [tunnelsLoading, setTunnelsLoading] = useState(false);
   const [tunnelsError, setTunnelsError] = useState<string | null>(null);
@@ -1367,7 +1367,7 @@ export function TunnelMonitorView() {
       {tunnels.length === 0 ? (
         !tunnelsError && <EmptyHint text="暂无隧道" />
       ) : (
-        <ListGroup>
+        <ListGroup card={card}>
           {tunnels.map((tunnel) => {
             const quality = qualityMap[tunnel.id];
             const isEnabled = tunnel.status === 1;
@@ -1412,21 +1412,44 @@ export function TunnelMonitorView() {
                     </Chip>
                   )
                 }
+                card={card}
+                footer={
+                  card && (
+                    <div className="flex flex-col gap-2 overflow-hidden text-[11px] text-default-500">
+                      <div>
+                        <div className="mb-1">入口 → 出口</div>
+                        <UptimeHistoryBar
+                          history={qualityHistoryMap[tunnel.id]}
+                          type="entryToExit"
+                        />
+                      </div>
+                      <div aria-label={`出口到测试目标 ${targetLabel}`}>
+                        <div className="mb-1">出口 → {targetLabel}</div>
+                        <UptimeHistoryBar
+                          history={qualityHistoryMap[tunnel.id]}
+                          type="exitToBing"
+                        />
+                      </div>
+                    </div>
+                  )
+                }
                 meta={meta}
                 right={
-                  <div
-                    aria-label={`出口到测试目标 ${targetLabel}`}
-                    className="hidden gap-4 lg:flex"
-                  >
-                    <UptimeHistoryBar
-                      history={qualityHistoryMap[tunnel.id]}
-                      type="entryToExit"
-                    />
-                    <UptimeHistoryBar
-                      history={qualityHistoryMap[tunnel.id]}
-                      type="exitToBing"
-                    />
-                  </div>
+                  !card && (
+                    <div
+                      aria-label={`出口到测试目标 ${targetLabel}`}
+                      className="hidden gap-4 lg:flex"
+                    >
+                      <UptimeHistoryBar
+                        history={qualityHistoryMap[tunnel.id]}
+                        type="entryToExit"
+                      />
+                      <UptimeHistoryBar
+                        history={qualityHistoryMap[tunnel.id]}
+                        type="exitToBing"
+                      />
+                    </div>
+                  )
                 }
                 status={status}
                 statusTitle={isEnabled ? "启用" : "禁用"}
