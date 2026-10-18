@@ -163,7 +163,7 @@ func xrayChainRoutes(inbounds []Inbound) ([]interface{}, []interface{}, error) {
 			}
 			ob["streamSettings"].(obj)["sockopt"] = obj{"mark": UserMark(id)}
 			outbounds = append(outbounds, ob)
-			rules = append(rules, obj{"type": "field", "inboundTag": tags, "user": []string{User{ID: id}.Email()}, "outboundTag": tag})
+			rules = append(rules, obj{"type": "field", "inboundTag": tags, "user": xrayUserMatch(id), "outboundTag": tag})
 		}
 		tag := chainTag(in)
 		ob, err := xrayChainOutbound(*in.Via, tag)

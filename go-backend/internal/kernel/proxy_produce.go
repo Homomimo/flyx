@@ -64,7 +64,7 @@ func proxyURI(e Endpoint) (string, bool) {
 		user := url.PathEscape(p.str("password"))
 		if p.Type() == "vless" {
 			user = p.str("uuid")
-			q.Set("encryption", "none")
+			q.Set("encryption", firstNonEmptyString(p.str("encryption"), "none"))
 			if f := p.str("flow"); f != "" {
 				q.Set("flow", f)
 			}
@@ -149,9 +149,47 @@ func proxyURI(e Endpoint) (string, bool) {
 			auth = url.PathEscape(u) + ":" + url.PathEscape(p.str("password")) + "@"
 		}
 		return "socks5://" + auth + hp + frag, true
+	case "wireguard":
+		// v2rayN / NekoBox form.
+		q := url.Values{}
+		q.Set("publickey", p.str("public-key"))
+		q.Set("address", p.str("ip")+"/32")
+		setIf(q, "mtu", p.str("mtu"))
+		return "wireguard://" + url.QueryEscape(p.str("private-key")) + "@" + hp + "?" + q.Encode() + frag, true
 	}
 	// Snell and HTTP proxies have no common share link.
 	return "", false
+}
+
+// hasVLESSEncryption reports a VLESS proxy using VLESS Encryption, which
+// only Xray-based clients and Mihomo speak.
+func hasVLESSEncryption(p Proxy) bool {
+	enc := p.str("encryption")
+	return enc != "" && enc != "none"
+}
+
+func setIfMap(m map[string]interface{}, k, v string) {
+	if v != "" {
+		m[k] = v
+	}
+}
+
+func firstNonEmptyStrings(a, b []string) []string {
+	if len(a) > 0 {
+		return a
+	}
+	return b
+}
+
+// wireGuardPrefix turns a tunnel address into a host prefix.
+func wireGuardPrefix(ip string) string {
+	if strings.Contains(ip, "/") {
+		return ip
+	}
+	if strings.Contains(ip, ":") {
+		return ip + "/128"
+	}
+	return ip + "/32"
 }
 
 func setIf(q url.Values, k, v string) {
@@ -340,6 +378,9 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		}
 		tls(p.usesTLS())
 	case "vless":
+		if hasVLESSEncryption(p) {
+			return nil, false // sing-box has no VLESS Encryption
+		}
 		o["type"] = "vless"
 		o["uuid"] = p.str("uuid")
 		if f := p.str("flow"); f != "" {
@@ -394,6 +435,26 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 			o["username"], o["password"] = u, p.str("password")
 		}
 		tls(p.flag("tls"))
+	case "wireguard":
+		// An endpoint in sing-box 1.11+; singboxProfile moves it out of the
+		// outbounds.
+		peer := map[string]interface{}{
+			"address":     strings.Trim(e.Host, "[]"),
+			"port":        e.Port,
+			"public_key":  p.str("public-key"),
+			"allowed_ips": firstNonEmptyStrings(p.strs("allowed-ips"), []string{"0.0.0.0/0", "::/0"}),
+		}
+		setIfMap(peer, "pre_shared_key", p.str("pre-shared-key"))
+		o = map[string]interface{}{
+			"type":        "wireguard",
+			"tag":         e.Name,
+			"address":     []string{wireGuardPrefix(p.str("ip"))},
+			"private_key": p.str("private-key"),
+			"peers":       []interface{}{peer},
+		}
+		if mtu := p.num("mtu"); mtu > 0 {
+			o["mtu"] = mtu
+		}
 	default:
 		return nil, false
 	}

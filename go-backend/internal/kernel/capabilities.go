@@ -24,6 +24,9 @@ const (
 	ProtocolAnyTLS      = "anytls"
 	ProtocolSnell       = "snell"
 	ProtocolNaive       = "naive"
+	ProtocolSOCKS       = "socks"
+	ProtocolHTTP        = "http"
+	ProtocolWireGuard   = "wireguard"
 )
 
 const (
@@ -32,6 +35,8 @@ const (
 	TransportGRPC  = "grpc"
 	TransportXHTTP = "xhttp"
 	TransportQUIC  = "quic"
+	// TransportUDP is WireGuard's own UDP transport.
+	TransportUDP = "udp"
 )
 
 const (
@@ -180,6 +185,9 @@ var catalog = []Info{
 			{Protocol: ProtocolShadowsocks, Transports: []TransportCap{
 				{Type: TransportTCP, Securities: []string{SecurityNone}},
 			}},
+			{Protocol: ProtocolSOCKS, Transports: []TransportCap{{Type: TransportTCP, Securities: []string{SecurityNone}}}},
+			{Protocol: ProtocolHTTP, Transports: []TransportCap{{Type: TransportTCP, Securities: []string{SecurityNone}}}},
+			{Protocol: ProtocolWireGuard, Transports: []TransportCap{{Type: TransportUDP, Securities: []string{SecurityNone}}}},
 		},
 	},
 	{
@@ -212,6 +220,9 @@ var catalog = []Info{
 			{Protocol: ProtocolShadowsocks, Transports: []TransportCap{
 				{Type: TransportTCP, Securities: []string{SecurityNone, SecurityShadowTLS}},
 			}},
+			{Protocol: ProtocolSOCKS, Transports: []TransportCap{{Type: TransportTCP, Securities: []string{SecurityNone}}}},
+			{Protocol: ProtocolHTTP, Transports: []TransportCap{{Type: TransportTCP, Securities: []string{SecurityNone}}}},
+			{Protocol: ProtocolWireGuard, Transports: []TransportCap{{Type: TransportUDP, Securities: []string{SecurityNone}}}},
 		},
 	},
 	{

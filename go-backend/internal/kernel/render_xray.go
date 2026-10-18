@@ -37,7 +37,7 @@ func renderXray(inbounds []Inbound) (string, error) {
 		tag := userOutboundTag(id)
 		outbounds = append(outbounds, obj{"protocol": "freedom", "tag": tag,
 			"streamSettings": obj{"sockopt": obj{"mark": UserMark(id)}}})
-		rules = append(rules, obj{"type": "field", "user": []string{User{ID: id}.Email()}, "outboundTag": tag})
+		rules = append(rules, obj{"type": "field", "user": xrayUserMatch(id), "outboundTag": tag})
 	}
 	cfg["outbounds"] = outbounds
 	if len(rules) > 0 {
@@ -62,7 +62,9 @@ func xrayInbound(in Inbound) (obj, error) {
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	if in.Protocol != ProtocolShadowsocks {
+	if in.Protocol == ProtocolWireGuard {
+		// WireGuard brings its own UDP transport.
+	} else if in.Protocol != ProtocolShadowsocks {
 		item["streamSettings"] = xrayStream(in)
 	} else if in.AcceptProxyProtocol {
 		item["streamSettings"] = obj{"network": TransportTCP}
@@ -85,13 +87,25 @@ func xraySettings(in Inbound) (obj, error) {
 		if s.Flow != "" {
 			client["flow"] = s.Flow
 		}
-		return obj{"clients": append([]interface{}{client}, xrayUserClients(in)...), "decryption": "none"}, nil
+		return obj{"clients": append([]interface{}{client}, xrayUserClients(in)...),
+			"decryption": firstNonEmptyString(s.Decryption, "none")}, nil
 	case ProtocolVMess:
 		return obj{"clients": append([]interface{}{obj{"id": s.UUID}}, xrayUserClients(in)...)}, nil
 	case ProtocolTrojan:
 		return obj{"clients": append([]interface{}{obj{"password": s.Password}}, xrayUserClients(in)...)}, nil
 	case ProtocolShadowsocks:
 		return obj{"method": s.Method, "password": s.Password, "network": "tcp,udp"}, nil
+	case ProtocolSOCKS:
+		accounts := append([]interface{}{obj{"user": s.Username, "pass": s.Password}}, xrayUserClients(in)...)
+		return obj{"auth": "password", "accounts": accounts, "udp": true}, nil
+	case ProtocolHTTP:
+		return obj{"accounts": append([]interface{}{obj{"user": s.Username, "pass": s.Password}}, xrayUserClients(in)...)}, nil
+	case ProtocolWireGuard:
+		return obj{
+			"secretKey": s.PrivateKey,
+			"peers":     []interface{}{obj{"publicKey": s.PeerPublicKey, "allowedIPs": []string{s.PeerAddress + "/32"}}},
+			"mtu":       s.MTU,
+		}, nil
 	}
 	return nil, fmt.Errorf("Xray 不支持协议 %s", in.Protocol)
 }

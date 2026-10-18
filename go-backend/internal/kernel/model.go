@@ -28,6 +28,22 @@ type Settings struct {
 	// PortHopping is a UDP range ("20000-30000") the agent redirects to the
 	// Hysteria2 port so clients can hop between ports.
 	PortHopping string `json:"portHopping,omitempty"`
+
+	// VLESS Encryption (Xray only): Decryption is the server setting
+	// ("auto" asks for new keys), Encryption what clients send.
+	Decryption string `json:"decryption,omitempty"`
+	Encryption string `json:"encryption,omitempty"`
+
+	// WireGuard: the server key and one client peer (shared by everyone
+	// connecting to the inbound, like a Shadowsocks password).
+	PrivateKey     string `json:"privateKey,omitempty"`
+	PublicKey      string `json:"publicKey,omitempty"`
+	PeerPrivateKey string `json:"peerPrivateKey,omitempty"`
+	PeerPublicKey  string `json:"peerPublicKey,omitempty"`
+	// PeerAddress is the client's tunnel address; the server takes the
+	// first host of its /24.
+	PeerAddress string `json:"peerAddress,omitempty"`
+	MTU         int    `json:"mtu,omitempty"`
 }
 
 // HopRange returns the port-hopping range, or 0, 0 when disabled.
@@ -135,8 +151,10 @@ func (in Inbound) Tag() string {
 // traffic counters.
 func (in Inbound) Network() string {
 	switch in.Protocol {
-	case ProtocolHysteria2, ProtocolTUIC:
+	case ProtocolHysteria2, ProtocolTUIC, ProtocolWireGuard:
 		return "udp"
+	case ProtocolSOCKS:
+		return "tcp,udp"
 	case ProtocolShadowsocks:
 		if in.Security.Type == SecurityShadowTLS {
 			return "tcp"
@@ -171,6 +189,8 @@ const (
 	DefaultSnellVersion        = 5
 	defaultGRPCService         = "grpc"
 	defaultXHTTPMode           = "auto"
+	DefaultWireGuardPeer       = "10.66.66.2"
+	DefaultWireGuardMTU        = 1420
 	maxExtraConfigBytes        = 64 * 1024
 )
 
@@ -243,6 +263,9 @@ func Normalize(kernelType string, in *Inbound) error {
 	if in.AcceptProxyProtocol && kernelType != TypeXray {
 		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
 	}
+	if in.AcceptProxyProtocol && in.Protocol == ProtocolWireGuard {
+		return errors.New("WireGuard 走 UDP，不支持获取真实 IP（PROXY protocol）")
+	}
 
 	if err := normalizeExtra(in); err != nil {
 		return err
@@ -255,6 +278,9 @@ func Normalize(kernelType string, in *Inbound) error {
 	}
 	if err := normalizeSecurity(in); err != nil {
 		return err
+	}
+	if in.Settings.Decryption != "" && kernelType != TypeXray {
+		return errors.New("VLESS Encryption 目前只支持 Xray 内核")
 	}
 	if in.Security.CertMode == CertModeACME && kernelType != TypeSingbox {
 		return errors.New("自动申请证书（ACME）目前只支持 sing-box 内核")
@@ -293,7 +319,7 @@ func normalizeTransport(t *Transport) error {
 		return errors.New("Host 格式错误")
 	}
 	switch t.Type {
-	case TransportTCP, TransportQUIC:
+	case TransportTCP, TransportQUIC, TransportUDP:
 		t.Path, t.Host, t.ServiceName, t.Mode = "", "", "", ""
 	case TransportWS, TransportXHTTP:
 		if t.Path == "" {
@@ -323,9 +349,16 @@ func normalizeSettings(in *Inbound) error {
 	s.Password = strings.TrimSpace(s.Password)
 	s.Method = strings.TrimSpace(s.Method)
 	s.Flow = strings.TrimSpace(s.Flow)
-	if in.Protocol != ProtocolNaive {
+	if in.Protocol != ProtocolNaive && in.Protocol != ProtocolSOCKS && in.Protocol != ProtocolHTTP {
 		s.Username = ""
 	}
+	if in.Protocol != ProtocolVLESS {
+		s.Decryption = ""
+	}
+	if in.Protocol != ProtocolWireGuard {
+		s.PrivateKey, s.PublicKey, s.PeerPrivateKey, s.PeerPublicKey, s.PeerAddress, s.MTU = "", "", "", "", "", 0
+	}
+	s.Encryption = ""
 
 	switch in.Protocol {
 	case ProtocolVLESS, ProtocolVMess:
@@ -336,7 +369,12 @@ func normalizeSettings(in *Inbound) error {
 			return errors.New("UUID 格式错误")
 		}
 		s.Password, s.Method = "", ""
-		visionOK := in.Protocol == ProtocolVLESS && in.Transport.Type == TransportTCP && in.Security.Type != SecurityNone
+		if err := normalizeVLESSEncryption(s); err != nil {
+			return err
+		}
+		// Vision needs a TLS-like layer: TLS, Reality or VLESS Encryption.
+		visionOK := in.Protocol == ProtocolVLESS && in.Transport.Type == TransportTCP &&
+			(in.Security.Type != SecurityNone || s.Decryption != "")
 		if s.Flow != "" && (s.Flow != FlowVision || !visionOK) {
 			s.Flow = ""
 		}
@@ -403,6 +441,26 @@ func normalizeSettings(in *Inbound) error {
 			s.Password = RandomPassword()
 		}
 		s.Method, s.Flow = "", ""
+	case ProtocolSOCKS, ProtocolHTTP:
+		s.Username = strings.TrimSpace(s.Username)
+		if s.Username == "" {
+			s.Username = "u" + RealityShortID()[:8]
+		}
+		if !naiveUserPattern.MatchString(s.Username) {
+			return errors.New("用户名只能包含字母、数字和 -_，长度 1-32")
+		}
+		if s.Password == "" {
+			s.Password = RandomPassword()
+		}
+		if !snellPSKPattern.MatchString(s.Password) {
+			return errors.New("密码只能包含字母、数字和 -_，长度 8-64")
+		}
+		s.UUID, s.Method, s.Flow = "", "", ""
+	case ProtocolWireGuard:
+		s.UUID, s.Password, s.Method, s.Flow = "", "", "", ""
+		if err := normalizeWireGuard(s); err != nil {
+			return err
+		}
 	case ProtocolSnell:
 		if s.Password == "" {
 			s.Password = RandomPassword()
@@ -444,6 +502,81 @@ func normalizeSettings(in *Inbound) error {
 		s.BackendPort = 0
 	}
 	return nil
+}
+
+// normalizeVLESSEncryption generates keys for "auto" and checks stored
+// ones; Encryption is always derived from Decryption.
+func normalizeVLESSEncryption(s *Settings) error {
+	s.Decryption = strings.TrimSpace(s.Decryption)
+	switch s.Decryption {
+	case "", "none":
+		s.Decryption = ""
+		return nil
+	case "auto":
+		dec, enc, err := VLESSEncKeys()
+		if err != nil {
+			return fmt.Errorf("生成 VLESS Encryption 密钥失败: %v", err)
+		}
+		s.Decryption, s.Encryption = dec, enc
+		return nil
+	}
+	s.Encryption = vlessEncryptionFor(s.Decryption)
+	if s.Encryption == "" {
+		return errors.New("VLESS Encryption 密钥格式错误，请重新生成")
+	}
+	return nil
+}
+
+func normalizeWireGuard(s *Settings) error {
+	s.PrivateKey = strings.TrimSpace(s.PrivateKey)
+	if s.PrivateKey == "" {
+		priv, _, err := WireGuardKeyPair()
+		if err != nil {
+			return fmt.Errorf("生成 WireGuard 密钥失败: %v", err)
+		}
+		s.PrivateKey = priv
+	}
+	pub, err := WireGuardPublicKey(s.PrivateKey)
+	if err != nil {
+		return err
+	}
+	s.PublicKey = pub
+	s.PeerPrivateKey = strings.TrimSpace(s.PeerPrivateKey)
+	if s.PeerPrivateKey == "" {
+		priv, _, err := WireGuardKeyPair()
+		if err != nil {
+			return fmt.Errorf("生成 WireGuard 密钥失败: %v", err)
+		}
+		s.PeerPrivateKey = priv
+	}
+	if s.PeerPublicKey, err = WireGuardPublicKey(s.PeerPrivateKey); err != nil {
+		return err
+	}
+	s.PeerAddress = strings.TrimSpace(s.PeerAddress)
+	if s.PeerAddress == "" {
+		s.PeerAddress = DefaultWireGuardPeer
+	}
+	ip := net.ParseIP(s.PeerAddress).To4()
+	if ip == nil || ip[3] < 2 || ip[3] == 255 {
+		return errors.New("WireGuard 客户端地址应为 IPv4，例如 10.66.66.2")
+	}
+	if s.MTU == 0 {
+		s.MTU = DefaultWireGuardMTU
+	}
+	if s.MTU < 1280 || s.MTU > 1500 {
+		return errors.New("WireGuard MTU 应在 1280-1500 之间")
+	}
+	return nil
+}
+
+// WireGuardServerAddress is the server's tunnel address: the first host of
+// the client's /24.
+func (s Settings) WireGuardServerAddress() string {
+	ip := net.ParseIP(s.PeerAddress).To4()
+	if ip == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d.%d.1", ip[0], ip[1], ip[2])
 }
 
 var naiveUserPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -620,6 +753,11 @@ func normalizeACME(sec *Security) error {
 func Regenerate(kernelType string, in *Inbound) error {
 	in.Settings.UUID = ""
 	in.Settings.Password = ""
+	if in.Settings.Decryption != "" {
+		in.Settings.Decryption = "auto"
+	}
+	in.Settings.PrivateKey = ""
+	in.Settings.PeerPrivateKey = ""
 	in.Security.RealityPrivateKey = ""
 	in.Security.RealityPublicKey = ""
 	in.Security.RealityShortIDs = nil

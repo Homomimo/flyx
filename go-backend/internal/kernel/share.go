@@ -58,6 +58,10 @@ func ShareURI(e Endpoint) (string, bool) {
 	if e.Proxy != nil {
 		return proxyURI(e)
 	}
+	if p, ok := clientProxy(e); ok {
+		e.Proxy = p
+		return proxyURI(e)
+	}
 	in := e.Inbound
 	switch in.Protocol {
 	case ProtocolVLESS, ProtocolTrojan:
@@ -65,7 +69,7 @@ func ShareURI(e Endpoint) (string, bool) {
 		q.Set("type", in.Transport.Type)
 		q.Set("security", in.Security.Type)
 		if in.Protocol == ProtocolVLESS {
-			q.Set("encryption", "none")
+			q.Set("encryption", firstNonEmptyString(in.Settings.Encryption, "none"))
 			if in.Settings.Flow != "" {
 				q.Set("flow", in.Settings.Flow)
 			}
@@ -159,6 +163,31 @@ func ShareURI(e Endpoint) (string, bool) {
 	return "", false
 }
 
+// clientProxy describes the protocols whose client side the imported-node
+// producers already cover as a Mihomo proxy, so every subscription format
+// renders them the same way.
+func clientProxy(e Endpoint) (Proxy, bool) {
+	s := e.Inbound.Settings
+	p := Proxy{"name": e.Name, "server": strings.Trim(e.Host, "[]"), "port": e.Port}
+	switch e.Inbound.Protocol {
+	case ProtocolSOCKS:
+		p["type"], p["username"], p["password"], p["udp"] = "socks5", s.Username, s.Password, true
+	case ProtocolHTTP:
+		p["type"], p["username"], p["password"] = "http", s.Username, s.Password
+	case ProtocolWireGuard:
+		p["type"] = "wireguard"
+		p["ip"] = s.PeerAddress
+		p["private-key"] = s.PeerPrivateKey
+		p["public-key"] = s.PublicKey
+		p["allowed-ips"] = []interface{}{"0.0.0.0/0", "::/0"}
+		p["mtu"] = s.MTU
+		p["udp"] = true
+	default:
+		return nil, false
+	}
+	return p, true
+}
+
 func addTransportQuery(q url.Values, t Transport) {
 	switch t.Type {
 	case TransportWS:
@@ -206,6 +235,10 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 	if e.Proxy != nil {
 		return proxyClash(e)
 	}
+	if p, ok := clientProxy(e); ok {
+		e.Proxy = p
+		return proxyClash(e)
+	}
 	in := e.Inbound
 	if in.Transport.Type == TransportXHTTP || in.Protocol == ProtocolSnell || in.Protocol == ProtocolNaive {
 		// Mihomo only speaks Snell v1-v3 and has no NaïveProxy client.
@@ -230,6 +263,9 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 		p = append(p, yamlField{"uuid", in.Settings.UUID})
 		if in.Settings.Flow != "" {
 			p = append(p, yamlField{"flow", in.Settings.Flow})
+		}
+		if in.Settings.Encryption != "" {
+			p = append(p, yamlField{"encryption", in.Settings.Encryption})
 		}
 	case ProtocolVMess:
 		p = append(p, yamlField{"uuid", in.Settings.UUID}, yamlField{"alterId", 0}, yamlField{"cipher", "auto"})
@@ -299,6 +335,10 @@ func SingboxOutbounds(e Endpoint) ([]map[string]interface{}, bool) {
 	if e.Proxy != nil {
 		return proxySingbox(e)
 	}
+	if p, ok := clientProxy(e); ok {
+		e.Proxy = p
+		return proxySingbox(e)
+	}
 	in := e.Inbound
 	if in.Protocol == ProtocolSnell {
 		return nil, false
@@ -339,6 +379,9 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 	}
 	switch in.Protocol {
 	case ProtocolVLESS:
+		if in.Settings.Encryption != "" {
+			return nil, false // sing-box has no VLESS Encryption
+		}
 		o["type"] = "vless"
 		o["uuid"] = in.Settings.UUID
 		if in.Settings.Flow != "" {
@@ -432,6 +475,10 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 // gRPC or XHTTP support, so those endpoints are skipped.
 func SurgeLine(e Endpoint) (string, bool) {
 	if e.Proxy != nil {
+		return proxySurge(e)
+	}
+	if p, ok := clientProxy(e); ok {
+		e.Proxy = p
 		return proxySurge(e)
 	}
 	in := e.Inbound
