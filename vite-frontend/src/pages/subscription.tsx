@@ -22,11 +22,11 @@ import {
   saveSubscription,
 } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
+import { EmptyHint, PageHeader } from "@/components/page-kit";
 import { PageLoadingState } from "@/components/page-state";
 import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
 import { copyText, panelOrigin } from "@/pages/inbound/share";
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
@@ -1005,36 +1005,25 @@ export default function SubscriptionPage() {
   );
 
   return (
-    <AnimatedPage className="space-y-5 px-3 py-6 lg:px-6">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h1 className="text-lg font-semibold">订阅</h1>
-          <p className="text-xs text-default-500">
-            每个订阅一个链接：选落地、过滤、改名，客户端自动识别格式
-          </p>
-        </div>
-        <Button
-          color="primary"
-          size="sm"
-          variant="flat"
-          onPress={() => setDraft(draftFrom())}
-        >
-          新建订阅
-        </Button>
-      </div>
-
-      {inbounds.length === 0 && (
-        <Card className="bg-default-50/50 shadow-sm">
-          <CardBody className="py-6 text-center text-sm text-default-500">
-            还没有落地。先在“落地”里搭建或导入节点，订阅里才会有内容。
-          </CardBody>
-        </Card>
-      )}
+    <AnimatedPage className="space-y-4 px-3 py-6 lg:px-6">
+      <PageHeader
+        description="每个订阅一个链接：选落地、过滤、改名，客户端自动识别格式"
+        primary={{
+          key: "create",
+          label: "新建订阅",
+          onPress: () => setDraft(draftFrom()),
+        }}
+        title="订阅"
+      />
 
       {subs.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs text-default-500">
-          每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开
-        </p>
+        <EmptyHint
+          text={
+            inbounds.length === 0
+              ? "还没有落地。先在“落地”里搭建或导入节点，订阅里才会有内容"
+              : "每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开"
+          }
+        />
       ) : (
         <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
           {subs.map(card)}

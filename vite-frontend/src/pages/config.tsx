@@ -6,15 +6,12 @@ import type {
 
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { AnimatePresence, motion } from "framer-motion";
 import toast from "react-hot-toast";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import { Textarea } from "@/shadcn-bridge/heroui/input";
 import { Spinner } from "@/shadcn-bridge/heroui/spinner";
-import { Divider } from "@/shadcn-bridge/heroui/divider";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
@@ -37,9 +34,12 @@ import {
   runSystemUpgrade,
   type AnnouncementData,
 } from "@/api";
-import { BackIcon, SettingsIcon } from "@/components/icons";
-import { NotifyCard } from "@/pages/config/notify-card";
+import { AnimatedPage } from "@/components/animated-page";
+import { PageHeader } from "@/components/page-kit";
 import { ThemeSettings } from "@/components/theme-settings";
+import { useH5Mode } from "@/hooks/useH5Mode";
+import { NotifySettings, notifySummary } from "@/pages/config/notify-card";
+import { ConfigSection, Field, SubHeading } from "@/pages/config/section";
 import { isAdmin } from "@/utils/auth";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
 import {
@@ -59,23 +59,6 @@ import {
   isPngDataURL,
   type BrandAssetKind,
 } from "@/utils/brand-asset";
-
-// 简单的保存图标组件
-const SaveIcon = ({ className }: { className?: string }) => (
-  <svg
-    className={className}
-    fill="none"
-    stroke="currentColor"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    strokeWidth="2"
-    viewBox="0 0 24 24"
-  >
-    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-    <polyline points="17,21 17,13 7,13 7,21" />
-    <polyline points="7,3 7,8 15,8" />
-  </svg>
-);
 
 interface ConfigItem {
   key: string;
@@ -108,8 +91,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
   {
     key: "app_bg_image",
     label: "背景壁纸",
-    description:
-      "默认背景用于未单独设置壁纸的模式。可分别上传亮色和暗色壁纸，保存后随外观模式自动切换。",
+    description: "亮色、暗色可各设一张，没设的用默认背景；保存后随外观模式切换",
     type: "bg_image",
   },
   {
@@ -117,60 +99,58 @@ const CONFIG_ITEMS: ConfigItem[] = [
     label: "面板后端地址",
     placeholder: "请输入面板后端IP:PORT",
     description:
-      '格式"ip:port"或"domain:port",用于对接节点时使用。支持套CDN和HTTPS,通讯数据有加密',
+      "节点连接面板用，格式 ip:port 或 域名:port；可套 CDN / HTTPS，通讯已加密",
     type: "input",
   },
   {
     key: "panel_domain",
     label: "面板域名",
     placeholder: "请输入面板域名",
-    description: "当前面板的域名，用于与其他面板进行联邦共享时验证身份",
+    description: "与其他面板联邦共享时用来验证身份",
     type: "input",
   },
   {
     key: "app_name",
     label: "应用名称",
     placeholder: "请输入应用名称",
-    description: "在浏览器标签页和导航栏显示的应用名称",
+    description: "显示在浏览器标签页和导航栏",
     type: "input",
   },
   {
     key: "app_logo",
-    label: "网页角标 Logo",
-    description: "用于页面左上角导航角标，上传后会自动转换为 PNG 并持久化保存",
+    label: "导航栏图标",
+    description: "页面左上角的图标，建议方形图片，自动转为 96×96 PNG",
     type: "input",
   },
   {
     key: "app_favicon",
-    label: "浏览器缩略图标",
-    description: "用于浏览器标签页图标，上传后会自动转换为 PNG 并持久化保存",
+    label: "浏览器标签图标",
+    description: "浏览器标签页上的小图标，建议方形图片，自动转为 64×64 PNG",
     type: "input",
   },
   {
     key: "hide_footer_brand",
-    label: "隐藏页面底部 FLVX 版权信息",
+    label: "隐藏底部 FLVX 版权",
     description: "开启后页面底部不再显示 Powered by FLVX",
     type: "switch",
   },
   {
     key: "forward_compact_mode",
     label: "规则页面精简模式",
-    description: "开启后，规则页面列表使用 2.1.6-alpha8 样式（全局配置）",
+    description: "规则列表使用 2.1.6-alpha8 的样式，对所有用户生效",
     type: "switch",
   },
   {
     key: "monitor_tunnel_quality_enabled",
     label: "实时隧道质量检测",
-    description:
-      "关闭后，前端停止自动刷新，后端停止实时隧道质量探测（全局配置）",
+    description: "关闭后前端停止自动刷新，后端停止探测，对所有用户生效",
     type: "switch",
   },
   {
     key: TUNNEL_QUALITY_INTERVAL_CONFIG_KEY,
     label: "隧道质量探测间隔",
     placeholder: String(DEFAULT_TUNNEL_QUALITY_INTERVAL_SEC),
-    description:
-      "设置实时隧道质量检测的执行频率，单位为秒；允许 1–3600 秒，默认 1 秒。",
+    description: "多久探测一次，1–3600 秒，默认 1 秒",
     type: "input",
     dependsOn: "monitor_tunnel_quality_enabled",
     dependsValue: "true",
@@ -179,30 +159,29 @@ const CONFIG_ITEMS: ConfigItem[] = [
     key: "monitor_retention_days",
     label: "监控数据保留天数",
     placeholder: "7",
-    description:
-      "统一清理节点指标、隧道流量、服务监控结果和隧道质量历史；默认 7 天。",
+    description: "节点指标、隧道流量、服务监控和隧道质量历史，默认 7 天",
     type: "input",
   },
   {
     key: "captcha_enabled",
     label: "启用验证码",
-    description: "开启后，用户登录时需要完成验证码验证",
+    description: "登录时需要通过 Cloudflare Turnstile 验证",
     type: "switch",
   },
   {
     key: "cloudflare_site_key",
-    label: "Cloudflare Site Key",
-    placeholder: "请输入 Cloudflare Site Key",
-    description: "Cloudflare Turnstile 站点密钥",
+    label: "Turnstile 站点密钥（Site Key）",
+    placeholder: "请输入站点密钥",
+    description: "在 Cloudflare Turnstile 后台获取",
     type: "input",
     dependsOn: "captcha_enabled",
     dependsValue: "true",
   },
   {
     key: "cloudflare_secret_key",
-    label: "Cloudflare Secret Key",
-    placeholder: "请输入 Cloudflare Secret Key",
-    description: "Cloudflare Turnstile 密钥",
+    label: "Turnstile 私钥（Secret Key）",
+    placeholder: "请输入私钥",
+    description: "与站点密钥成对使用",
     type: "input",
     dependsOn: "captcha_enabled",
     dependsValue: "true",
@@ -210,14 +189,14 @@ const CONFIG_ITEMS: ConfigItem[] = [
   {
     key: "github_proxy_enabled",
     label: "开启 GitHub 加速",
-    description: "用于节点更新和安装脚本下载，解决部分地区 GitHub 访问受限问题",
+    description: "节点更新和安装脚本经代理下载，适合 GitHub 访问受限的地区",
     type: "switch",
   },
   {
     key: "github_proxy_url",
     label: "加速地址",
     placeholder: "https://gcode.hostcentral.cc",
-    description: "GitHub 下载加速代理地址，开启加速后生效",
+    description: "GitHub 下载加速代理地址",
     type: "input",
     dependsOn: "github_proxy_enabled",
     dependsValue: "true",
@@ -226,7 +205,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     key: "allow_local_remote_addr",
     label: "允许转发到本地地址",
     description:
-      "开启后，普通用户创建或编辑规则时可将目标地址指向 127.0.0.1、10.x.x.x、172.16-31.x.x、192.168.x.x 等本地或内网地址。默认关闭以降低开放代理风险。",
+      "普通用户的规则可指向 127.0.0.1、10.x、172.16–31.x、192.168.x 等内网地址；默认关闭，避免成为开放代理",
     type: "switch",
   },
 ];
@@ -287,8 +266,85 @@ const getInitialConfigs = (): Record<string, string> => {
   return initialConfigs;
 };
 
+type SectionKey =
+  | "basic"
+  | "appearance"
+  | "security"
+  | "network"
+  | "notify"
+  | "announcement"
+  | "backup"
+  | "system";
+
+// 每个分组包含的配置项，用于判断分组是否有未保存的修改
+const SECTION_CONFIG_KEYS: Partial<Record<SectionKey, string[]>> = {
+  basic: [
+    "app_name",
+    "ip",
+    "panel_domain",
+    "app_logo",
+    "app_favicon",
+    "hide_footer_brand",
+  ],
+  appearance: [
+    "app_bg_image",
+    "app_bg_image_light",
+    "app_bg_image_dark",
+    "forward_compact_mode",
+  ],
+  security: [
+    "captcha_enabled",
+    "cloudflare_site_key",
+    "cloudflare_secret_key",
+    "allow_local_remote_addr",
+  ],
+  network: [
+    "monitor_tunnel_quality_enabled",
+    TUNNEL_QUALITY_INTERVAL_CONFIG_KEY,
+    "monitor_retention_days",
+    "github_proxy_enabled",
+    "github_proxy_url",
+  ],
+};
+
+const describeBackground = (value?: string) => {
+  if (!value) return "默认纯色背景";
+  if (value === "wallpaper") return "内置壁纸";
+  if (value === "theme") return "自适应纯色";
+  if (/^(https?:|data:|\/|blob:)/.test(value)) return "自定义图片";
+
+  return `纯色 ${value}`;
+};
+
 export default function ConfigPage() {
   const navigate = useNavigate();
+  const isH5 = useH5Mode();
+  const [openSections, setOpenSections] = useState<Set<SectionKey>>(
+    () => new Set(),
+  );
+
+  const toggleSection = (key: SectionKey) => {
+    const opening = !openSections.has(key);
+
+    setOpenSections((prev) => {
+      if (isH5) return opening ? new Set([key]) : new Set();
+      const next = new Set(prev);
+
+      if (opening) next.add(key);
+      else next.delete(key);
+
+      return next;
+    });
+
+    // 手机上只展开一个分组，上方分组收起后把当前分组滚回视野
+    if (opening && isH5) {
+      requestAnimationFrame(() =>
+        document
+          .getElementById(`config-${key}`)
+          ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+      );
+    }
+  };
   const initialConfigs = getInitialConfigs();
   const [configs, setConfigs] =
     useState<Record<string, string>>(initialConfigs);
@@ -365,21 +421,6 @@ export default function ConfigPage() {
       !systemUpgradeChecking &&
       !systemUpgradeExecuting,
   );
-
-  const canGoBack =
-    typeof window !== "undefined" &&
-    typeof window.history.state?.idx === "number" &&
-    window.history.state.idx > 0;
-
-  const handleBack = () => {
-    if (canGoBack) {
-      navigate(-1);
-
-      return;
-    }
-
-    navigate("/profile", { replace: true });
-  };
 
   // 权限检查
   useEffect(() => {
@@ -615,6 +656,9 @@ export default function ConfigPage() {
 
     if (intervalError) {
       toast.error(intervalError);
+      setOpenSections((prev) =>
+        isH5 ? new Set(["network"]) : new Set([...prev, "network"]),
+      );
 
       return;
     }
@@ -703,15 +747,6 @@ export default function ConfigPage() {
 
   // 检查配置项是否应该显示（依赖检查）
   const shouldShowItem = (item: ConfigItem): boolean => {
-    // 品牌设置项在单独的卡片中展示
-    if (
-      ["app_name", "app_logo", "app_favicon", "hide_footer_brand"].includes(
-        item.key,
-      )
-    ) {
-      return false;
-    }
-
     if (!item.dependsOn || !item.dependsValue) {
       return true;
     }
@@ -755,7 +790,9 @@ export default function ConfigPage() {
       );
 
       handleConfigChange(key, pngDataURL);
-      toast.success(key === "app_logo" ? "Logo 上传成功" : "Favicon 上传成功");
+      toast.success(
+        key === "app_logo" ? "导航栏图标上传成功" : "浏览器标签图标上传成功",
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "图片处理失败，请重试";
@@ -852,20 +889,39 @@ export default function ConfigPage() {
     const isTheme = bgImage === "theme";
     const isWallpaper = bgImage === "wallpaper";
     const isSolidColor = bgImage && !isImage && !isTheme && !isWallpaper;
+    const isChanged = configs[key] !== originalConfigs[key];
 
     return (
-      <div className="flex flex-col gap-3 w-full rounded-xl border border-divider p-4">
-        <div>
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            {label}
+      <div
+        className={`flex flex-col gap-2 rounded-lg border p-3 ${
+          isChanged ? "border-warning-300" : "border-divider"
+        }`}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="text-sm font-medium">{label}</p>
+          <p className="truncate text-xs text-default-500">
+            {!isDefault && !bgImage
+              ? "未单独设置，使用默认背景"
+              : describeBackground(bgImage)}
           </p>
-          {!isDefault && !bgImage && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              未单独设置，使用默认背景
-            </p>
-          )}
         </div>
-        <div className="flex flex-wrap items-center gap-4">
+
+        {bgImage && isImage && (
+          <img
+            alt={`${label}预览`}
+            className="h-20 w-full rounded-md border border-divider object-cover"
+            src={bgImage}
+          />
+        )}
+
+        {bgImage && isSolidColor && (
+          <div
+            className="h-10 rounded-md border border-divider"
+            style={{ backgroundColor: bgImage }}
+          />
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
           <input
             ref={(node) => {
               if (node) bgImageFileInputRefs.current[key] = node;
@@ -876,9 +932,9 @@ export default function ConfigPage() {
             onChange={(event) => void handleBgImageUpload(event, key)}
           />
           <Button
-            color="primary"
             isDisabled={bgImageUploading !== null && bgImageUploading !== key}
             isLoading={bgImageUploading === key}
+            size="sm"
             variant="flat"
             onPress={() => bgImageFileInputRefs.current[key]?.click()}
           >
@@ -886,8 +942,8 @@ export default function ConfigPage() {
           </Button>
           {isDefault && (
             <Button
-              color="secondary"
               isDisabled={bgImageUploading !== null || isWallpaper}
+              size="sm"
               variant="flat"
               onPress={() => handleConfigChange(key, "wallpaper")}
             >
@@ -896,8 +952,8 @@ export default function ConfigPage() {
           )}
           {isDefault && (
             <Button
-              color="default"
               isDisabled={bgImageUploading !== null || bgImage === "#ffffff"}
+              size="sm"
               variant="flat"
               onPress={() => handleConfigChange(key, "#ffffff")}
             >
@@ -908,53 +964,14 @@ export default function ConfigPage() {
             <Button
               color="danger"
               isDisabled={bgImageUploading !== null}
+              size="sm"
               variant="flat"
               onPress={() => handleConfigChange(key, "")}
             >
-              {isDefault ? "恢复默认纯色" : "清除专属壁纸"}
+              {isDefault ? "恢复默认纯色" : "清除"}
             </Button>
           )}
         </div>
-
-        {bgImage && isImage && (
-          <div className="relative rounded-xl overflow-hidden border border-divider">
-            <img
-              alt={`${label}预览`}
-              className="w-full max-h-48 object-cover opacity-80"
-              src={bgImage}
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent flex items-end p-4">
-              <span className="text-white text-sm font-medium">预览效果</span>
-            </div>
-          </div>
-        )}
-
-        {bgImage && isWallpaper && (
-          <div className="relative rounded-xl border border-divider bg-background h-32 flex items-center justify-center">
-            <span className="text-foreground text-sm font-medium">
-              当前为内置壁纸（亮色 / 暗色各一张）
-            </span>
-          </div>
-        )}
-
-        {bgImage && isTheme && (
-          <div className="relative rounded-xl border border-divider bg-background h-32 flex items-center justify-center">
-            <span className="text-foreground text-sm font-medium">
-              当前为自适应纯色背景
-            </span>
-          </div>
-        )}
-
-        {bgImage && isSolidColor && (
-          <div
-            className="relative rounded-xl border border-divider h-32 flex items-center justify-center"
-            style={{ backgroundColor: bgImage }}
-          >
-            <span className="text-gray-500 bg-white/80 dark:bg-black/80 px-2 py-1 rounded text-sm font-medium border border-gray-200 dark:border-gray-800 shadow-sm">
-              纯色背景 ({bgImage})
-            </span>
-          </div>
-        )}
       </div>
     );
   };
@@ -966,71 +983,50 @@ export default function ConfigPage() {
     const showImage = previewUrl.length > 0 && !failed;
 
     return (
-      <div className="mt-3 rounded-lg border border-default-200 dark:border-default-100/30 bg-default-50/60 dark:bg-default-100/10 p-3">
-        <p className="text-xs text-default-500">实时预览</p>
-        <div className="mt-2 rounded-md border border-default-200 dark:border-default-100/30 bg-white dark:bg-black px-3 py-2">
-          {key === "app_logo" ? (
-            <div className="flex h-10 items-center gap-2">
-              {showImage ? (
-                <img
-                  alt="logo preview"
-                  className="h-7 w-7 rounded-sm border border-default-200 object-cover dark:border-default-100/30"
-                  src={previewUrl}
-                  onError={() =>
-                    setPreviewLoadFailed((prev) => ({ ...prev, [key]: true }))
-                  }
-                  onLoad={() =>
-                    setPreviewLoadFailed((prev) => ({ ...prev, [key]: false }))
-                  }
-                />
-              ) : (
-                <div className="flex h-7 w-7 items-center justify-center rounded-sm bg-default-200 text-[10px] font-semibold text-default-600 dark:bg-default-700 dark:text-default-200">
-                  LOGO
-                </div>
-              )}
-              <span className="truncate text-sm font-semibold text-foreground">
-                {appNamePreview}
-              </span>
-            </div>
-          ) : (
-            <div className="flex h-7 max-w-[260px] items-center gap-2 rounded border border-default-200 bg-default-100/70 px-2 dark:border-default-100/30 dark:bg-default-100/20">
-              {showImage ? (
-                <img
-                  alt="favicon preview"
-                  className="h-4 w-4 rounded-sm object-contain"
-                  src={previewUrl}
-                  onError={() =>
-                    setPreviewLoadFailed((prev) => ({ ...prev, [key]: true }))
-                  }
-                  onLoad={() =>
-                    setPreviewLoadFailed((prev) => ({ ...prev, [key]: false }))
-                  }
-                />
-              ) : (
-                <div className="h-4 w-4 rounded-sm bg-default-300 dark:bg-default-600" />
-              )}
-              <span className="truncate text-xs text-default-700 dark:text-default-300">
-                {appNamePreview}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {previewUrl.length === 0 ? (
-          <p className="mt-2 text-xs text-default-500">
-            上传图片后会实时显示预览
-          </p>
-        ) : null}
-
-        {previewUrl.length > 0 && failed ? (
-          <p className="mt-2 text-xs text-danger">图片加载失败，请重新上传</p>
-        ) : null}
-
-        {previewUrl.length > 0 && !isPngDataURL(previewUrl) ? (
-          <p className="mt-2 text-xs text-warning-600 dark:text-warning-400">
-            当前是旧版 URL 配置，建议重新上传图片以启用无闪烁加载
-          </p>
-        ) : null}
+      <div className="flex min-w-0 flex-1 items-center rounded-md border border-divider bg-background px-2 py-1.5">
+        {key === "app_logo" ? (
+          <div className="flex min-w-0 items-center gap-2">
+            {showImage ? (
+              <img
+                alt="导航栏图标预览"
+                className="h-6 w-6 shrink-0 rounded-sm border border-divider object-cover"
+                src={previewUrl}
+                onError={() =>
+                  setPreviewLoadFailed((prev) => ({ ...prev, [key]: true }))
+                }
+                onLoad={() =>
+                  setPreviewLoadFailed((prev) => ({ ...prev, [key]: false }))
+                }
+              />
+            ) : (
+              <div className="h-6 w-6 shrink-0 rounded-sm bg-default-200" />
+            )}
+            <span className="truncate text-sm font-semibold">
+              {appNamePreview}
+            </span>
+          </div>
+        ) : (
+          <div className="flex min-w-0 items-center gap-2 rounded bg-default-100 px-2 py-0.5">
+            {showImage ? (
+              <img
+                alt="浏览器标签图标预览"
+                className="h-4 w-4 shrink-0 rounded-sm object-contain"
+                src={previewUrl}
+                onError={() =>
+                  setPreviewLoadFailed((prev) => ({ ...prev, [key]: true }))
+                }
+                onLoad={() =>
+                  setPreviewLoadFailed((prev) => ({ ...prev, [key]: false }))
+                }
+              />
+            ) : (
+              <div className="h-4 w-4 shrink-0 rounded-sm bg-default-300" />
+            )}
+            <span className="truncate text-xs text-default-600">
+              {appNamePreview}
+            </span>
+          </div>
+        )}
       </div>
     );
   };
@@ -1041,14 +1037,12 @@ export default function ConfigPage() {
   ) => {
     const value = (configs[key] || "").trim();
     const uploading = brandUploading[key] === true;
-    const isLogo = key === "app_logo";
+    const failed = previewLoadFailed[key] === true;
 
     return (
       <div
-        className={`rounded-lg border p-3 ${
-          isChanged
-            ? "border-warning-300"
-            : "border-default-200 dark:border-default-100/30"
+        className={`space-y-1.5 rounded-lg border p-2 ${
+          isChanged ? "border-warning-300" : "border-divider"
         }`}
       >
         <input
@@ -1062,42 +1056,38 @@ export default function ConfigPage() {
           }}
         />
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
+          {renderBrandPreview(key)}
           <Button
-            color="primary"
+            className="shrink-0"
             isLoading={uploading}
             size="sm"
             variant="flat"
             onPress={() => triggerBrandFilePicker(key)}
           >
-            {value.length > 0
-              ? isLogo
-                ? "替换 Logo"
-                : "替换 Favicon"
-              : isLogo
-                ? "上传 Logo"
-                : "上传 Favicon"}
+            {value.length > 0 ? "替换" : "上传"}
           </Button>
           <Button
+            className="shrink-0"
+            color="danger"
             isDisabled={value.length === 0 || uploading}
             size="sm"
-            variant="light"
+            variant="flat"
             onPress={() => clearBrandAsset(key)}
           >
             清除
           </Button>
-          <span className="text-xs text-default-500">
-            仅支持图片文件，自动转换为 PNG
-          </span>
         </div>
 
-        <p className="mt-2 text-xs text-default-500">
-          {isLogo
-            ? "建议上传方形图片，系统会统一转换为 96x96 PNG"
-            : "建议上传方形图片，系统会统一转换为 64x64 PNG"}
-        </p>
+        {value.length > 0 && failed ? (
+          <p className="text-xs text-danger">图片加载失败，请重新上传</p>
+        ) : null}
 
-        {renderBrandPreview(key)}
+        {value.length > 0 && !isPngDataURL(value) ? (
+          <p className="text-xs text-warning-600 dark:text-warning-400">
+            当前是旧版 URL 配置，建议重新上传图片以启用无闪烁加载
+          </p>
+        ) : null}
       </div>
     );
   };
@@ -1110,12 +1100,12 @@ export default function ConfigPage() {
     switch (item.type) {
       case "bg_image":
         return (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
             <div className="lg:col-span-2">
               {renderBgImageUploader("app_bg_image", "默认背景")}
             </div>
-            {renderBgImageUploader("app_bg_image_light", "☀️ 亮色模式壁纸")}
-            {renderBgImageUploader("app_bg_image_dark", "🌙 暗色模式壁纸")}
+            {renderBgImageUploader("app_bg_image_light", "亮色模式壁纸")}
+            {renderBgImageUploader("app_bg_image_dark", "暗色模式壁纸")}
           </div>
         );
 
@@ -1136,6 +1126,7 @@ export default function ConfigPage() {
 
         return (
           <Input
+            aria-label={item.label}
             classNames={{
               input: "text-sm",
               inputWrapper: isChanged
@@ -1156,7 +1147,7 @@ export default function ConfigPage() {
                 : undefined
             }
             placeholder={item.placeholder}
-            size="md"
+            size="sm"
             step={isTunnelQualityInterval ? 1 : undefined}
             type={isTunnelQualityInterval ? "number" : "text"}
             value={intervalValue}
@@ -1169,24 +1160,20 @@ export default function ConfigPage() {
       case "switch":
         return (
           <Switch
-            classNames={{
-              wrapper: isChanged ? "border-warning-300" : "",
-            }}
+            aria-label={item.label}
+            className={isChanged ? "ring-2 ring-warning-300" : undefined}
             isSelected={configs[item.key] === "true"}
             size="sm"
             onValueChange={(checked) =>
               handleConfigChange(item.key, checked ? "true" : "false")
             }
-          >
-            <span className="text-sm text-gray-700 dark:text-gray-300">
-              {configs[item.key] === "true" ? "已启用" : "已禁用"}
-            </span>
-          </Switch>
+          />
         );
 
       case "select":
         return (
           <Select
+            aria-label={item.label}
             classNames={{
               trigger: isChanged
                 ? "border-warning-300 data-[hover=true]:border-warning-400"
@@ -1194,7 +1181,7 @@ export default function ConfigPage() {
             }}
             placeholder="请选择验证码类型"
             selectedKeys={configs[item.key] ? [configs[item.key]] : []}
-            size="md"
+            size="sm"
             variant="bordered"
             onSelectionChange={(keys) => {
               const selectedKey = Array.from(keys)[0] as string;
@@ -1215,6 +1202,24 @@ export default function ConfigPage() {
       default:
         return null;
     }
+  };
+
+  // 一个配置项：标题、控件、简短说明；开关放在右侧
+  const renderItem = (key: string) => {
+    const item = CONFIG_ITEMS.find((i) => i.key === key);
+
+    if (!item || !shouldShowItem(item)) return null;
+
+    return (
+      <Field
+        key={item.key}
+        help={item.description}
+        inline={item.type === "switch"}
+        label={item.label}
+      >
+        {renderConfigItem(item)}
+      </Field>
+    );
   };
 
   const handleExport = async () => {
@@ -1337,7 +1342,7 @@ export default function ConfigPage() {
               <button
                 key={option.value}
                 aria-pressed={isSelected}
-                className={`w-full px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer text-left ${
+                className={`w-full px-3 py-2 rounded-lg border transition-all duration-200 cursor-pointer text-left ${
                   isSelected
                     ? "bg-primary-50 dark:bg-primary-900/20 border-primary-300 dark:border-primary-500/50 shadow-sm"
                     : "bg-white dark:bg-default-50 border-default-200 dark:border-default-100/30 hover:border-primary-200 dark:hover:border-primary-500/30 hover:shadow-sm"
@@ -1380,380 +1385,181 @@ export default function ConfigPage() {
     );
   }
 
+  const sectionChanged = (key: SectionKey) =>
+    (key === "notify"
+      ? Object.keys({ ...configs, ...originalConfigs }).filter((k) =>
+          k.startsWith("notify_"),
+        )
+      : (SECTION_CONFIG_KEYS[key] ?? [])
+    ).some((k) => configs[k] !== originalConfigs[k]);
+
+  const sectionProps = (key: SectionKey) => ({
+    id: key,
+    open: openSections.has(key),
+    changed: sectionChanged(key),
+    onToggle: () => toggleSection(key),
+  });
+
+  const onOff = (key: string, on = "开", off = "关") =>
+    configs[key] === "true" ? on : off;
+
+  const tunnelQualitySummary =
+    configs.monitor_tunnel_quality_enabled === "true"
+      ? `隧道质量每 ${
+          configs[TUNNEL_QUALITY_INTERVAL_CONFIG_KEY] ||
+          DEFAULT_TUNNEL_QUALITY_INTERVAL_SEC
+        } 秒检测`
+      : "隧道质量检测关";
+
+  const systemSummary = [
+    systemUpgradeInfo?.currentVersion
+      ? `当前 ${systemUpgradeInfo.currentVersion}`
+      : systemUpgradeLoading
+        ? "加载版本中"
+        : "未获取到版本",
+    systemUpgradeInfo?.hasUpdate && systemUpgradeInfo.latestVersion
+      ? `可升级到 ${systemUpgradeInfo.latestVersion}`
+      : "",
+    `数据库 ${storageSummary}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      {/* 页面标题 */}
-      <div className="flex items-center gap-3 mb-6">
-        <Button
-          isIconOnly
-          aria-label="返回上一页"
-          className="min-w-0 w-9 h-9"
-          size="sm"
-          variant="flat"
-          onPress={handleBack}
-        >
-          <BackIcon className="w-5 h-5" />
-        </Button>
-        <SettingsIcon className="w-8 h-8 text-primary" />
-        <div>
-          <h1 className="text-2xl font-bold">网站配置</h1>
-          <p className="text-gray-600 dark:text-gray-400">
-            管理网站的基本信息和显示设置
-          </p>
-        </div>
-      </div>
-
-      <Card className="shadow-md mb-6">
-        <CardHeader className="pb-6">
-          <div className="flex items-center w-full">
-            <div>
-              <h2 className="text-xl font-semibold">品牌设置</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                自定义面板名称、Logo、网站图标和底部版权信息
-              </p>
-            </div>
-          </div>
-        </CardHeader>
-        <Divider />
-        <CardBody className="pt-8">
-          <div className="space-y-6">
-            {CONFIG_ITEMS.filter((item) =>
-              [
-                "app_name",
-                "app_logo",
-                "app_favicon",
-                "hide_footer_brand",
-              ].includes(item.key),
-            ).map((item, index) => (
-              <div key={item.key}>
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-[1fr_2fr]">
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                      {item.label}
-                    </label>
-                    {item.description && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {item.description}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex items-start">
-                    {renderConfigItem(item)}
-                  </div>
-                </div>
-                {index < 3 && <Divider className="mt-6" />}
-              </div>
-            ))}
-          </div>
-        </CardBody>
-      </Card>
-
-      <Card className="shadow-md">
-        <CardHeader className="pb-6">
-          <div className="flex items-center w-full">
-            <div>
-              <h2 className="text-xl font-semibold">基本设置</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                配置网站的基本信息，这些设置会影响网站的显示效果
-              </p>
-            </div>
-          </div>
-        </CardHeader>
-
-        <Divider />
-
-        <CardBody className="space-y-6 pt-8 md:pt-8">
-          {CONFIG_ITEMS.map((item, index) => {
-            // 检查配置项是否应该显示
-            if (!shouldShowItem(item)) {
-              return null;
-            }
-
-            // 计算是否是最后一个显示的项目（用于决定是否显示分隔线）
-            const remainingItems = CONFIG_ITEMS.slice(index + 1).filter(
-              shouldShowItem,
-            );
-            const isLastItem = remainingItems.length === 0;
-
-            return (
-              <div key={item.key} className="space-y-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {item.label}
-                  </label>
-                  {item.description && (
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {item.description}
-                    </p>
-                  )}
-                </div>
-
-                {/* 渲染配置项 */}
-                {renderConfigItem(item)}
-
-                {/* 分隔线 */}
-                {!isLastItem && <Divider className="mt-6" />}
-              </div>
-            );
-          })}
-
-          <Divider className="my-2" />
-
-          <div className="space-y-3">
-            <div className="flex flex-col gap-1">
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                数据库占用
-              </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                当前后端数据库文件或实例占用空间，仅用于容量参考。
-              </p>
-            </div>
-            <div className="rounded-lg border border-divider bg-default-50/60 dark:bg-default-100/10 px-4 py-3 text-sm font-semibold text-default-800 dark:text-default-200">
-              {storageSummary}
-            </div>
-          </div>
-
-          <Divider className="my-2" />
-
-          <div className="space-y-4 rounded-xl border border-divider bg-default-50/60 p-4 dark:bg-default-100/10">
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                面板自升级
-              </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                检查当前版本、可用发布并在容器环境中触发面板升级。
-              </p>
-            </div>
-
-            {systemUpgradeLoading ? (
-              <div className="flex items-center gap-2 rounded-lg border border-divider bg-background px-4 py-3 text-sm text-default-500">
-                <Spinner size="sm" />
-                正在加载升级状态...
-              </div>
-            ) : (
-              <div className="space-y-4 rounded-lg border border-divider bg-background px-4 py-4 text-sm text-default-700 dark:text-default-300">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div>
-                    <p className="text-xs text-default-500">当前版本</p>
-                    <p className="mt-1 font-medium">
-                      {systemUpgradeInfo?.currentVersion || "未获取到版本信息"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-default-500">最新版本</p>
-                    <p className="mt-1 font-medium">
-                      {systemUpgradeInfo?.latestVersion || "未获取到可用版本"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-default-500">升级能力</p>
-                    <p className="mt-1 font-medium">
-                      {systemUpgradeInfo?.capability.capable
-                        ? "可升级"
-                        : "当前不可升级"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div>
-                    <p className="text-xs text-default-500">部署目录</p>
-                    <p className="mt-1 break-all font-medium">
-                      {systemUpgradeInfo?.capability.deployDir ||
-                        "未获取到部署目录"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-default-500">后端容器</p>
-                    <p className="mt-1 break-all font-medium">
-                      {systemUpgradeInfo?.capability.backendContainer ||
-                        "未获取到容器信息"}
-                    </p>
-                  </div>
-                </div>
-
-                {!systemUpgradeInfo?.capability.capable && (
-                  <div className="rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950/30 dark:text-warning-200">
-                    <p className="text-xs font-medium">当前无法升级</p>
-                    <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
-                      {(systemUpgradeInfo?.capability.reasons?.length
-                        ? systemUpgradeInfo.capability.reasons
-                        : ["暂未获取到不可升级原因"]
-                      ).map((reason) => (
-                        <li key={reason}>{reason}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                  <div className="flex flex-col gap-1">
-                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      可用发布版本
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      选择指定版本后执行升级；留空则使用当前通道下最新可用版本。
-                    </p>
-                  </div>
-
-                  <Select
-                    aria-label="目标版本"
-                    isDisabled={
-                      !systemUpgradeReleasesMatchChannel ||
-                      systemUpgradeReleases.length === 0 ||
-                      systemUpgradeExecuting
-                    }
-                    placeholder={
-                      systemUpgradeReleasesMatchChannel &&
-                      systemUpgradeReleases.length > 0
-                        ? "留空时自动选择最新版本"
-                        : "请先检查当前通道更新"
-                    }
-                    selectedKeys={
-                      systemUpgradeSelectedVersion
-                        ? [systemUpgradeSelectedVersion]
-                        : []
-                    }
-                    size="md"
-                    variant="bordered"
-                    onSelectionChange={(keys) => {
-                      const selected = Array.from(keys)[0] as
-                        | string
-                        | undefined;
-
-                      setSystemUpgradeSelectedVersion(selected || "");
-                    }}
-                  >
-                    {(systemUpgradeReleasesMatchChannel
-                      ? systemUpgradeReleases
-                      : []
-                    ).map((release) => (
-                      <SelectItem
-                        key={release.version}
-                        description={release.publishedAt || "暂无发布时间"}
-                      >
-                        {release.name || release.version}
-                      </SelectItem>
-                    ))}
-                  </Select>
-                </div>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:justify-end">
-              <Button
-                isLoading={systemUpgradeChecking}
-                variant="flat"
-                onPress={handleCheckSystemUpgrade}
-              >
-                检查更新
-              </Button>
-              <Button
-                color="primary"
-                isDisabled={!canTriggerSystemUpgrade}
-                isLoading={systemUpgradeExecuting}
-                onPress={handleOpenSystemUpgradeModal}
-              >
-                立即升级
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex justify-end pt-6 border-t border-divider/50 mt-4">
-            <Button
-              color="primary"
-              disabled={!hasChanges}
-              isLoading={saving}
-              startContent={<SaveIcon className="w-4 h-4" />}
-              onPress={handleSave}
-            >
-              {saving ? "保存中..." : "保存配置"}
-            </Button>
-          </div>
-        </CardBody>
-      </Card>
-
-      <NotifyCard
-        configs={configs}
-        originalConfigs={originalConfigs}
-        onChange={handleConfigChange}
+    <AnimatedPage className="mx-auto max-w-3xl px-3 py-6 lg:px-6">
+      <PageHeader
+        description="面板名称、登录安全、通知、备份与升级"
+        title="网站配置"
       />
 
-      {/* 主题设置 */}
-      <div className="mt-6">
-        <ThemeSettings />
-      </div>
+      <div className="space-y-2">
+        <ConfigSection
+          {...sectionProps("basic")}
+          summary={`${configs.app_name || "未设置名称"} · ${
+            configs.ip || "未填后端地址"
+          }`}
+          title="基本"
+        >
+          {renderItem("app_name")}
+          {renderItem("ip")}
+          {renderItem("panel_domain")}
+          {renderItem("app_logo")}
+          {renderItem("app_favicon")}
+          {renderItem("hide_footer_brand")}
+        </ConfigSection>
 
-      {hasChanges && (
-        <Card className="mt-4 bg-warning-50 dark:bg-warning-900/20 border-warning-200 dark:border-warning-800 shadow-sm overflow-hidden">
-          <div className="h-10 flex items-center justify-center gap-2 text-warning-700 dark:text-warning-300">
-            <div className="w-2 h-2 bg-warning-500 rounded-full animate-pulse flex-shrink-0" />
-            <span className="text-sm font-medium leading-none">
-              检测到配置变更，请记得保存您的修改
-            </span>
+        <ConfigSection
+          {...sectionProps("appearance")}
+          summary={`${describeBackground(configs.app_bg_image)} · 规则精简模式${onOff(
+            "forward_compact_mode",
+          )}`}
+          title="外观"
+        >
+          {renderItem("app_bg_image")}
+          {renderItem("forward_compact_mode")}
+          <SubHeading>主题（点选即生效，不需要保存）</SubHeading>
+          <div className="[&_[data-slot=card-content]]:p-0! [&_h2]:hidden [&>[data-slot=card]]:rounded-none! [&>[data-slot=card]]:bg-none! [&>[data-slot=card]]:shadow-none! [&>[data-slot=card]]:backdrop-blur-none!">
+            <ThemeSettings />
           </div>
-        </Card>
-      )}
+        </ConfigSection>
 
-      <Card className="mt-6 shadow-md">
-        <CardHeader className="pb-6">
-          <div className="flex justify-between items-center w-full">
-            <div>
-              <h2 className="text-xl font-semibold">公告管理</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                设置首页显示的公告内容
-              </p>
-            </div>
-          </div>
-        </CardHeader>
+        <ConfigSection
+          {...sectionProps("security")}
+          summary={`登录验证码${onOff("captcha_enabled")} · 转发到内网地址${onOff(
+            "allow_local_remote_addr",
+            "允许",
+            "禁止",
+          )}`}
+          title="安全与登录"
+        >
+          {renderItem("captcha_enabled")}
+          {renderItem("cloudflare_site_key")}
+          {renderItem("cloudflare_secret_key")}
+          {renderItem("allow_local_remote_addr")}
+        </ConfigSection>
 
-        <Divider />
+        <ConfigSection
+          {...sectionProps("network")}
+          summary={`${tunnelQualitySummary} · 监控保留 ${
+            configs.monitor_retention_days || 7
+          } 天 · GitHub 加速${onOff("github_proxy_enabled")}`}
+          title="节点与监控"
+        >
+          {renderItem("monitor_tunnel_quality_enabled")}
+          {renderItem(TUNNEL_QUALITY_INTERVAL_CONFIG_KEY)}
+          {renderItem("monitor_retention_days")}
+          {renderItem("github_proxy_enabled")}
+          {renderItem("github_proxy_url")}
+        </ConfigSection>
 
-        <CardBody className="space-y-4 pt-8 md:pt-8">
+        <ConfigSection
+          {...sectionProps("notify")}
+          summary={notifySummary(configs)}
+          title="通知"
+        >
+          <NotifySettings
+            configs={configs}
+            originalConfigs={originalConfigs}
+            onChange={handleConfigChange}
+          />
+        </ConfigSection>
+
+        <ConfigSection
+          {...sectionProps("announcement")}
+          summary={
+            announcementLoading
+              ? "加载中..."
+              : announcement.enabled === 1
+                ? "首页显示中（单独保存）"
+                : "未启用（单独保存）"
+          }
+          title="公告"
+        >
           {announcementLoading ? (
-            <div className="flex justify-center py-8">
-              <Spinner size="lg" />
+            <div className="flex justify-center py-4">
+              <Spinner size="sm" />
             </div>
           ) : (
             <>
-              <div className="space-y-2">
+              <Field inline help="启用后在首页顶部显示" label="显示公告">
                 <Switch
+                  aria-label="显示公告"
                   isSelected={announcement.enabled === 1}
+                  size="sm"
                   onValueChange={(checked) =>
                     setAnnouncement({
                       ...announcement,
                       enabled: checked ? 1 : 0,
                     })
                   }
-                >
-                  <span className="text-sm text-gray-700 dark:text-gray-300">
-                    {announcement.enabled === 1 ? "已启用" : "已禁用"}
-                  </span>
-                </Switch>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  启用后，公告将在首页顶部显示
-                </p>
-              </div>
+                />
+              </Field>
 
-              <Textarea
-                label="公告内容"
-                minRows={4}
-                placeholder="支持 Markdown，例如：**加粗**、[链接](https://example.com)、- 列表"
-                value={announcement.content}
-                variant="bordered"
-                onChange={(e) =>
-                  setAnnouncement({ ...announcement, content: e.target.value })
-                }
-              />
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                公告支持 Markdown 语法，链接会在新标签页打开
-              </p>
+              <Field help="支持 Markdown，链接在新标签页打开" label="公告内容">
+                <Textarea
+                  aria-label="公告内容"
+                  minRows={4}
+                  placeholder="例如：**加粗**、[链接](https://example.com)、- 列表"
+                  value={announcement.content}
+                  variant="bordered"
+                  onChange={(e) =>
+                    setAnnouncement({
+                      ...announcement,
+                      content: e.target.value,
+                    })
+                  }
+                />
+              </Field>
 
-              <div className="flex justify-end mt-4 pt-4 border-t border-divider/50">
+              <div className="flex items-center justify-between gap-3 border-t border-divider pt-3">
+                <span className="text-xs text-default-500">
+                  公告单独保存，不随下方“保存”提交
+                </span>
                 <Button
+                  className="shrink-0"
                   color="primary"
                   isLoading={announcementSaving}
-                  startContent={<SaveIcon className="w-4 h-4" />}
+                  size="sm"
                   onPress={saveAnnouncement}
                 >
                   保存公告
@@ -1761,84 +1567,205 @@ export default function ConfigPage() {
               </div>
             </>
           )}
-        </CardBody>
-      </Card>
+        </ConfigSection>
 
-      {/* 备份与恢复 */}
-      <Card className="mt-6 shadow-md">
-        <CardHeader className="pb-6">
-          <div className="flex justify-between items-center w-full">
-            <div>
-              <h2 className="text-xl font-semibold">数据备份与恢复</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                导出或导入系统数据，支持选择特定数据类型
-              </p>
+        <ConfigSection
+          {...sectionProps("backup")}
+          summary={
+            importing
+              ? "正在导入..."
+              : exporting
+                ? "正在导出..."
+                : "导出或导入 JSON 备份"
+          }
+          title="备份与恢复"
+        >
+          <Field
+            inline
+            help={`选择数据类型，导出为 JSON 文件；已选 ${exportTypes.length} / ${BACKUP_TYPE_VALUES.length}`}
+            label="导出数据"
+          >
+            <Button
+              isLoading={exporting}
+              size="sm"
+              variant="flat"
+              onPress={() => setExportSelectorOpen(true)}
+            >
+              {exporting ? "导出中..." : "选择并导出"}
+            </Button>
+          </Field>
+
+          <input
+            ref={backupFileInputRef}
+            accept=".json"
+            className="hidden"
+            type="file"
+            onChange={handleFileChange}
+          />
+          <Field
+            inline
+            help={
+              importFileName
+                ? `已选择：${importFileName}`
+                : `从备份文件恢复所选类型；已选 ${importTypes.length} / ${BACKUP_TYPE_VALUES.length}`
+            }
+            label="导入数据"
+          >
+            <Button
+              isLoading={importing}
+              size="sm"
+              variant="flat"
+              onPress={() => setImportSelectorOpen(true)}
+            >
+              {importing ? "导入中..." : "选择并导入"}
+            </Button>
+          </Field>
+        </ConfigSection>
+
+        <ConfigSection
+          {...sectionProps("system")}
+          summary={systemSummary}
+          title="系统与升级"
+        >
+          <Field inline help="后端数据库占用空间，仅供参考" label="数据库占用">
+            <span className="text-sm font-medium">{storageSummary}</span>
+          </Field>
+
+          <SubHeading>面板自升级</SubHeading>
+          {systemUpgradeLoading ? (
+            <div className="flex items-center gap-2 text-sm text-default-500">
+              <Spinner size="sm" />
+              正在加载升级状态...
             </div>
-          </div>
-        </CardHeader>
+          ) : (
+            <>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+                <dt className="text-default-500">当前版本</dt>
+                <dd>
+                  {systemUpgradeInfo?.currentVersion || "未获取到版本信息"}
+                </dd>
+                <dt className="text-default-500">最新版本</dt>
+                <dd>
+                  {systemUpgradeInfo?.latestVersion || "未获取到可用版本"}
+                </dd>
+                <dt className="text-default-500">升级能力</dt>
+                <dd>
+                  {systemUpgradeInfo?.capability.capable
+                    ? "可升级"
+                    : "当前不可升级"}
+                </dd>
+                <dt className="text-default-500">部署目录</dt>
+                <dd className="break-all">
+                  {systemUpgradeInfo?.capability.deployDir ||
+                    "未获取到部署目录"}
+                </dd>
+                <dt className="text-default-500">后端容器</dt>
+                <dd className="break-all">
+                  {systemUpgradeInfo?.capability.backendContainer ||
+                    "未获取到容器信息"}
+                </dd>
+              </dl>
 
-        <Divider />
-
-        <CardBody className="space-y-6 pt-8 md:pt-8">
-          {/* 导出部分 */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-medium">导出数据</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              选择要导出的数据类型，导出为 JSON 格式文件
-            </p>
-            <p className="text-xs text-default-500">
-              当前已选 {exportTypes.length} / {BACKUP_TYPE_VALUES.length}
-            </p>
-
-            <div className="flex justify-end gap-3 pt-4">
-              <Button
-                color="primary"
-                isLoading={exporting}
-                onPress={() => setExportSelectorOpen(true)}
-              >
-                {exporting ? "导出中..." : "选择并导出"}
-              </Button>
-            </div>
-          </div>
-
-          <Divider />
-
-          {/* 导入部分 */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-medium">导入数据</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              选择要导入的数据类型，支持从备份文件恢复数据
-            </p>
-            <p className="text-xs text-default-500">
-              当前已选 {importTypes.length} / {BACKUP_TYPE_VALUES.length}
-            </p>
-
-            <input
-              ref={backupFileInputRef}
-              accept=".json"
-              className="hidden"
-              type="file"
-              onChange={handleFileChange}
-            />
-
-            <div className="flex justify-end gap-3 pt-4">
-              <Button
-                color="primary"
-                isLoading={importing}
-                variant="flat"
-                onPress={() => setImportSelectorOpen(true)}
-              >
-                {importing ? "导入中..." : "选择并导入"}
-              </Button>
-              {importFileName && (
-                <span className="self-center text-sm text-gray-600 dark:text-gray-400">
-                  已选择: {importFileName}
-                </span>
+              {!systemUpgradeInfo?.capability.capable && (
+                <div className="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-warning-800 dark:border-warning-900/40 dark:bg-warning-950/30 dark:text-warning-200">
+                  <p className="text-xs font-medium">当前无法升级</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-4 text-xs">
+                    {(systemUpgradeInfo?.capability.reasons?.length
+                      ? systemUpgradeInfo.capability.reasons
+                      : ["暂未获取到不可升级原因"]
+                    ).map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
-            </div>
+
+              <Field help="留空则升级到当前通道的最新版本" label="目标版本">
+                <Select
+                  aria-label="目标版本"
+                  isDisabled={
+                    !systemUpgradeReleasesMatchChannel ||
+                    systemUpgradeReleases.length === 0 ||
+                    systemUpgradeExecuting
+                  }
+                  placeholder={
+                    systemUpgradeReleasesMatchChannel &&
+                    systemUpgradeReleases.length > 0
+                      ? "留空时自动选择最新版本"
+                      : "请先检查当前通道更新"
+                  }
+                  selectedKeys={
+                    systemUpgradeSelectedVersion
+                      ? [systemUpgradeSelectedVersion]
+                      : []
+                  }
+                  size="sm"
+                  variant="bordered"
+                  onSelectionChange={(keys) => {
+                    const selected = Array.from(keys)[0] as string | undefined;
+
+                    setSystemUpgradeSelectedVersion(selected || "");
+                  }}
+                >
+                  {(systemUpgradeReleasesMatchChannel
+                    ? systemUpgradeReleases
+                    : []
+                  ).map((release) => (
+                    <SelectItem
+                      key={release.version}
+                      description={release.publishedAt || "暂无发布时间"}
+                    >
+                      {release.name || release.version}
+                    </SelectItem>
+                  ))}
+                </Select>
+              </Field>
+            </>
+          )}
+
+          <div className="flex justify-end gap-2 border-t border-divider pt-3">
+            <Button
+              isLoading={systemUpgradeChecking}
+              size="sm"
+              variant="flat"
+              onPress={handleCheckSystemUpgrade}
+            >
+              检查更新
+            </Button>
+            <Button
+              color="primary"
+              isDisabled={!canTriggerSystemUpgrade}
+              isLoading={systemUpgradeExecuting}
+              size="sm"
+              onPress={handleOpenSystemUpgradeModal}
+            >
+              立即升级
+            </Button>
           </div>
-        </CardBody>
-      </Card>
+        </ConfigSection>
+      </div>
+
+      {/* 配置统一保存（公告除外），有修改时出现 */}
+      {hasChanges && (
+        <div
+          className={`sticky z-20 mt-4 flex items-center gap-3 rounded-xl border border-warning-300 bg-warning-50/95 px-3 py-2 shadow-md backdrop-blur dark:bg-warning-900/60 ${
+            isH5 ? "bottom-[calc(4.5rem+var(--safe-area-bottom))]" : "bottom-4"
+          }`}
+        >
+          <span className="min-w-0 flex-1 truncate text-xs text-warning-700 dark:text-warning-300">
+            有修改尚未保存
+          </span>
+          <Button
+            className="shrink-0"
+            color="primary"
+            isLoading={saving}
+            size="sm"
+            onPress={handleSave}
+          >
+            {saving ? "保存中..." : "保存"}
+          </Button>
+        </div>
+      )}
 
       <Modal
         backdrop="blur"
@@ -1961,30 +1888,6 @@ export default function ConfigPage() {
           )}
         </ModalContent>
       </Modal>
-
-      {/* Floating Save Button (FAB) */}
-      <AnimatePresence>
-        {hasChanges && (
-          <motion.div
-            animate={{ y: 0, opacity: 1 }}
-            className="fixed bottom-6 right-6 z-50"
-            exit={{ y: 100, opacity: 0 }}
-            initial={{ y: 100, opacity: 0 }}
-            transition={{ type: "spring", damping: 20, stiffness: 300 }}
-          >
-            <Button
-              isIconOnly
-              className="w-12 h-12 rounded-full shadow-lg"
-              color="primary"
-              isLoading={saving}
-              size="lg"
-              onPress={handleSave}
-            >
-              {!saving && <SaveIcon className="w-5 h-5" />}
-            </Button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    </AnimatedPage>
   );
 }

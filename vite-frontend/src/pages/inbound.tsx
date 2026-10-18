@@ -8,7 +8,7 @@ import type {
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy, LayoutGrid, List } from "lucide-react";
+import { Copy } from "lucide-react";
 
 import {
   batchDeleteInbounds,
@@ -30,10 +30,10 @@ import {
   StaggerList,
 } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
-import { SearchBar } from "@/components/search-bar";
+import { PageHeader, PageTabs, PageToolbar } from "@/components/page-kit";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
-import { ActionSheet } from "@/pages/inbound/action-sheet";
+import { ActionSheet } from "@/components/action-sheet";
 import { SplitModal } from "@/pages/inbound/split-modal";
 import {
   EXTERNAL_LABEL,
@@ -208,16 +208,11 @@ export default function InboundPage() {
   const [nodes, setNodes] = useState<NodeApiItem[]>([]);
   const [kernels, setKernels] = useState<KernelApiItem[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
-  const [viewMode, setViewMode] = useLocalStorageState<"list" | "grid">(
-    "inbound-view-mode",
-    "list",
-  );
   const [isCollapsed, toggleCollapsed] = useCollapsed();
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
     "inbound-search-keyword",
     "",
   );
-  const [isSearchVisible, setIsSearchVisible] = useState(false);
   const [nodeFilter, setNodeFilter] = useState("");
   const [tab, setTab] = usePageTab();
   const [sheetFor, setSheetFor] = useState<number | null>(null);
@@ -529,10 +524,7 @@ export default function InboundPage() {
     }
   };
 
-  const listGridClass =
-    viewMode === "grid"
-      ? "grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
-      : "grid grid-cols-1 2xl:grid-cols-2 gap-2";
+  const listGridClass = "grid grid-cols-1 2xl:grid-cols-2 gap-2";
 
   const renderInbound = (item: InboundApiItem) => {
     const probe =
@@ -564,7 +556,7 @@ export default function InboundPage() {
           ? "bg-warning"
           : "bg-default-300";
     const stateText = unreachable
-      ? probe?.error || "连不上"
+      ? `连不上：${probe?.error ?? ""}`
       : running
         ? probe
           ? `可连接 · ${probe.latencyMs} ms`
@@ -572,153 +564,6 @@ export default function InboundPage() {
         : item.enabled
           ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
           : "已停用";
-
-    if (viewMode === "grid") {
-      return (
-        <div
-          key={item.id}
-          aria-pressed={selectMode ? selected : undefined}
-          className={`flex cursor-pointer flex-col gap-3 rounded-2xl border p-4 text-left shadow-sm transition-colors ${
-            selected
-              ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
-              : "border-divider bg-content1 hover:bg-default-100"
-          }`}
-          role="button"
-          tabIndex={0}
-          onClick={activate}
-          onKeyDown={(e) => {
-            if (e.target !== e.currentTarget) return;
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              activate();
-            }
-          }}
-        >
-          <div className="flex items-start gap-2">
-            {selectMode && (
-              <div
-                className="flex shrink-0 pt-0.5"
-                role="presentation"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <Checkbox
-                  aria-label={`选择 ${item.name}`}
-                  isSelected={selected}
-                  onValueChange={() => toggleSelect(item.id)}
-                />
-              </div>
-            )}
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-semibold">{item.name}</div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-xs text-default-500">
-                <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
-                <span
-                  className={`truncate ${unreachable ? "text-danger" : kernelBad ? "text-warning" : ""}`}
-                >
-                  {stateText}
-                </span>
-              </div>
-            </div>
-            {!selectMode && (
-              <div
-                className="shrink-0"
-                role="presentation"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <Switch
-                  aria-label={`${item.enabled ? "停用" : "启用"} ${item.name}`}
-                  isDisabled={toggling === item.id}
-                  isSelected={item.enabled}
-                  size="sm"
-                  onValueChange={() => handleToggle(item)}
-                />
-              </div>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            <Chip color="primary" size="sm" variant="flat">
-              {describeInbound(item)}
-            </Chip>
-            <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
-              端口 {item.port}
-            </span>
-            {where && (
-              <span className="max-w-full truncate rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
-                {where}
-              </span>
-            )}
-            {item.relayCount > 0 && (
-              <Chip color="secondary" size="sm" variant="flat">
-                {item.relayCount} 条中转
-              </Chip>
-            )}
-            {item.outboundId > 0 && (
-              <Chip
-                className="max-w-full"
-                color={item.outboundMissing ? "danger" : "warning"}
-                size="sm"
-                variant="flat"
-              >
-                {item.outboundMissing
-                  ? "出站节点已删除"
-                  : `经 ${item.outboundName} 出站`}
-              </Chip>
-            )}
-            {item.splitRules?.length > 0 && (
-              <Chip color="primary" size="sm" variant="flat">
-                分流 {item.splitRules.length} 条
-              </Chip>
-            )}
-            {item.relayOnly && (
-              <span className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-600">
-                仅中转
-              </span>
-            )}
-          </div>
-          {!item.external && (
-            <div className="grid grid-cols-2 gap-2 text-center font-mono text-xs">
-              <div className="rounded-lg bg-default-100 py-1.5">
-                ↑ {formatTraffic(item.uploadBytes)}
-              </div>
-              <div className="rounded-lg bg-default-100 py-1.5">
-                ↓ {formatTraffic(item.downloadBytes)}
-              </div>
-            </div>
-          )}
-          {!selectMode && (
-            <div
-              className="grid grid-cols-3 gap-2"
-              role="presentation"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Button
-                color="primary"
-                size="sm"
-                variant="flat"
-                onPress={() => setSharing(item)}
-              >
-                分享
-              </Button>
-              <Button
-                color="secondary"
-                size="sm"
-                variant="flat"
-                onPress={() => setRelaying(item)}
-              >
-                中转
-              </Button>
-              <Button
-                size="sm"
-                variant="flat"
-                onPress={() => setSheetFor(item.id)}
-              >
-                更多
-              </Button>
-            </div>
-          )}
-        </div>
-      );
-    }
 
     return (
       <div
@@ -754,26 +599,8 @@ export default function InboundPage() {
           </div>
         )}
         <span
-          className={`h-2 w-2 shrink-0 rounded-full ${
-            unreachable
-              ? "bg-danger"
-              : running
-                ? "bg-success"
-                : item.enabled
-                  ? "bg-warning"
-                  : "bg-default-300"
-          }`}
-          title={
-            unreachable
-              ? `连不上：${probe?.error ?? ""}`
-              : running
-                ? probe
-                  ? `可连接 · ${probe.latencyMs} ms`
-                  : "运行中"
-                : item.enabled
-                  ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
-                  : "已停用"
-          }
+          className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`}
+          title={stateText}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
@@ -924,25 +751,11 @@ export default function InboundPage() {
 
   return (
     <AnimatedPage className="px-3 lg:px-6 py-6">
-      <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl bg-default-100 p-1 sm:max-w-md">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
-              tab === t.key
-                ? "bg-background font-medium shadow-sm"
-                : "text-default-500"
-            }`}
-            type="button"
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-            {t.badge !== undefined && (
-              <span className="ml-1 text-xs text-default-400">{t.badge}</span>
-            )}
-          </button>
-        ))}
-      </div>
+      <PageHeader
+        description="落地是客户端最终连到的节点：在自己的服务器上搭建，或导入现成的节点"
+        title="落地"
+      />
+      <PageTabs tabs={tabs} value={tab} onChange={setTab} />
 
       {tab === "kernels" && (
         <KernelPanel
@@ -964,84 +777,58 @@ export default function InboundPage() {
 
       {tab === "inbounds" && (
         <>
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <SearchBar
-              isVisible={isSearchVisible}
+          {!selectMode && (
+            <PageToolbar
+              more={[
+                ...(hasExternal
+                  ? [
+                      {
+                        key: "probe",
+                        label: probing ? "检测中…" : "检测导入节点",
+                        disabled: probing,
+                        onPress: runProbe,
+                      },
+                    ]
+                  : []),
+                {
+                  key: "import",
+                  label: "导入节点",
+                  onPress: () => setImportOpen(true),
+                },
+                {
+                  key: "batch",
+                  label: "批量操作",
+                  disabled: inbounds.length === 0,
+                  onPress: () => setSelectMode(true),
+                },
+              ]}
               placeholder="搜索名称、节点、协议、端口"
-              value={searchKeyword}
-              onChange={setSearchKeyword}
-              onClose={() => setIsSearchVisible(false)}
-              onOpen={() => setIsSearchVisible(true)}
-            />
-            {nodeOptions.length > 1 && (
-              <select
-                aria-label="按节点筛选"
-                className="h-8 max-w-[10rem] rounded-lg border border-divider bg-background px-2 text-sm"
-                value={nodeFilter}
-                onChange={(e) => setNodeFilter(e.target.value)}
-              >
-                <option value="">全部节点</option>
-                {nodeOptions.map(([id, name]) => (
-                  <option key={id} value={id}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <div className="ml-auto flex gap-2">
-              {hasExternal && (
-                <Button
-                  isLoading={probing}
-                  size="sm"
-                  variant="flat"
-                  onPress={runProbe}
+              primary={{
+                key: "create",
+                label: "新建入站",
+                disabled: kernels.length === 0,
+                onPress: openCreate,
+              }}
+              search={searchKeyword}
+              onSearch={setSearchKeyword}
+            >
+              {nodeOptions.length > 1 && (
+                <select
+                  aria-label="按节点筛选"
+                  className="h-9 max-w-[8rem] shrink-0 rounded-xl bg-default-100 px-2 text-sm"
+                  value={nodeFilter}
+                  onChange={(e) => setNodeFilter(e.target.value)}
                 >
-                  检测
-                </Button>
+                  <option value="">全部节点</option>
+                  {nodeOptions.map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
               )}
-              {inbounds.length > 0 && (
-                <Button
-                  className="bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/45"
-                  size="sm"
-                  variant="flat"
-                  onPress={() => setSelectMode(true)}
-                >
-                  多选
-                </Button>
-              )}
-              <Button
-                isIconOnly
-                aria-label={viewMode === "list" ? "卡片视图" : "列表视图"}
-                size="sm"
-                variant="flat"
-                onPress={() =>
-                  setViewMode(viewMode === "list" ? "grid" : "list")
-                }
-              >
-                {viewMode === "list" ? (
-                  <LayoutGrid className="h-4 w-4" />
-                ) : (
-                  <List className="h-4 w-4" />
-                )}
-              </Button>
-              <Button
-                size="sm"
-                variant="flat"
-                onPress={() => setImportOpen(true)}
-              >
-                导入
-              </Button>
-              <Button
-                color="primary"
-                isDisabled={kernels.length === 0}
-                size="sm"
-                variant="flat"
-                onPress={openCreate}
-              >
-                新建入站
-              </Button>
-            </div>
-          </div>
+            </PageToolbar>
+          )}
 
           {selectMode && (
             <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-divider bg-background/95 px-3 py-2 shadow-sm backdrop-blur">

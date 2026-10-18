@@ -9,11 +9,11 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { MoreHorizontal } from "lucide-react";
 
-import { ActionSheet } from "./action-sheet";
 import { groupItems } from "./group";
 import { eligibleNodes } from "./inbound-form-modal";
 import { KERNEL_STATUS } from "./presets";
 
+import { ActionSheet } from "@/components/action-sheet";
 import {
   controlKernel,
   getKernelLogs,
