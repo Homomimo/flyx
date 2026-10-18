@@ -134,8 +134,9 @@ export function PageToolbar({
           <Search className="h-4 w-4 shrink-0 text-default-400" />
           <input
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-default-400"
+            enterKeyHint="search"
             placeholder={placeholder}
-            type="search"
+            type="text"
             value={search ?? ""}
             onChange={(e) => onSearch(e.target.value)}
           />
