@@ -16,8 +16,11 @@ import {
  *   PageHeader   title, one line of help, one primary action
  *   PageTabs     the only tab style
  *   PageToolbar  search, filters, and secondary actions behind "更多"
- *   ListRow      one item per row; tapping opens its actions
+ *   ListRow      one item per row (or a card); tapping opens its actions
  *   EmptyHint    what to do when a list is empty
+ *
+ * Pages with a list / card switch (see view-mode.tsx) pass `card` to
+ * ListRow and lay the items out with listGridClass.
  */
 
 export interface PageAction {
@@ -245,6 +248,52 @@ const STATUS_DOT: Record<RowStatus, string> = {
   off: "bg-default-300",
 };
 
+/** The grid a list of ListRows sits in. */
+export function listGridClass(card?: boolean) {
+  return card
+    ? "grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
+    : "grid grid-cols-1 gap-2 2xl:grid-cols-2";
+}
+
+/** A figure on a card; percent draws a bar under it. */
+export interface CardStat {
+  label: string;
+  value: React.ReactNode;
+  percent?: number;
+}
+
+function CardStats({ stats }: { stats: CardStat[] }) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {stats.map((s) => (
+        <div
+          key={s.label}
+          className="min-w-0 rounded-lg bg-default-100/70 px-2 py-1.5"
+        >
+          <div className="truncate text-[11px] text-default-500">{s.label}</div>
+          <div className="truncate font-mono text-sm font-medium">
+            {s.value}
+          </div>
+          {s.percent !== undefined && (
+            <div className="mt-1 h-1 overflow-hidden rounded-full bg-default-200">
+              <div
+                className={`h-full rounded-full ${
+                  s.percent >= 90
+                    ? "bg-danger"
+                    : s.percent >= 70
+                      ? "bg-warning"
+                      : "bg-primary"
+                }`}
+                style={{ width: `${Math.min(100, Math.max(0, s.percent))}%` }}
+              />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** One item of a list. Tapping it opens its actions. */
 export function ListRow({
   status,
@@ -253,6 +302,9 @@ export function ListRow({
   badges,
   meta,
   right,
+  card,
+  stats,
+  footer,
   selectMode,
   selected,
   onSelect,
@@ -265,47 +317,96 @@ export function ListRow({
   meta?: React.ReactNode;
   /** Shown at the end of the row; clicks on it do not open the row. */
   right?: React.ReactNode;
+  /** Card layout: meta wraps instead of being cut off, plus stats and footer. */
+  card?: boolean;
+  stats?: CardStat[];
+  footer?: React.ReactNode;
   selectMode?: boolean;
   selected?: boolean;
   onSelect?: () => void;
   onPress: () => void;
 }) {
   const activate = selectMode ? onSelect : onPress;
+  const frame = `w-full cursor-pointer rounded-xl border text-left shadow-sm transition-colors ${
+    selected
+      ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
+      : "border-divider bg-content1 hover:bg-default-100"
+  }`;
+  const keyDown = (e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      activate?.();
+    }
+  };
+  const checkbox = selectMode && (
+    <div
+      className="flex shrink-0"
+      role="presentation"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <Checkbox isSelected={selected} onValueChange={() => onSelect?.()} />
+    </div>
+  );
+  const dot = status && (
+    <span
+      className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[status]}`}
+      title={statusTitle}
+    />
+  );
+  const rightSlot = right && !selectMode && (
+    <div
+      className="flex shrink-0 items-center gap-2"
+      role="presentation"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {right}
+    </div>
+  );
+
+  if (card) {
+    return (
+      <div
+        aria-pressed={selectMode ? selected : undefined}
+        className={`${frame} flex h-full flex-col gap-2.5 p-3`}
+        role="button"
+        tabIndex={0}
+        onClick={activate}
+        onKeyDown={keyDown}
+      >
+        <div className="flex items-center gap-2">
+          {checkbox}
+          {dot}
+          <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
+          {rightSlot}
+        </div>
+        {badges && <div className="flex flex-wrap gap-1">{badges}</div>}
+        {meta && (
+          <div className="break-all text-xs leading-relaxed text-default-500">
+            {meta}
+          </div>
+        )}
+        {stats && stats.length > 0 && <CardStats stats={stats} />}
+        {footer && (
+          <div role="presentation" onClick={(e) => e.stopPropagation()}>
+            {footer}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
       aria-pressed={selectMode ? selected : undefined}
-      className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition-colors ${
-        selected
-          ? "border-primary bg-primary-50/70 dark:bg-primary-900/40"
-          : "border-divider bg-content1 hover:bg-default-100"
-      }`}
+      className={`${frame} flex items-center gap-3 px-3 py-2.5`}
       role="button"
       tabIndex={0}
       onClick={activate}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          activate?.();
-        }
-      }}
+      onKeyDown={keyDown}
     >
-      {selectMode && (
-        <div
-          className="flex shrink-0"
-          role="presentation"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Checkbox isSelected={selected} onValueChange={() => onSelect?.()} />
-        </div>
-      )}
-      {status && (
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[status]}`}
-          title={statusTitle}
-        />
-      )}
+      {checkbox}
+      {dot}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate font-medium">{title}</span>
@@ -315,15 +416,7 @@ export function ListRow({
           <div className="truncate text-xs text-default-500">{meta}</div>
         )}
       </div>
-      {right && !selectMode && (
-        <div
-          className="flex shrink-0 items-center gap-2"
-          role="presentation"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {right}
-        </div>
-      )}
+      {rightSlot}
     </div>
   );
 }
@@ -331,10 +424,12 @@ export function ListRow({
 export function ListGroup({
   title,
   count,
+  card,
   children,
 }: {
   title?: React.ReactNode;
   count?: number;
+  card?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -349,7 +444,7 @@ export function ListGroup({
           )}
         </h2>
       )}
-      <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">{children}</div>
+      <div className={listGridClass(card)}>{children}</div>
     </section>
   );
 }

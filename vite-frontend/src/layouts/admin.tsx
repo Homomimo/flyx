@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { toast } from "react-hot-toast";
 import { AnimatePresence, motion } from "framer-motion";
+import { KeyRound, LogOut } from "lucide-react";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
 import {
@@ -45,7 +46,7 @@ export default function AdminLayout({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isOpen, onOpenChange } = useDisclosure();
+  const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const [mobileMenuVisible, setMobileMenuVisible] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(
     () => localStorage.getItem("sidebar_collapsed") === "true",
@@ -506,8 +507,37 @@ export default function AdminLayout({
           </ul>
         </nav>
 
-        {/* 底部版权信息和折叠按钮 */}
+        {/* 底部账号操作、版权信息和折叠按钮 */}
         <div className="px-5 py-6 mt-auto flex-shrink-0 flex flex-col gap-4 overflow-hidden whitespace-nowrap box-border">
+          {!isMobile && (
+            <div className="flex flex-col gap-1">
+              {[
+                {
+                  key: "password",
+                  label: "修改密码",
+                  icon: KeyRound,
+                  onPress: onOpen,
+                },
+                {
+                  key: "logout",
+                  label: "退出登录",
+                  icon: LogOut,
+                  onPress: handleLogout,
+                },
+              ].map((a) => (
+                <button
+                  key={a.key}
+                  className={`flex h-9 items-center rounded-xl text-sm text-default-500 transition-colors hover:bg-default-100 hover:text-foreground ${isCollapsed ? "justify-center px-0" : "gap-3 px-3"}`}
+                  title={a.label}
+                  type="button"
+                  onClick={a.onPress}
+                >
+                  <a.icon className="h-4 w-4 shrink-0" />
+                  {!isCollapsed && <span>{a.label}</span>}
+                </button>
+              ))}
+            </div>
+          )}
           <div
             className={`transition-all duration-300 overflow-hidden flex items-center ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[200px] opacity-100"}`}
           >

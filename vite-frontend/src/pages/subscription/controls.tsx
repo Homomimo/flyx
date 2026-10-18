@@ -40,12 +40,14 @@ export function ToggleRow({
   label,
   hint,
   value,
+  disabled,
   onChange,
 }: {
   id: string;
   label: string;
   hint?: string;
   value: boolean;
+  disabled?: boolean;
   onChange: (v: boolean) => void;
 }) {
   return (
@@ -53,6 +55,7 @@ export function ToggleRow({
       <Switch
         aria-labelledby={`${id}-label`}
         id={id}
+        isDisabled={disabled}
         isSelected={value}
         size="sm"
         onValueChange={onChange}

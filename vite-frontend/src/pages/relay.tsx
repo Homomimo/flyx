@@ -12,7 +12,9 @@ import {
   PageHeader,
   PageTabs,
   PageToolbar,
+  listGridClass,
 } from "@/components/page-kit";
+import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import TunnelPage from "@/pages/tunnel";
@@ -49,6 +51,8 @@ function LinesView() {
   const [editing, setEditing] = useState<InboundApiItem | null>(null);
   const [onlyWithRelays, setOnlyWithRelays] = useState(false);
   const [query, setQuery] = useState("");
+  const [viewMode, setViewMode] = useViewMode("relay");
+  const card = viewMode === "card";
 
   const load = useCallback(async () => {
     try {
@@ -104,6 +108,7 @@ function LinesView() {
         >
           只看有中转的
         </Button>
+        <ViewModeToggle value={viewMode} onChange={setViewMode} />
       </PageToolbar>
 
       {shown.length === 0 ? (
@@ -117,12 +122,20 @@ function LinesView() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
+        <div className={listGridClass(card)}>
           {shown.map((i) => {
             const lines = byInbound.get(i.id) ?? [];
             const broken = lines.some(
               (l) => !(l.forwardExists && l.forwardStatus === 1),
             );
+            const lineTexts = lines.map((l) => {
+              const entry = l.entries[0];
+
+              return `${l.name || l.tunnelName}${
+                entry ? ` ${l.shareHost || entry.Host}:${entry.Port}` : ""
+              }`;
+            });
+            const empty = `${i.external ? "导入的节点" : i.nodeName} · 无中转，点击添加`;
 
             return (
               <ListRow
@@ -134,20 +147,21 @@ function LinesView() {
                     </Chip>
                   )
                 }
+                card={card}
                 meta={
-                  lines.length > 0
-                    ? lines
-                        .map((l) => {
-                          const entry = l.entries[0];
-
-                          return `${l.name || l.tunnelName}${
-                            entry
-                              ? ` ${l.shareHost || entry.Host}:${entry.Port}`
-                              : ""
-                          }`;
-                        })
-                        .join(" · ")
-                    : `${i.external ? "导入的节点" : i.nodeName} · 无中转，点击添加`
+                  lineTexts.length === 0 ? (
+                    empty
+                  ) : card ? (
+                    <ul className="space-y-0.5">
+                      {lineTexts.map((t, n) => (
+                        <li key={n} className="font-mono">
+                          {t}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    lineTexts.join(" · ")
+                  )
                 }
                 right={
                   <span className="text-xs text-default-500">

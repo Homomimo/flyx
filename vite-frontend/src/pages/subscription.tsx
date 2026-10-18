@@ -23,7 +23,13 @@ import {
   saveSubscription,
 } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
-import { EmptyHint, PageHeader } from "@/components/page-kit";
+import {
+  EmptyHint,
+  ListRow,
+  PageHeader,
+  listGridClass,
+} from "@/components/page-kit";
+import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import { PageLoadingState } from "@/components/page-state";
 import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
 import { copyText, panelOrigin } from "@/pages/inbound/share";
@@ -197,7 +203,7 @@ function Section({
 }: {
   title: string;
   hint?: string;
-  /** Shown next to the title while collapsed. */
+  /** Shown next to the title (while collapsed, for a collapsible one). */
   summary?: string;
   collapsible?: boolean;
   defaultOpen?: boolean;
@@ -232,7 +238,14 @@ function Section({
         </button>
       ) : (
         <div>
-          <h3 className="text-sm font-semibold">{title}</h3>
+          <h3 className="text-sm font-semibold">
+            {title}
+            {summary && (
+              <span className="ml-2 text-xs font-normal text-primary">
+                {summary}
+              </span>
+            )}
+          </h3>
           {hint && <p className="text-xs text-default-500">{hint}</p>}
         </div>
       )}
@@ -241,24 +254,17 @@ function Section({
   );
 }
 
-/** Names the processing steps a pipeline turns on, e.g. "过滤、改名". */
-function pipelineSummary(o: SubPipeline): string {
+type EditorPage = "basic" | "nodes" | "naming" | "rules" | "preview";
+
+/** Names the filters a pipeline turns on, e.g. "地区 2 个、去重". */
+function filterSummary(o: SubPipeline): string {
   const steps: string[] = [];
 
-  if (
-    o.lines ||
-    o.regions.length ||
-    o.protocols.length ||
-    o.include ||
-    o.exclude
-  )
-    steps.push("过滤");
-  if (o.rename.trim()) steps.push("改名");
-  if (o.addFlag) steps.push("国旗");
-  if (o.prefix) steps.push("前缀");
+  if (o.lines) steps.push(o.lines === "relay" ? "只要中转" : "只要直连");
+  if (o.regions.length) steps.push(`地区 ${o.regions.length} 个`);
+  if (o.protocols.length) steps.push(`协议 ${o.protocols.length} 个`);
+  if (o.include || o.exclude) steps.push("名称");
   if (o.dedupe) steps.push("去重");
-  if (o.sort) steps.push("排序");
-  if (o.regionGroups) steps.push("地区分组");
 
   return steps.join("、");
 }
@@ -358,6 +364,7 @@ function Editor({
     dropped: number;
   } | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [page, setPage] = useState<EditorPage>("basic");
   const o = draft.options;
   const setOpts = (patch: Partial<SubPipeline>) => {
     setDraft({ ...draft, options: { ...o, ...patch } });
@@ -439,404 +446,441 @@ function Editor({
           {draft.id ? "编辑订阅" : "新建订阅"}
         </h2>
       </ModalHeader>
-      <ModalBody className="space-y-4">
-        <Section title="基本">
-          <Input
-            label="名称"
-            placeholder="例如 我的手机 / 小明"
-            value={draft.name}
-            variant="bordered"
-            onChange={(e) => set({ name: e.target.value })}
-          />
-          <p className="text-xs text-default-500">
-            有独立的 UUID /
-            密码：停用、到期或流量用完后从节点上删除，已导入的配置也连不上
-          </p>
-          <div className="space-y-1">
-            <label className="text-sm font-medium" htmlFor="sub-expire">
-              到期日期
-            </label>
-            <div className="flex gap-2">
-              <input
-                className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-background px-2 text-sm"
-                id="sub-expire"
-                type="date"
-                value={draft.expire}
-                onChange={(e) => set({ expire: e.target.value })}
-              />
-              {[30, 90, 365].map((d) => (
-                <Button
-                  key={d}
-                  className="min-w-0 px-2"
-                  size="sm"
-                  variant="flat"
-                  onPress={() =>
-                    set({ expire: toDateInput(Date.now() + d * 86400000) })
-                  }
-                >
-                  {d === 365 ? "1年" : `${d}天`}
-                </Button>
-              ))}
-            </div>
-            <p className="text-xs text-default-500">
-              {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
-            </p>
-          </div>
-          <div className="space-y-1">
-            <label className="text-sm font-medium" htmlFor="sub-limit">
-              流量上限
-            </label>
-            <div className="flex gap-2">
-              <div className="relative min-w-0 flex-1">
-                <input
-                  className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
-                  id="sub-limit"
-                  inputMode="decimal"
-                  placeholder="不限"
-                  value={draft.limitGB}
-                  onChange={(e) =>
-                    set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
-                  }
-                />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-default-500">
-                  GB
-                </span>
-              </div>
-              {[50, 100, 500].map((g) => (
-                <Button
-                  key={g}
-                  className="min-w-0 px-2"
-                  size="sm"
-                  variant="flat"
-                  onPress={() => set({ limitGB: String(g) })}
-                >
-                  {g}G
-                </Button>
-              ))}
-            </div>
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <label className="text-sm" htmlFor="sub-reset-day">
-                每月重置
-              </label>
-              <select
-                className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
-                id="sub-reset-day"
-                value={draft.resetDay}
-                onChange={(e) => set({ resetDay: Number(e.target.value) })}
-              >
-                <option value={0}>不重置</option>
-                {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
-                  <option key={d} value={d}>
-                    每月 {d} 号
-                  </option>
-                ))}
-              </select>
-            </div>
-            <p className="text-xs text-default-500">
-              上传 +
-              下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
-            </p>
-          </div>
-        </Section>
-
-        <Section hint="中转线路会跟着它的落地一起出现" title="来源">
+      {/* A steady height, so switching pages doesn't resize the dialog. */}
+      <ModalBody className="min-h-[min(65vh,34rem)] space-y-4">
+        <div className="sticky top-0 z-10 -mx-1 bg-content1 px-1 pb-1">
           <Segmented
             options={[
-              ["all", "全部落地"],
-              ["pick", "指定落地"],
+              ["basic", "基本"],
+              ["nodes", "节点"],
+              ["naming", "命名"],
+              ["rules", "规则"],
+              ["preview", "预览"],
             ]}
-            value={draft.sourceAll ? "all" : "pick"}
-            onChange={(v) => set({ sourceAll: v === "all" })}
+            value={page}
+            onChange={setPage}
           />
-          {draft.sourceAll ? (
-            <p className="text-xs text-default-500">
-              包括以后新增的落地；只想要一部分可以用下面的过滤
-            </p>
-          ) : (
-            <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
-              {pickList("自建", selfBuilt)}
-              {pickList("导入", imported)}
-              {sources.length > 0 && (
-                <div className="space-y-1">
-                  <p className="text-xs text-default-500">
-                    订阅源（整个源，更新后的节点自动跟上）
-                  </p>
-                  {sources.map((src) => (
-                    <Checkbox
-                      key={src.id}
-                      className="w-full"
-                      isSelected={draft.sourceIds.includes(src.id)}
-                      onValueChange={(on) =>
-                        set({
-                          sourceIds: on
-                            ? [...draft.sourceIds, src.id]
-                            : draft.sourceIds.filter((x) => x !== src.id),
-                        })
+        </div>
+
+        {page === "basic" && (
+          <div className="space-y-4">
+            <Section title="基本">
+              <Input
+                label="名称"
+                placeholder="例如 我的手机 / 小明"
+                value={draft.name}
+                variant="bordered"
+                onChange={(e) => set({ name: e.target.value })}
+              />
+              <p className="text-xs text-default-500">
+                有独立的 UUID /
+                密码：停用、到期或流量用完后从节点上删除，已导入的配置也连不上
+              </p>
+              <div className="space-y-1">
+                <label className="text-sm font-medium" htmlFor="sub-expire">
+                  到期日期
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    className="h-10 min-w-0 flex-1 rounded-lg border border-divider bg-background px-2 text-sm"
+                    id="sub-expire"
+                    type="date"
+                    value={draft.expire}
+                    onChange={(e) => set({ expire: e.target.value })}
+                  />
+                  {[30, 90, 365].map((d) => (
+                    <Button
+                      key={d}
+                      className="min-w-0 px-2"
+                      size="sm"
+                      variant="flat"
+                      onPress={() =>
+                        set({ expire: toDateInput(Date.now() + d * 86400000) })
                       }
                     >
-                      <span className="text-sm">{src.name}</span>
-                      <span className="ml-1 text-xs text-default-400">
-                        {src.nodeCount} 个节点
-                      </span>
-                    </Checkbox>
+                      {d === 365 ? "1年" : `${d}天`}
+                    </Button>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
-          {sharedPicked > 0 && (
-            <p className="text-xs text-warning">
-              其中 {sharedPicked} 个是导入的节点或 Shadowsocks /
-              Snell，没法单独分配凭据：对方拿到共用的密码，停用后订阅失效，但已导入的配置仍能连接。
-            </p>
-          )}
-        </Section>
-
-        <Section
-          collapsible
-          defaultOpen={Boolean(pipelineSummary(o))}
-          hint="按顺序执行：过滤 → 改名 → 国旗 → 前缀 → 去重 → 排序"
-          summary={pipelineSummary(o) || "未设置"}
-          title="处理"
-        >
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">线路</p>
-            <Segmented
-              options={[
-                ["", "全部"],
-                ["relay", "只要中转"],
-                ["direct", "只要直连"],
-              ]}
-              value={o.lines}
-              onChange={(lines) => setOpts({ lines })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">地区</p>
-            <ChipPicker
-              emptyText="全部地区"
-              options={regions.map((r) => [r, r])}
-              selected={o.regions}
-              onChange={(regions) => setOpts({ regions })}
-            />
-          </div>
-          {protocols.length > 1 && (
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium">协议</p>
-              <ChipPicker
-                emptyText="全部协议"
-                options={protocols}
-                selected={o.protocols}
-                onChange={(protocols) => setOpts({ protocols })}
-              />
-            </div>
-          )}
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Input
-              description="多个关键词用 | 分隔，或 /正则/"
-              label="名称包含"
-              placeholder="例如 IEPL|专线"
-              value={o.include}
-              variant="bordered"
-              onChange={(e) => setOpts({ include: e.target.value })}
-            />
-            <Input
-              label="名称排除"
-              placeholder="例如 /过期|剩余/"
-              value={o.exclude}
-              variant="bordered"
-              onChange={(e) => setOpts({ exclude: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">改名规则</p>
-            <p className="text-xs text-default-500">
-              每行一条 <code>要替换的 =&gt; 替换成</code>，右边留空就是删除，
-              <code>/.../</code> 是正则
-            </p>
-            <Textarea
-              classNames={{ input: "font-mono text-xs" }}
-              minRows={2}
-              placeholder={"花云| =>\n/\\|[0-9.]+x/ =>"}
-              value={o.rename}
-              variant="bordered"
-              onChange={(e) => setOpts({ rename: e.target.value })}
-            />
-          </div>
-          <ToggleRow
-            hint="按名称识别地区，在前面加上国旗"
-            id="sub-flag"
-            label="自动加国旗"
-            value={o.addFlag}
-            onChange={(addFlag) => setOpts({ addFlag })}
-          />
-          <Input
-            label="名称前缀"
-            placeholder="例如 [家宽] "
-            value={o.prefix}
-            variant="bordered"
-            onChange={(e) => setOpts({ prefix: e.target.value })}
-          />
-          <ToggleRow
-            hint="地址、端口、协议都相同的只保留第一个"
-            id="sub-dedupe"
-            label="去重"
-            value={o.dedupe}
-            onChange={(dedupe) => setOpts({ dedupe })}
-          />
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">排序</p>
-            <Segmented
-              options={[
-                ["", "面板顺序"],
-                ["name", "按名称"],
-              ]}
-              value={o.sort}
-              onChange={(sort) => setOpts({ sort })}
-            />
-          </div>
-          <ToggleRow
-            hint="Clash / sing-box / Surge 里每个地区一个自动测速组；开启分流规则时自动加上"
-            id="sub-groups"
-            label="按地区分组"
-            value={o.regionGroups}
-            onChange={(regionGroups) => setOpts({ regionGroups })}
-          />
-        </Section>
-
-        <Section
-          collapsible
-          defaultOpen={Boolean(o.chainLanding || o.chainRelay)}
-          hint="客户端先连中转节点，再经它连落地节点，网站看到的是落地节点的 IP。落地节点会挂到「中转节点」组上，在「落地节点」里选出口、在「中转节点」里选中转。两项都填且都匹配到节点才生效；通用分享链接（Base64）无法表达链式"
-          summary={o.chainLanding && o.chainRelay ? "已开启" : "未开启"}
-          title="链式代理"
-        >
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Input
-              description="多个关键词用 | 分隔，或 /正则/"
-              label="落地节点"
-              placeholder="例如 美国|家宽"
-              value={o.chainLanding}
-              variant="bordered"
-              onChange={(e) => setOpts({ chainLanding: e.target.value })}
-            />
-            <Input
-              description="同时匹配两项的节点算作落地"
-              label="中转节点"
-              placeholder="例如 香港|IEPL"
-              value={o.chainRelay}
-              variant="bordered"
-              onChange={(e) => setOpts({ chainRelay: e.target.value })}
-            />
-          </div>
-        </Section>
-
-        <Section
-          collapsible
-          defaultOpen={o.rules}
-          hint="给 Clash（mihomo 内核）、sing-box（1.12 及以上）、Surge、Shadowrocket、Loon、Quantumult X 加上分流规则，并自动按地区分组；后三个会改为下发完整配置。Stash 和通用链接只有节点"
-          summary={o.rules ? `已开启，${o.ruleGroups.length} 个分组` : "未开启"}
-          title="分流规则"
-        >
-          <ToggleRow
-            hint="国内直连、境外走代理，另加下面勾选的分组"
-            id="sub-rules"
-            label="开启分流规则"
-            value={o.rules}
-            onChange={(rules) =>
-              setOpts(
-                rules && !o.rules && o.ruleGroups.length === 0
-                  ? { rules, ruleGroups: ruleGroups.map((g) => g.key) }
-                  : { rules },
-              )
-            }
-          />
-          {o.rules && (
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium">分组</p>
-              <p className="text-xs text-default-500">
-                每组可在客户端里单独选节点：AI
-                服务默认美国，微软、苹果、游戏默认直连，广告拦截默认拦截
-              </p>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {ruleGroups.map((g) => (
-                  <Checkbox
-                    key={g.key}
-                    isSelected={o.ruleGroups.includes(g.key)}
-                    onValueChange={(on) =>
-                      setOpts({
-                        ruleGroups: on
-                          ? [...o.ruleGroups, g.key]
-                          : o.ruleGroups.filter((x) => x !== g.key),
-                      })
-                    }
-                  >
-                    <span className="text-sm">{g.name}</span>
-                  </Checkbox>
-                ))}
+                <p className="text-xs text-default-500">
+                  {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
+                </p>
               </div>
-            </div>
-          )}
-        </Section>
-
-        <Section title="预览">
-          <Button
-            className="w-full"
-            isLoading={previewing}
-            variant="flat"
-            onPress={runPreview}
-          >
-            看看结果
-          </Button>
-          {preview && (
-            <>
-              <p className="text-xs text-default-500">
-                共 {preview.items.length} 个节点
-                {preview.dropped > 0 && `，过滤掉 ${preview.dropped} 个`}
-              </p>
-              <div className="max-h-64 overflow-y-auto rounded-xl border border-divider">
-                {preview.items.length === 0 ? (
-                  <p className="p-3 text-xs text-default-500">没有节点</p>
-                ) : (
-                  preview.items.map((p, i) => (
-                    <div
-                      key={`${p.original}-${i}`}
-                      className="flex items-center gap-2 border-b border-divider px-3 py-1.5 text-xs last:border-b-0"
+              <div className="space-y-1">
+                <label className="text-sm font-medium" htmlFor="sub-limit">
+                  流量上限
+                </label>
+                <div className="flex gap-2">
+                  <div className="relative min-w-0 flex-1">
+                    <input
+                      className="h-10 w-full rounded-lg border border-divider bg-background px-2 pr-9 text-sm"
+                      id="sub-limit"
+                      inputMode="decimal"
+                      placeholder="不限"
+                      value={draft.limitGB}
+                      onChange={(e) =>
+                        set({ limitGB: e.target.value.replace(/[^\d.]/g, "") })
+                      }
+                    />
+                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-default-500">
+                      GB
+                    </span>
+                  </div>
+                  {[50, 100, 500].map((g) => (
+                    <Button
+                      key={g}
+                      className="min-w-0 px-2"
+                      size="sm"
+                      variant="flat"
+                      onPress={() => set({ limitGB: String(g) })}
                     >
-                      <span className="min-w-0 flex-1 truncate">
-                        {p.name}
-                        {p.name !== p.original && (
-                          <span className="text-default-400">
-                            {" "}
-                            ← {p.original}
-                          </span>
-                        )}
-                      </span>
-                      {p.chain && (
-                        <span
-                          className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "bg-warning-100 text-warning-700 dark:bg-warning-500/20" : "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20"}`}
-                        >
-                          {p.chain === "landing" ? "落地" : "中转"}
-                        </span>
-                      )}
-                      <span className="shrink-0 text-default-500">
-                        {p.line === "relay" ? "中转" : "直连"}
-                      </span>
-                    </div>
-                  ))
-                )}
+                      {g}G
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <label className="text-sm" htmlFor="sub-reset-day">
+                    每月重置
+                  </label>
+                  <select
+                    className="h-9 rounded-lg border border-divider bg-background px-2 text-sm"
+                    id="sub-reset-day"
+                    value={draft.resetDay}
+                    onChange={(e) => set({ resetDay: Number(e.target.value) })}
+                  >
+                    <option value={0}>不重置</option>
+                    {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                      <option key={d} value={d}>
+                        每月 {d} 号
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-default-500">
+                  上传 +
+                  下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
+                </p>
               </div>
-            </>
-          )}
-        </Section>
+            </Section>
+            <Input
+              label="备注"
+              placeholder="可选"
+              value={draft.remark}
+              variant="bordered"
+              onChange={(e) => set({ remark: e.target.value })}
+            />
+          </div>
+        )}
 
-        <Input
-          label="备注"
-          placeholder="可选"
-          value={draft.remark}
-          variant="bordered"
-          onChange={(e) => set({ remark: e.target.value })}
-        />
+        {page === "nodes" && (
+          <div className="space-y-4">
+            <Section hint="中转线路会跟着它的落地一起出现" title="来源">
+              <Segmented
+                options={[
+                  ["all", "全部落地"],
+                  ["pick", "指定落地"],
+                ]}
+                value={draft.sourceAll ? "all" : "pick"}
+                onChange={(v) => set({ sourceAll: v === "all" })}
+              />
+              {draft.sourceAll ? (
+                <p className="text-xs text-default-500">
+                  包括以后新增的落地；只想要一部分可以用下面的筛选
+                </p>
+              ) : (
+                <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
+                  {pickList("自建", selfBuilt)}
+                  {pickList("导入", imported)}
+                  {sources.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs text-default-500">
+                        订阅源（整个源，更新后的节点自动跟上）
+                      </p>
+                      {sources.map((src) => (
+                        <Checkbox
+                          key={src.id}
+                          className="w-full"
+                          isSelected={draft.sourceIds.includes(src.id)}
+                          onValueChange={(on) =>
+                            set({
+                              sourceIds: on
+                                ? [...draft.sourceIds, src.id]
+                                : draft.sourceIds.filter((x) => x !== src.id),
+                            })
+                          }
+                        >
+                          <span className="text-sm">{src.name}</span>
+                          <span className="ml-1 text-xs text-default-400">
+                            {src.nodeCount} 个节点
+                          </span>
+                        </Checkbox>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {sharedPicked > 0 && (
+                <p className="text-xs text-warning">
+                  其中 {sharedPicked} 个是导入的节点或 Shadowsocks /
+                  Snell，没法单独分配凭据：对方拿到共用的密码，停用后订阅失效，但已导入的配置仍能连接。
+                </p>
+              )}
+            </Section>
+
+            <Section
+              hint="只保留需要的节点；筛完剩几个可以在“预览”里看"
+              summary={filterSummary(o) || "未设置"}
+              title="筛选"
+            >
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium">线路</p>
+                <Segmented
+                  options={[
+                    ["", "全部"],
+                    ["relay", "只要中转"],
+                    ["direct", "只要直连"],
+                  ]}
+                  value={o.lines}
+                  onChange={(lines) => setOpts({ lines })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium">地区</p>
+                <ChipPicker
+                  emptyText="全部地区"
+                  options={regions.map((r) => [r, r])}
+                  selected={o.regions}
+                  onChange={(regions) => setOpts({ regions })}
+                />
+              </div>
+              {protocols.length > 1 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium">协议</p>
+                  <ChipPicker
+                    emptyText="全部协议"
+                    options={protocols}
+                    selected={o.protocols}
+                    onChange={(protocols) => setOpts({ protocols })}
+                  />
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Input
+                  description="多个关键词用 | 分隔，或 /正则/"
+                  label="名称包含"
+                  placeholder="例如 IEPL|专线"
+                  value={o.include}
+                  variant="bordered"
+                  onChange={(e) => setOpts({ include: e.target.value })}
+                />
+                <Input
+                  label="名称排除"
+                  placeholder="例如 /过期|剩余/"
+                  value={o.exclude}
+                  variant="bordered"
+                  onChange={(e) => setOpts({ exclude: e.target.value })}
+                />
+              </div>
+              <ToggleRow
+                hint="地址、端口、协议都相同的只保留第一个"
+                id="sub-dedupe"
+                label="去重"
+                value={o.dedupe}
+                onChange={(dedupe) => setOpts({ dedupe })}
+              />
+            </Section>
+          </div>
+        )}
+
+        {page === "naming" && (
+          <div className="space-y-4">
+            <Section hint="按顺序执行：改名 → 国旗 → 前缀 → 排序" title="命名">
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium">改名规则</p>
+                <p className="text-xs text-default-500">
+                  每行一条 <code>要替换的 =&gt; 替换成</code>
+                  ，右边留空就是删除，
+                  <code>/.../</code> 是正则
+                </p>
+                <Textarea
+                  classNames={{ input: "font-mono text-xs" }}
+                  minRows={2}
+                  placeholder={"花云| =>\n/\\|[0-9.]+x/ =>"}
+                  value={o.rename}
+                  variant="bordered"
+                  onChange={(e) => setOpts({ rename: e.target.value })}
+                />
+              </div>
+              <ToggleRow
+                hint="按名称识别地区，在前面加上国旗"
+                id="sub-flag"
+                label="自动加国旗"
+                value={o.addFlag}
+                onChange={(addFlag) => setOpts({ addFlag })}
+              />
+              <Input
+                label="名称前缀"
+                placeholder="例如 [家宽] "
+                value={o.prefix}
+                variant="bordered"
+                onChange={(e) => setOpts({ prefix: e.target.value })}
+              />
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium">排序</p>
+                <Segmented
+                  options={[
+                    ["", "面板顺序"],
+                    ["name", "按名称"],
+                  ]}
+                  value={o.sort}
+                  onChange={(sort) => setOpts({ sort })}
+                />
+              </div>
+            </Section>
+          </div>
+        )}
+
+        {page === "rules" && (
+          <div className="space-y-4">
+            <Section
+              hint="给 Clash（mihomo 内核）、sing-box（1.12 及以上）、Surge、Shadowrocket、Loon、Quantumult X 加上分流规则；后三个会改为下发完整配置。Stash 和通用链接只有节点"
+              title="分组与规则"
+            >
+              <ToggleRow
+                hint="国内直连、境外走代理，另加下面勾选的分组"
+                id="sub-rules"
+                label="开启分流规则"
+                value={o.rules}
+                onChange={(rules) =>
+                  setOpts(
+                    rules && !o.rules && o.ruleGroups.length === 0
+                      ? { rules, ruleGroups: ruleGroups.map((g) => g.key) }
+                      : { rules },
+                  )
+                }
+              />
+              <ToggleRow
+                disabled={o.rules}
+                hint={
+                  o.rules
+                    ? "开启分流后已自动包含，无需单独打开"
+                    : "Clash / sing-box / Surge 里每个地区一个自动测速组"
+                }
+                id="sub-groups"
+                label="按地区分组"
+                value={o.rules || o.regionGroups}
+                onChange={(regionGroups) => setOpts({ regionGroups })}
+              />
+              {o.rules && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium">分组</p>
+                  <p className="text-xs text-default-500">
+                    每组可在客户端里单独选节点：AI
+                    服务默认美国，微软、苹果、游戏默认直连，广告拦截默认拦截
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {ruleGroups.map((g) => (
+                      <Checkbox
+                        key={g.key}
+                        isSelected={o.ruleGroups.includes(g.key)}
+                        onValueChange={(on) =>
+                          setOpts({
+                            ruleGroups: on
+                              ? [...o.ruleGroups, g.key]
+                              : o.ruleGroups.filter((x) => x !== g.key),
+                          })
+                        }
+                      >
+                        <span className="text-sm">{g.name}</span>
+                      </Checkbox>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Section>
+            <Section
+              collapsible
+              defaultOpen={Boolean(o.chainLanding || o.chainRelay)}
+              hint="客户端先连中转节点，再经它连落地节点，网站看到的是落地节点的 IP。落地节点会挂到「中转节点」组上，在「落地节点」里选出口、在「中转节点」里选中转。两项都填且都匹配到节点才生效；通用分享链接（Base64）无法表达链式"
+              summary={o.chainLanding && o.chainRelay ? "已开启" : "未开启"}
+              title="链式代理"
+            >
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Input
+                  description="多个关键词用 | 分隔，或 /正则/"
+                  label="落地节点"
+                  placeholder="例如 美国|家宽"
+                  value={o.chainLanding}
+                  variant="bordered"
+                  onChange={(e) => setOpts({ chainLanding: e.target.value })}
+                />
+                <Input
+                  description="同时匹配两项的节点算作落地"
+                  label="中转节点"
+                  placeholder="例如 香港|IEPL"
+                  value={o.chainRelay}
+                  variant="bordered"
+                  onChange={(e) => setOpts({ chainRelay: e.target.value })}
+                />
+              </div>
+            </Section>
+          </div>
+        )}
+
+        {page === "preview" && (
+          <div className="space-y-4">
+            <Section title="预览">
+              <Button
+                className="w-full"
+                isLoading={previewing}
+                variant="flat"
+                onPress={runPreview}
+              >
+                看看结果
+              </Button>
+              {preview && (
+                <>
+                  <p className="text-xs text-default-500">
+                    共 {preview.items.length} 个节点
+                    {preview.dropped > 0 && `，过滤掉 ${preview.dropped} 个`}
+                  </p>
+                  <div className="max-h-64 overflow-y-auto rounded-xl border border-divider">
+                    {preview.items.length === 0 ? (
+                      <p className="p-3 text-xs text-default-500">没有节点</p>
+                    ) : (
+                      preview.items.map((p, i) => (
+                        <div
+                          key={`${p.original}-${i}`}
+                          className="flex items-center gap-2 border-b border-divider px-3 py-1.5 text-xs last:border-b-0"
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {p.name}
+                            {p.name !== p.original && (
+                              <span className="text-default-400">
+                                {" "}
+                                ← {p.original}
+                              </span>
+                            )}
+                          </span>
+                          {p.chain && (
+                            <span
+                              className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "bg-warning-100 text-warning-700 dark:bg-warning-500/20" : "bg-secondary-100 text-secondary-700 dark:bg-secondary-500/20"}`}
+                            >
+                              {p.chain === "landing" ? "落地" : "中转"}
+                            </span>
+                          )}
+                          <span className="shrink-0 text-default-500">
+                            {p.line === "relay" ? "中转" : "直连"}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </Section>
+          </div>
+        )}
       </ModalBody>
       <ModalFooter>
         <Button variant="light" onPress={onClose}>
@@ -852,6 +896,7 @@ function Editor({
 
 export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useViewMode("subscription");
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
   const [ruleGroups, setRuleGroups] = useState<SubRuleGroup[]>([]);
@@ -983,7 +1028,76 @@ export default function SubscriptionPage() {
 
   if (loading) return <PageLoadingState message="正在加载..." />;
 
-  const card = (s: SubscriptionItem) => (
+  const sourceText = (s: SubscriptionItem) =>
+    s.sourceAll
+      ? "全部落地"
+      : [
+          s.inboundIds.length ? `${s.inboundIds.length} 个落地` : "",
+          s.sourceIds?.length ? `${s.sourceIds.length} 个订阅源` : "",
+        ]
+          .filter(Boolean)
+          .join(" + ");
+  const stateChip = (s: SubscriptionItem) =>
+    !s.enabled ? (
+      <Chip size="sm" variant="flat">
+        已停用
+      </Chip>
+    ) : (
+      !s.active && (
+        <Chip color="danger" size="sm" variant="flat">
+          {s.overQuota ? "流量用完" : "已过期"}
+        </Chip>
+      )
+    );
+  const actions = (s: SubscriptionItem) => (
+    <>
+      <Button
+        isIconOnly
+        aria-label={`复制 ${s.name} 的订阅链接`}
+        size="sm"
+        variant="flat"
+        onPress={() => copyText(url(s), "订阅链接已复制")}
+      >
+        <Copy className="h-4 w-4" />
+      </Button>
+      <Switch
+        aria-label={`${s.enabled ? "停用" : "启用"} ${s.name}`}
+        isDisabled={toggling === s.id}
+        isSelected={s.enabled}
+        size="sm"
+        onValueChange={() => toggle(s)}
+      />
+    </>
+  );
+  const subCard = (s: SubscriptionItem) => (
+    <ListRow
+      key={s.id}
+      card
+      badges={
+        <>
+          {stateChip(s)}
+          {s.options.rules && (
+            <Chip color="primary" size="sm" variant="flat">
+              分流
+            </Chip>
+          )}
+        </>
+      }
+      footer={<Usage s={s} />}
+      meta={[
+        `${s.nodeCount} 个节点 · ${sourceText(s)}`,
+        expiryLabel(s.expireTime),
+        s.remark,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      right={actions(s)}
+      status={s.active ? "ok" : "off"}
+      title={s.name}
+      onPress={() => setDetail(s)}
+    />
+  );
+  const row = (s: SubscriptionItem) => (
     <div
       key={s.id}
       className="flex cursor-pointer items-center gap-3 rounded-xl border border-divider bg-content1 px-3 py-2.5 shadow-sm transition-colors hover:bg-default-100"
@@ -1004,29 +1118,10 @@ export default function SubscriptionPage() {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate font-medium">{s.name}</span>
-          {!s.enabled ? (
-            <Chip size="sm" variant="flat">
-              已停用
-            </Chip>
-          ) : (
-            !s.active && (
-              <Chip color="danger" size="sm" variant="flat">
-                {s.overQuota ? "流量用完" : "已过期"}
-              </Chip>
-            )
-          )}
+          {stateChip(s)}
         </div>
         <div className="truncate text-xs text-default-500">
-          {s.nodeCount} 个节点
-          {" · "}
-          {s.sourceAll
-            ? "全部落地"
-            : [
-                s.inboundIds.length ? `${s.inboundIds.length} 个落地` : "",
-                s.sourceIds?.length ? `${s.sourceIds.length} 个订阅源` : "",
-              ]
-                .filter(Boolean)
-                .join(" + ")}
+          {s.nodeCount} 个节点 · {sourceText(s)}
           {s.expireTime ? ` · ${expiryLabel(s.expireTime)}` : ""}
           {s.remark ? ` · ${s.remark}` : ""}
         </div>
@@ -1039,22 +1134,7 @@ export default function SubscriptionPage() {
         role="presentation"
         onClick={(e) => e.stopPropagation()}
       >
-        <Button
-          isIconOnly
-          aria-label={`复制 ${s.name} 的订阅链接`}
-          size="sm"
-          variant="flat"
-          onPress={() => copyText(url(s), "订阅链接已复制")}
-        >
-          <Copy className="h-4 w-4" />
-        </Button>
-        <Switch
-          aria-label={`${s.enabled ? "停用" : "启用"} ${s.name}`}
-          isDisabled={toggling === s.id}
-          isSelected={s.enabled}
-          size="sm"
-          onValueChange={() => toggle(s)}
-        />
+        {actions(s)}
       </div>
     </div>
   );
@@ -1080,9 +1160,14 @@ export default function SubscriptionPage() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
-          {subs.map(card)}
-        </div>
+        <>
+          <div className="flex justify-end">
+            <ViewModeToggle value={viewMode} onChange={setViewMode} />
+          </div>
+          <div className={listGridClass(viewMode === "card")}>
+            {subs.map(viewMode === "card" ? subCard : row)}
+          </div>
+        </>
       )}
 
       {/* Detail: import into a client, copy links, actions. */}
