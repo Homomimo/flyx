@@ -1161,9 +1161,7 @@ export default function ConfigPage() {
         return (
           <Switch
             aria-label={item.label}
-            classNames={{
-              wrapper: isChanged ? "border-warning-300" : "",
-            }}
+            className={isChanged ? "ring-2 ring-warning-300" : undefined}
             isSelected={configs[item.key] === "true"}
             size="sm"
             onValueChange={(checked) =>
