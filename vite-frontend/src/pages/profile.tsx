@@ -1,8 +1,19 @@
 import React, { useState, useEffect } from "react";
 import { toast } from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
+import {
+  Activity,
+  ChevronRight,
+  Gauge,
+  KeyRound,
+  Layers,
+  LogOut,
+  Settings,
+  Share2,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 
-import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import {
   Modal,
@@ -20,6 +31,8 @@ import { updatePassword } from "@/api";
 import { safeLogout } from "@/utils/logout";
 import { getAdminFlag, getSessionName } from "@/utils/session";
 import { PasskeyManager } from "@/components/passkey-manager";
+import { PageHeader } from "@/components/page-kit";
+
 interface PasswordForm {
   newUsername: string;
   currentPassword: string;
@@ -28,11 +41,53 @@ interface PasswordForm {
 }
 
 interface MenuItem {
-  path: string;
+  key: string;
   label: string;
-  icon: React.ReactNode;
-  color: string;
-  description: string;
+  description?: string;
+  icon: LucideIcon;
+  danger?: boolean;
+  onPress: () => void;
+}
+
+function MenuGroup({ title, items }: { title: string; items: MenuItem[] }) {
+  return (
+    <section className="space-y-1.5">
+      <h2 className="px-1 text-xs font-medium text-default-500">{title}</h2>
+      <div className="divide-y divide-divider overflow-hidden rounded-xl border border-divider bg-content1">
+        {items.map((item) => {
+          const Icon = item.icon;
+
+          return (
+            <button
+              key={item.key}
+              className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-default-100"
+              type="button"
+              onClick={item.onPress}
+            >
+              <Icon
+                className={`h-4 w-4 shrink-0 ${item.danger ? "text-danger" : "text-default-500"}`}
+              />
+              <div className="min-w-0 flex-1">
+                <div
+                  className={`truncate text-sm ${item.danger ? "text-danger" : ""}`}
+                >
+                  {item.label}
+                </div>
+                {item.description && (
+                  <div className="truncate text-xs text-default-400">
+                    {item.description}
+                  </div>
+                )}
+              </div>
+              {!item.danger && (
+                <ChevronRight className="h-4 w-4 shrink-0 text-default-300" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 export default function ProfilePage() {
@@ -54,89 +109,51 @@ export default function ProfilePage() {
     setIsAdmin(getAdminFlag());
   }, []);
 
+  const go = (path: string) => () => navigate(path);
+
   // 管理员菜单项
   const adminMenuItems: MenuItem[] = [
     {
-      path: "/monitor",
+      key: "/monitor",
       label: "监控",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path
-            clipRule="evenodd"
-            d="M3 3a1 1 0 000 2v11a1 1 0 001 1h13a1 1 0 100-2H5V5a1 1 0 00-1-1H3zm13.707 4.293a1 1 0 00-1.414 0L12 10.586 10.707 9.293a1 1 0 00-1.414 0L7 11.586l-1.293-1.293a1 1 0 10-1.414 1.414l2 2a1 1 0 001.414 0L10 11.414l1.293 1.293a1 1 0 001.414 0l3-3a1 1 0 000-1.414z"
-            fillRule="evenodd"
-          />
-        </svg>
-      ),
-      color: "bg-teal-100 dark:bg-teal-500/20 text-teal-600 dark:text-teal-400",
       description: "节点与隧道监控",
+      icon: Activity,
+      onPress: go("/monitor"),
     },
     {
-      path: "/limit",
+      key: "/limit",
       label: "限速管理",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path
-            clipRule="evenodd"
-            d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z"
-            fillRule="evenodd"
-          />
-        </svg>
-      ),
-      color:
-        "bg-orange-100 dark:bg-orange-500/20 text-orange-600 dark:text-orange-400",
       description: "管理用户限速策略",
+      icon: Gauge,
+      onPress: go("/limit"),
     },
     {
-      path: "/panel-sharing",
+      key: "/panel-sharing",
       label: "面板共享",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M15 8a3 3 0 10-2.977-2.63l-4.94 2.47a3 3 0 100 4.319l4.94 2.47a3 3 0 10.895-1.789l-4.94-2.47a3.027 3.027 0 000-.74l4.94-2.47C13.456 7.68 14.19 8 15 8z" />
-        </svg>
-      ),
-      color:
-        "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400",
       description: "与其他面板进行联邦共享",
+      icon: Share2,
+      onPress: go("/panel-sharing"),
     },
     {
-      path: "/group",
+      key: "/group",
       label: "分组管理",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M10 2a3 3 0 100 6 3 3 0 000-6zM4 9a3 3 0 100 6 3 3 0 000-6zm12 0a3 3 0 100 6 3 3 0 000-6M4 16a2 2 0 00-2 2h4a2 2 0 00-2-2zm12 0a2 2 0 00-2 2h4a2 2 0 00-2-2zm-6 0a2 2 0 00-2 2h4a2 2 0 00-2-2z" />
-        </svg>
-      ),
-      color:
-        "bg-green-100 dark:bg-green-500/20 text-green-600 dark:text-green-400",
       description: "管理用户和隧道分组",
+      icon: Layers,
+      onPress: go("/group"),
     },
     {
-      path: "/user",
+      key: "/user",
       label: "用户管理",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
-        </svg>
-      ),
-      color: "bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400",
       description: "管理系统用户",
+      icon: Users,
+      onPress: go("/user"),
     },
     {
-      path: "/config",
+      key: "/config",
       label: "网站配置",
-      icon: (
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path
-            clipRule="evenodd"
-            d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z"
-            fillRule="evenodd"
-          />
-        </svg>
-      ),
-      color:
-        "bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400",
       description: "配置网站设置",
+      icon: Settings,
+      onPress: go("/config"),
     },
   ];
 
@@ -213,132 +230,49 @@ export default function ProfilePage() {
     });
   };
 
+  const accountMenuItems: MenuItem[] = [
+    { key: "password", label: "修改密码", icon: KeyRound, onPress: onOpen },
+    {
+      key: "logout",
+      label: "退出登录",
+      icon: LogOut,
+      danger: true,
+      onPress: handleLogout,
+    },
+  ];
+
   return (
-    <div className="px-3 lg:px-6 py-8 flex flex-col h-full">
-      <div className="space-y-6 flex-1">
-        {/* 用户信息卡片 */}
-        <Card>
-          <CardBody className="p-4">
-            <div className="flex items-center space-x-4">
-              <div className="w-12 h-12 bg-primary-100 dark:bg-primary-900/30 rounded-full flex items-center justify-center">
-                <svg
-                  className="w-6 h-6 text-primary"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path
-                    clipRule="evenodd"
-                    d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"
-                    fillRule="evenodd"
-                  />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <h3 className="text-base font-medium text-foreground">
-                  {username}
-                </h3>
-                <div className="flex items-center space-x-2 mt-1">
-                  <span
-                    className={`px-2 py-1 rounded-md text-xs font-medium ${
-                      isAdmin
-                        ? "bg-primary-100 dark:bg-primary-500/20 text-primary-700 dark:text-primary-300"
-                        : "bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300"
-                    }`}
-                  >
-                    {isAdmin ? "管理员" : "普通用户"}
-                  </span>
-                  <span className="text-xs text-default-500">
-                    {new Date().toLocaleDateString("zh-CN")}
-                  </span>
-                </div>
+    <div className="flex min-h-full flex-col px-3 py-6 lg:px-6">
+      <div className="w-full max-w-2xl flex-1">
+        <PageHeader description="账户与管理功能" title="更多" />
+        <div className="space-y-5">
+          {/* 账户 */}
+          <div className="flex items-center gap-3 rounded-xl border border-divider bg-content1 px-3 py-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-default-100 text-sm font-semibold text-default-600">
+              {(username || "?").slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-medium">{username}</div>
+              <div className="text-xs text-default-500">
+                {isAdmin ? "管理员" : "普通用户"}
               </div>
             </div>
-          </CardBody>
-        </Card>
+          </div>
 
-        {/* 功能网格 */}
-        <PasskeyManager />
-        <Card>
-          <CardBody className="p-4">
-            <div className="grid grid-cols-3 gap-3">
-              {/* 管理员功能 */}
-              {isAdmin &&
-                adminMenuItems.map((item) => (
-                  <button
-                    key={item.path}
-                    className="flex flex-col items-center p-3 rounded-2xl bg-gray-50 dark:bg-default-100 hover:bg-gray-100 dark:hover:bg-default-200 transition-colors duration-200"
-                    onClick={() => navigate(item.path)}
-                  >
-                    <div
-                      className={`w-10 h-10 ${item.color} rounded-full flex items-center justify-center mb-2`}
-                    >
-                      {item.icon}
-                    </div>
-                    <span className="text-xs text-foreground text-center">
-                      {item.label}
-                    </span>
-                  </button>
-                ))}
+          {isAdmin && <MenuGroup items={adminMenuItems} title="管理" />}
+          <MenuGroup items={accountMenuItems} title="账户" />
 
-              {/* 修改密码 */}
-              <button
-                className="flex flex-col items-center p-3 rounded-2xl bg-gray-50 dark:bg-default-100 hover:bg-gray-100 dark:hover:bg-default-200 transition-colors duration-200"
-                onClick={onOpen}
-              >
-                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mb-2">
-                  <svg
-                    className="w-5 h-5"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path
-                      clipRule="evenodd"
-                      d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z"
-                      fillRule="evenodd"
-                    />
-                  </svg>
-                </div>
-                <span className="text-xs text-foreground text-center">
-                  修改密码
-                </span>
-              </button>
-
-              {/* 退出登录 */}
-              <button
-                className="flex flex-col items-center p-3 rounded-2xl bg-gray-50 dark:bg-default-100 hover:bg-gray-100 dark:hover:bg-default-200 transition-colors duration-200"
-                onClick={handleLogout}
-              >
-                <div className="w-10 h-10 bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mb-2">
-                  <svg
-                    className="w-5 h-5"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path
-                      clipRule="evenodd"
-                      d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z"
-                      fillRule="evenodd"
-                    />
-                  </svg>
-                </div>
-                <span className="text-xs text-foreground text-center">
-                  退出登录
-                </span>
-              </button>
-            </div>
-          </CardBody>
-        </Card>
-
-        <VersionFooter
-          containerClassName="fixed inset-x-0 bottom-20 text-center py-4"
-          poweredClassName="text-xs text-gray-400 dark:text-gray-500"
-          updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500/90 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
-          version={
-            isWebViewFunc() ? siteConfig.app_version : siteConfig.version
-          }
-          versionClassName="text-xs text-gray-400 dark:text-gray-500 mt-1"
-        />
+          <PasskeyManager />
+        </div>
       </div>
+
+      <VersionFooter
+        containerClassName="mt-8 max-w-2xl text-center"
+        poweredClassName="text-xs text-default-400"
+        updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
+        version={isWebViewFunc() ? siteConfig.app_version : siteConfig.version}
+        versionClassName="mt-1 text-xs text-default-400"
+      />
 
       {/* 修改密码弹窗 */}
       <Modal

@@ -2,17 +2,9 @@ import type { MonitorNodeApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import {
-  RefreshCw,
-  LayoutGrid,
-  List,
-  Server,
-  ArrowRightLeft,
-} from "lucide-react";
 
 import { AnimatedPage } from "@/components/animated-page";
-import { Button } from "@/shadcn-bridge/heroui/button";
-import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
+import { PageHeader, PageTabs } from "@/components/page-kit";
 import { getMonitorNodes } from "@/api";
 import { MonitorView } from "@/pages/node/monitor-view";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
@@ -41,7 +33,6 @@ export default function MonitorPage() {
   const [nodes, setNodes] = useState<MonitorNodeApiItem[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [activeTab, setActiveTab] = useState<MonitorTab>("nodes");
 
   const [realtimeNodeStatus, setRealtimeNodeStatus] = useState<
@@ -187,148 +178,65 @@ export default function MonitorPage() {
     };
   }, [nodeMap, realtimeNodeMetrics]);
 
+  const stats = [
+    {
+      key: "load",
+      label: "系统负载",
+      value: `${aggregateMetrics.avgCpu.toFixed(1)}%`,
+    },
+    {
+      key: "conns",
+      label: "活动连接",
+      value: String(aggregateMetrics.totalConns),
+    },
+    {
+      key: "bandwidth",
+      label: "带宽",
+      value: formatBytesPerSecond(aggregateMetrics.totalBandwidth),
+    },
+  ];
+
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-8">
-      {/* 顶部英雄数据指标 (Hero Metrics) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div className="rounded-3xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_10px_30px_rgba(0,0,0,0.1)] p-6 relative overflow-hidden flex flex-col justify-between h-40">
-          <div className="flex justify-between items-center z-10 relative">
-            <span className="text-default-600 font-medium text-sm">
-              System Load
-            </span>
-          </div>
-          <div className="z-10 relative">
-            <span className="text-4xl font-bold text-foreground">
-              {aggregateMetrics.avgCpu.toFixed(1)}%
-            </span>
-          </div>
-          <div className="absolute bottom-0 left-0 right-0 h-12 flex items-end gap-1 px-6 pb-4 opacity-50 z-0">
-            <div className="w-full bg-primary/40 h-2 rounded-t-sm" />
-            <div className="w-full bg-primary/40 h-3 rounded-t-sm" />
-            <div className="w-full bg-primary/40 h-1.5 rounded-t-sm" />
-            <div className="w-full bg-primary/40 h-4 rounded-t-sm" />
-            <div className="w-full bg-primary/40 h-2.5 rounded-t-sm" />
-            <div className="w-full bg-primary h-5 rounded-t-sm shadow-[0_0_10px_rgba(0,122,255,0.5)]" />
-          </div>
-        </div>
+    <AnimatedPage className="px-3 lg:px-6 py-6">
+      <PageHeader description="节点资源与隧道质量的实时状态" title="监控" />
 
-        <div className="rounded-3xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_10px_30px_rgba(0,0,0,0.1)] p-6 relative overflow-hidden flex flex-col justify-between h-40">
-          <div className="flex justify-between items-center z-10 relative">
-            <span className="text-default-600 font-medium text-sm">
-              Active Connections
-            </span>
+      <div className="mb-4 grid grid-cols-3 gap-2 sm:max-w-2xl">
+        {stats.map((s) => (
+          <div
+            key={s.key}
+            className="min-w-0 rounded-xl border border-divider bg-content1 px-3 py-2"
+          >
+            <div className="truncate text-xs text-default-500">{s.label}</div>
+            <div className="truncate font-mono text-sm font-semibold sm:text-base">
+              {s.value}
+            </div>
           </div>
-          <div className="z-10 relative">
-            <span className="text-4xl font-bold text-foreground">
-              {aggregateMetrics.totalConns}
-            </span>
-          </div>
-          <div className="absolute bottom-0 left-0 right-0 h-12 flex items-end gap-1 px-6 pb-4 opacity-50 z-0">
-            <div className="w-full bg-success/40 h-3.5 rounded-t-sm" />
-            <div className="w-full bg-success/40 h-4.5 rounded-t-sm" />
-            <div className="w-full bg-success/40 h-2.5 rounded-t-sm" />
-            <div className="w-full bg-success/40 h-6 rounded-t-sm" />
-            <div className="w-full bg-success/40 h-5.5 rounded-t-sm" />
-            <div className="w-full bg-success h-7 rounded-t-sm shadow-[0_0_10px_rgba(52,199,89,0.5)]" />
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-white/80 dark:border-white/10 bg-white/20 dark:bg-zinc-900/20 backdrop-blur-3xl shadow-[0_10px_30px_rgba(0,0,0,0.1)] p-6 relative overflow-hidden flex flex-col justify-between h-40">
-          <div className="flex justify-between items-center z-10 relative">
-            <span className="text-default-600 font-medium text-sm">
-              Bandwidth
-            </span>
-          </div>
-          <div className="z-10 relative">
-            <span className="text-4xl font-bold text-foreground">
-              {formatBytesPerSecond(aggregateMetrics.totalBandwidth)}
-            </span>
-          </div>
-          <div className="absolute bottom-0 left-0 right-0 h-12 flex items-end gap-1 px-6 pb-4 opacity-50 z-0">
-            <div className="w-full bg-secondary/40 h-2 rounded-t-sm" />
-            <div className="w-full bg-secondary/40 h-3 rounded-t-sm" />
-            <div className="w-full bg-secondary/40 h-5 rounded-t-sm" />
-            <div className="w-full bg-secondary/40 h-8 rounded-t-sm" />
-            <div className="w-full bg-secondary/40 h-7 rounded-t-sm" />
-            <div className="w-full bg-secondary h-10 rounded-t-sm shadow-[0_0_10px_rgba(175,82,222,0.5)]" />
-          </div>
-        </div>
+        ))}
       </div>
 
-      <div className="mb-6 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-xl font-semibold truncate">监控面板</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              isIconOnly
-              size="sm"
-              variant="flat"
-              onPress={() => setViewMode(viewMode === "list" ? "grid" : "list")}
-            >
-              {viewMode === "list" ? (
-                <LayoutGrid className="w-4 h-4" />
-              ) : (
-                <List className="w-4 h-4" />
-              )}
-            </Button>
-            {activeTab === "nodes" && (
-              <Button
-                isLoading={nodesLoading}
-                size="sm"
-                variant="flat"
-                onPress={() => loadNodes()}
-              >
-                <RefreshCw className="w-4 h-4 mr-1" />
-                刷新节点
-              </Button>
-            )}
-          </div>
-        </div>
+      <PageTabs
+        tabs={[
+          { key: "nodes", label: "节点" },
+          { key: "tunnels", label: "隧道" },
+        ]}
+        value={activeTab}
+        onChange={setActiveTab}
+      />
 
-        {/* Tab Switcher */}
-        <div className="flex items-center gap-1 p-1 rounded-2xl bg-white/20 dark:bg-black/20 backdrop-blur-3xl border border-white/50 dark:border-white/10 w-fit shadow-sm">
-          <button
-            className={`flex items-center gap-1.5 px-5 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${
-              activeTab === "nodes"
-                ? "bg-white dark:bg-zinc-800 shadow-[0_2px_8px_rgba(0,0,0,0.08)] text-foreground"
-                : "text-default-500 hover:text-foreground"
-            }`}
-            onClick={() => setActiveTab("nodes")}
-          >
-            <Server className="w-4 h-4" />
-            节点
-          </button>
-          <button
-            className={`flex items-center gap-1.5 px-5 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${
-              activeTab === "tunnels"
-                ? "bg-white dark:bg-zinc-800 shadow-[0_2px_8px_rgba(0,0,0,0.08)] text-foreground"
-                : "text-default-500 hover:text-foreground"
-            }`}
-            onClick={() => setActiveTab("tunnels")}
-          >
-            <ArrowRightLeft className="w-4 h-4" />
-            隧道
-          </button>
+      {nodesError && activeTab === "nodes" && (
+        <div className="mb-3 rounded-xl border border-divider bg-content1 px-3 py-2 text-sm text-default-600">
+          {nodesError}
         </div>
-
-        {nodesError && activeTab === "nodes" ? (
-          <Card>
-            <CardHeader>
-              <h3 className="text-sm font-semibold">节点列表</h3>
-            </CardHeader>
-            <CardBody>
-              <div className="text-sm text-default-600">{nodesError}</div>
-            </CardBody>
-          </Card>
-        ) : null}
-      </div>
+      )}
 
       {activeTab === "nodes" ? (
-        <MonitorView nodeMap={nodeMap} viewMode={viewMode} />
+        <MonitorView
+          nodeMap={nodeMap}
+          refreshing={nodesLoading}
+          onRefresh={() => void loadNodes()}
+        />
       ) : (
-        <TunnelMonitorView viewMode={viewMode} />
+        <TunnelMonitorView />
       )}
     </AnimatedPage>
   );
