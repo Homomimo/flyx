@@ -422,9 +422,7 @@ export default function AdminLayout({
       >
         {/* Logo 区域 */}
         <div className="px-6 py-8 flex items-center overflow-hidden whitespace-nowrap box-border">
-          <div className="flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-xl bg-primary text-white">
-            <BrandLogo size={24} />
-          </div>
+          <BrandLogo className="h-10 w-10 flex-shrink-0 rounded-xl" size={40} />
           <div
             className={`transition-all duration-300 overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[180px] opacity-100 ml-3"}`}
           >

@@ -12,8 +12,8 @@ import {
   PageHeader,
   PageTabs,
   PageToolbar,
-  listGridClass,
 } from "@/components/page-kit";
+import { CARD_GRID, InfoCard } from "@/components/info-card";
 import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
@@ -122,7 +122,11 @@ function LinesView() {
           }
         />
       ) : (
-        <div className={listGridClass(card)}>
+        <div
+          className={
+            card ? CARD_GRID : "grid grid-cols-1 gap-2 2xl:grid-cols-2"
+          }
+        >
           {shown.map((i) => {
             const lines = byInbound.get(i.id) ?? [];
             const broken = lines.some(
@@ -137,6 +141,60 @@ function LinesView() {
             });
             const empty = `${i.external ? "导入的节点" : i.nodeName} · 无中转，点击添加`;
 
+            if (card) {
+              return (
+                <InfoCard
+                  key={i.id}
+                  actions={[
+                    {
+                      key: "manage",
+                      label: lines.length > 0 ? "管理中转" : "添加中转",
+                      color: "primary",
+                      onPress: () => setEditing(i),
+                    },
+                  ]}
+                  badges={
+                    i.relayOnly && (
+                      <Chip size="sm" variant="flat">
+                        仅中转
+                      </Chip>
+                    )
+                  }
+                  rows={[
+                    ["落地", i.external ? "导入的节点" : i.nodeName],
+                    ...lines.map((l): [string, React.ReactNode] => {
+                      const entry = l.entries[0];
+
+                      return [
+                        l.name || l.tunnelName,
+                        <span key={l.forwardId} className="font-mono">
+                          {entry
+                            ? `${l.shareHost || entry.Host}:${entry.Port}`
+                            : "-"}
+                        </span>,
+                      ];
+                    }),
+                  ]}
+                  status={
+                    lines.length === 0
+                      ? "无中转"
+                      : broken
+                        ? "有暂停"
+                        : `${lines.length} 条中转`
+                  }
+                  title={i.name}
+                  tone={
+                    lines.length === 0
+                      ? "default"
+                      : broken
+                        ? "warning"
+                        : "success"
+                  }
+                  onPress={() => setEditing(i)}
+                />
+              );
+            }
+
             return (
               <ListRow
                 key={i.id}
@@ -147,22 +205,7 @@ function LinesView() {
                     </Chip>
                   )
                 }
-                card={card}
-                meta={
-                  lineTexts.length === 0 ? (
-                    empty
-                  ) : card ? (
-                    <ul className="space-y-0.5">
-                      {lineTexts.map((t, n) => (
-                        <li key={n} className="font-mono">
-                          {t}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    lineTexts.join(" · ")
-                  )
-                }
+                meta={lineTexts.length === 0 ? empty : lineTexts.join(" · ")}
                 right={
                   <span className="text-xs text-default-500">
                     {lines.length > 0 ? `${lines.length} 条` : ""}

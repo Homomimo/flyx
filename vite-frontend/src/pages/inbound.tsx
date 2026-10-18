@@ -30,14 +30,8 @@ import {
   StaggerList,
 } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
-import {
-  ListRow,
-  PageHeader,
-  PageTabs,
-  PageToolbar,
-  type RowStatus,
-  listGridClass,
-} from "@/components/page-kit";
+import { PageHeader, PageTabs, PageToolbar } from "@/components/page-kit";
+import { CARD_GRID, type CardTone, InfoCard } from "@/components/info-card";
 import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
@@ -534,7 +528,7 @@ export default function InboundPage() {
     }
   };
 
-  const gridClass = listGridClass(card);
+  const gridClass = card ? CARD_GRID : "grid grid-cols-1 gap-2 2xl:grid-cols-2";
 
   const renderInbound = (item: InboundApiItem) => {
     const probe =
@@ -636,45 +630,38 @@ export default function InboundPage() {
     );
 
     if (card) {
-      const status: RowStatus = unreachable
-        ? "bad"
+      const tone: CardTone = unreachable
+        ? "danger"
         : running
-          ? "ok"
+          ? "success"
           : item.enabled
-            ? "warn"
-            : "off";
+            ? "warning"
+            : "default";
 
       return (
-        <ListRow
+        <InfoCard
           key={item.id}
-          card
+          actions={[
+            {
+              key: "share",
+              label: "分享",
+              color: "primary",
+              onPress: () => setSharing(item),
+            },
+            {
+              key: "relay",
+              label: "中转",
+              color: "secondary",
+              onPress: () => setRelaying(item),
+            },
+            {
+              key: "more",
+              label: "更多",
+              onPress: () => setSheetFor(item.id),
+            },
+          ]}
           badges={badges}
-          footer={
-            !selectMode && (
-              <div className="flex gap-2">
-                <Button
-                  className="flex-1"
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={() => setSharing(item)}
-                >
-                  分享
-                </Button>
-                <Button
-                  className="flex-1"
-                  color="secondary"
-                  size="sm"
-                  variant="flat"
-                  onPress={() => setRelaying(item)}
-                >
-                  中转
-                </Button>
-              </div>
-            )
-          }
-          meta={`${describeInbound(item)} · ${item.port}${where ? ` · ${where}` : ""}`}
-          right={
+          headerRight={
             <Switch
               isDisabled={toggling === item.id}
               isSelected={item.enabled}
@@ -682,18 +669,46 @@ export default function InboundPage() {
               onValueChange={() => handleToggle(item)}
             />
           }
-          selectMode={selectMode}
-          selected={selected}
-          stats={[
-            { label: "上传", value: formatTraffic(item.uploadBytes) },
-            { label: "下载", value: formatTraffic(item.downloadBytes) },
-            ...(probe?.ok && item.enabled
-              ? [{ label: "延迟", value: `${probe.latencyMs} ms` }]
+          rows={[
+            ["协议", describeInbound(item)],
+            [
+              "端口",
+              <span key="port" className="font-mono">
+                {item.port}
+              </span>,
+            ],
+            [
+              item.external ? "地址" : "节点",
+              <span key="where" className="font-mono">
+                {item.external ? item.listen : item.nodeName}
+              </span>,
+            ],
+            [
+              "流量",
+              <span key="traffic" className="font-mono">
+                ↑ {formatTraffic(item.uploadBytes)} · ↓{" "}
+                {formatTraffic(item.downloadBytes)}
+              </span>,
+            ],
+            ...(item.enabled && probe?.ok
+              ? ([["延迟", `${probe.latencyMs} ms`]] as Array<
+                  [string, React.ReactNode]
+                >)
               : []),
           ]}
-          status={status}
-          statusTitle={stateText}
+          selectMode={selectMode}
+          selected={selected}
+          status={
+            unreachable
+              ? "连不上"
+              : running
+                ? "运行中"
+                : item.enabled
+                  ? "异常"
+                  : "已停用"
+          }
           title={item.name}
+          tone={tone}
           onPress={() => setSheetFor(item.id)}
           onSelect={() => toggleSelect(item.id)}
         />
