@@ -21,9 +21,9 @@
 |--------|------|----------|----------|----------|
 | Clash（Clash Verge、Mihomo Party、FlClash 等） | Clash / Mihomo 配置 | `clash://` | ✓ | ✓（需 mihomo 内核） |
 | sing-box（SFA / SFI / SFM） | sing-box 配置 | `sing-box://` | ✓ | ✓（需 1.12 及以上） |
-| Shadowrocket | Clash 节点列表 | `shadowrocket://` | ✓（每个中转各生成一个“落地（经 中转）”节点） | ✗ |
-| Loon | Loon 节点 | `loon://` | ✗ | ✗ |
-| Quantumult X | QX 节点 | `quantumult-x://` | ✗ | ✗ |
+| Shadowrocket | Clash 节点列表 | `shadowrocket://` | ✓（每个中转各生成一个“落地（经 中转）”节点） | ✓（下发完整配置） |
+| Loon | Loon 节点 | `loon://` | ✗ | ✓（下发完整配置，复制链接导入） |
+| Quantumult X | QX 节点 | `quantumult-x://` | ✗ | ✓（下发完整配置，复制链接导入） |
 | Surge | Surge 配置 | `surge://` | ✓ | ✓ |
 | Stash | Clash 配置 | `stash://` | ✓ | ✗ |
 | 通用 | Base64 分享链接（v2rayN、NekoBox 等） | 仅复制 | ✗ | ✗ |
@@ -114,7 +114,7 @@ proxies:
 
 ## 分流规则
 
-默认生成的配置只有“局域网直连、其余走节点选择”两条规则。在订阅的 **分流规则** 里打开后，Clash（mihomo）、sing-box 和 Surge 配置会带上：
+默认生成的配置只有“局域网直连、其余走节点选择”两条规则。在订阅的 **分流规则** 里打开后，Clash（mihomo）、sing-box、Surge、Shadowrocket、Loon 和 Quantumult X 的配置会带上：
 
 - **基础规则**：局域网和国内域名 / IP 走“全球直连”，境外网站走“节点选择”，剩下的走“漏网之鱼”
 - **勾选的分组**：每组是一个可单独选节点的策略组
@@ -134,8 +134,12 @@ proxies:
 
 - 打开后自动按地区分组，每个分组都能直接选地区；没有美国节点时，AI 服务默认走节点选择
 - Clash 和 sing-box 还会带上 DNS：国内域名用阿里 / 腾讯 DoH 解析，其余经节点用 Google / Cloudflare DoH 解析，避免 DNS 泄漏；Clash 另开启 fake-ip 和域名嗅探
-- 规则集是 GitHub 上的远程文件，客户端定期自动更新：Clash 用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 `.mrs`，sing-box 用同一仓库的 `.srs`，Surge 用 [blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script)
-- Clash 和 sing-box 经“节点选择”下载规则集，在国内也能下载；Surge 自己下载规则集，网络连不上 GitHub 时规则会暂时缺失
+- 规则集是 GitHub 上的远程文件，客户端定期自动更新：Clash 用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 `.mrs`，sing-box 用同一仓库的 `.srs`，Surge、Shadowrocket、Loon、Quantumult X 用 [blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script) 里对应客户端的规则
+- Clash 和 sing-box 经“节点选择”下载规则集，在国内也能下载；其余客户端自己下载规则集，网络连不上 GitHub 时规则会暂时缺失
+- **Shadowrocket、Loon、Quantumult X 的节点订阅无法携带规则和策略组**，所以开启后这三个客户端的链接改为下发 **完整配置**（节点直接写在配置里），导入会替换 App 里原来的配置，原来作为节点订阅导入的需要重新导入：
+  - Shadowrocket：Clash 格式的配置，点客户端直接导入（`shadowrocket://config/add/`）
+  - Loon / Quantumult X：复制链接，在 App 的配置管理里“从 URL 下载”
+  - 链式代理：Shadowrocket 照旧生成“落地（经 中转）”节点；Loon 和 Quantumult X 没有前置代理参数，落地节点仍是直连
 - `.mrs` 只有 mihomo 内核能读，Stash 订阅不带分流规则；已停更的 Clash Premium / Clash for Windows 原版内核不支持
 
 ## 独立凭据

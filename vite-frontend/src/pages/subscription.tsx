@@ -734,7 +734,7 @@ function Editor({
         <Section
           collapsible
           defaultOpen={o.rules}
-          hint="给 Clash（mihomo 内核）、sing-box（1.12 及以上）、Surge 加上分流规则和防泄漏 DNS，并自动按地区分组；规则集从 GitHub 经「节点选择」下载。Stash、Shadowrocket、Loon、Quantumult X 和通用链接只有节点"
+          hint="给 Clash（mihomo 内核）、sing-box（1.12 及以上）、Surge、Shadowrocket、Loon、Quantumult X 加上分流规则，并自动按地区分组；后三个会改为下发完整配置。Stash 和通用链接只有节点"
           summary={o.rules ? `已开启，${o.ruleGroups.length} 个分组` : "未开启"}
           title="分流规则"
         >
@@ -1141,11 +1141,21 @@ export default function SubscriptionPage() {
                   <div className="grid grid-cols-2 gap-2">
                     {SUB_CLIENTS.map((c) => {
                       const link = url(detail, c.format);
+                      const isConfig =
+                        detail.options.rules && c.configImportURL !== undefined;
+                      const importURL = isConfig
+                        ? (c.configImportURL ?? null)
+                        : c.importURL;
                       const open = () => {
-                        if (c.importURL) {
-                          window.location.href = c.importURL(link, detail.name);
+                        if (importURL) {
+                          window.location.href = importURL(link, detail.name);
                         } else {
-                          copyText(link, `${c.label}订阅已复制`);
+                          copyText(
+                            link,
+                            isConfig
+                              ? `${c.label}配置链接已复制，在 App 的配置里从 URL 下载`
+                              : `${c.label}订阅已复制`,
+                          );
                         }
                       };
 
@@ -1157,7 +1167,11 @@ export default function SubscriptionPage() {
                           <button
                             className="h-full min-w-0 flex-1 truncate pl-3 pr-9 text-left text-sm font-medium"
                             title={
-                              c.importURL ? `导入到 ${c.label}` : "复制通用订阅"
+                              importURL
+                                ? `导入到 ${c.label}`
+                                : isConfig
+                                  ? `复制 ${c.label} 配置链接`
+                                  : "复制通用订阅"
                             }
                             type="button"
                             onClick={open}
@@ -1181,6 +1195,13 @@ export default function SubscriptionPage() {
                   <p className="text-center text-xs text-default-400">
                     点客户端直接导入，右侧按钮复制链接
                   </p>
+                  {detail.options.rules && (
+                    <p className="text-xs text-default-500">
+                      已开启分流规则：Shadowrocket、Loon、Quantumult X
+                      导入的是完整配置，会替换 App 里原来的配置；Loon 和
+                      Quantumult X 复制链接后在 App 的配置里从 URL 下载
+                    </p>
+                  )}
                   {detail.sharedIds.length > 0 && (
                     <p className="text-xs text-warning">
                       其中 {detail.sharedIds.length}{" "}

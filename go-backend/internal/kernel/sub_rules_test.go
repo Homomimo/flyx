@@ -273,3 +273,146 @@ func TestRuleGroupNamesAreReserved(t *testing.T) {
 		t.Fatal("usGroup must match the US region group")
 	}
 }
+
+// iniSection returns the non-empty lines of a config section.
+func iniSection(body, section string) []string {
+	var out []string
+	in := false
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "[") {
+			in = line == section
+			continue
+		}
+		if in && line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func TestSubscriptionRulesLoon(t *testing.T) {
+	eps := namedEndpoints("香港 01", "美国 01")
+	opts := SubOptions{Rules: true, RuleGroups: allRuleGroupKeys()}
+	body, _, _ := Subscription(FormatLoon, eps, opts)
+	known := map[string]bool{"DIRECT": true, "REJECT": true}
+	for _, line := range iniSection(body, "[Proxy]") {
+		known[strings.SplitN(line, "=", 2)[0]] = true
+	}
+	groups := iniSection(body, "[Proxy Group]")
+	for _, line := range groups {
+		known[strings.SplitN(line, " = ", 2)[0]] = true
+	}
+	for _, line := range groups {
+		for _, m := range strings.Split(strings.SplitN(line, " = ", 2)[1], ",")[1:] {
+			if !known[m] && !strings.Contains(m, "=") {
+				t.Errorf("group %q references unknown %q", line, m)
+			}
+		}
+	}
+	remote := iniSection(body, "[Remote Rule]")
+	for _, line := range remote {
+		policy := strings.TrimPrefix(strings.Split(line, ",")[1], "policy=")
+		if !known[policy] || !strings.HasPrefix(line, "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Loon/") {
+			t.Errorf("remote rule %q", line)
+		}
+	}
+	if !strings.Contains(remote[len(remote)-1], "/ChinaIPs/") || iniSection(body, "[Rule]")[0] != "FINAL,漏网之鱼" ||
+		!strings.Contains(body, "AI 服务 = select,🇺🇸 美国,") {
+		t.Fatalf("loon:\n%s", body)
+	}
+	if plain, _, _ := Subscription(FormatLoon, eps, SubOptions{}); strings.Contains(plain, "[") {
+		t.Fatalf("rules off must keep the node list:\n%s", plain)
+	}
+}
+
+func TestSubscriptionRulesQX(t *testing.T) {
+	eps := namedEndpoints("香港 01", "美国 01")
+	body, _, _ := Subscription(FormatQX, eps, SubOptions{Rules: true, RuleGroups: allRuleGroupKeys()})
+	known := map[string]bool{"direct": true, "reject": true}
+	for _, line := range iniSection(body, "[server_local]") {
+		known[line[strings.LastIndex(line, "tag=")+4:]] = true
+	}
+	policies := iniSection(body, "[policy]")
+	for _, line := range policies {
+		known[strings.Split(strings.SplitN(line, " = ", 2)[1], ", ")[0]] = true
+	}
+	for _, line := range policies {
+		for _, m := range strings.Split(strings.SplitN(line, " = ", 2)[1], ", ")[1:] {
+			if !known[m] && !strings.Contains(m, "=") {
+				t.Errorf("policy %q references unknown %q", line, m)
+			}
+		}
+	}
+	for _, line := range iniSection(body, "[filter_remote]") {
+		policy := ""
+		for _, f := range strings.Split(line, ", ") {
+			if strings.HasPrefix(f, "force-policy=") {
+				policy = strings.TrimPrefix(f, "force-policy=")
+			}
+		}
+		if !known[policy] || !strings.HasPrefix(line, "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/QuantumultX/") {
+			t.Errorf("filter %q", line)
+		}
+	}
+	if !strings.Contains(body, "static = 广告拦截, reject, direct") || iniSection(body, "[filter_local]")[0] != "final, 漏网之鱼" ||
+		!strings.Contains(body, "/SteamCN/SteamCN.list, tag=SteamCN, force-policy=direct,") {
+		t.Fatalf("qx:\n%s", body)
+	}
+}
+
+func TestSubscriptionRulesShadowrocket(t *testing.T) {
+	chain := SubOptions{Rules: true, RuleGroups: allRuleGroupKeys(), ChainLanding: "落地", ChainRelay: "中转"}
+	body, _, _ := Subscription(FormatShadowrocket, chainEndpoints(), chain)
+	var cfg struct {
+		Proxies []struct {
+			Name   string `yaml:"name"`
+			Dialer string `yaml:"dialer-proxy"`
+		} `yaml:"proxies"`
+		Groups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
+		Providers map[string]struct {
+			Behavior string `yaml:"behavior"`
+			URL      string `yaml:"url"`
+		} `yaml:"rule-providers"`
+		Rules []string `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal([]byte(body), &cfg); err != nil {
+		t.Fatalf("%v\n%s", err, body)
+	}
+	known := map[string]bool{"DIRECT": true, "REJECT": true}
+	for _, p := range cfg.Proxies {
+		known[p.Name] = true
+	}
+	for _, g := range cfg.Groups {
+		known[g.Name] = true
+	}
+	for _, g := range cfg.Groups {
+		for _, m := range g.Proxies {
+			if !known[m] {
+				t.Errorf("group %s references unknown %q", g.Name, m)
+			}
+		}
+	}
+	for _, r := range cfg.Rules {
+		parts := strings.Split(r, ",")
+		if !known[parts[len(parts)-1]] {
+			t.Errorf("rule %q targets unknown group", r)
+		}
+		if p, ok := cfg.Providers[parts[1]]; parts[0] == "RULE-SET" && (!ok || p.Behavior != "classical" ||
+			!strings.HasPrefix(p.URL, "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/")) {
+			t.Errorf("rule %q provider %+v", r, p)
+		}
+	}
+	if known[ChainRelayGroup] || cfg.Rules[len(cfg.Rules)-1] != "MATCH,漏网之鱼" {
+		t.Fatalf("shadowrocket:\n%s", body)
+	}
+	dialed := false
+	for _, p := range cfg.Proxies {
+		dialed = dialed || p.Dialer != ""
+	}
+	if !dialed {
+		t.Fatalf("chained landing copies missing:\n%s", body)
+	}
+}

@@ -4,17 +4,19 @@ import "strings"
 
 // Routing rules in subscriptions (SubOptions.Rules): the profile gets
 // policy groups per service, remote rule sets and, for Mihomo and sing-box,
-// a DNS setup that keeps Chinese domains on domestic resolvers. Rule sets
-// are fetched from GitHub through the node selection group, so a client in
+// a DNS setup that keeps Chinese domains on domestic resolvers. Mihomo and
+// sing-box fetch rule sets through the node selection group, so a client in
 // China can still download them. Mihomo reads MetaCubeX .mrs files and
-// sing-box (1.12+) .srs files; Surge reads blackmatrix7 lists.
+// sing-box (1.12+) .srs files; Surge, Loon, Quantumult X and Shadowrocket
+// read blackmatrix7 lists. With rules, Loon / QX / Shadowrocket get a full
+// configuration instead of a node list (see share_clients.go).
 
 const (
 	ruleDirectGroup = "全球直连"
 	ruleFinalGroup  = "漏网之鱼"
 
-	metaRulesURL  = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/"
-	surgeRulesURL = "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/"
+	metaRulesURL = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/"
+	listRulesURL = "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/"
 )
 
 // What a rule group selects first.
@@ -26,11 +28,14 @@ const (
 )
 
 // ruleSet names rule sets for every client: MetaCubeX geosite / geoip
-// names and blackmatrix7 Surge list names.
+// names and blackmatrix7 list names (the same in each client's directory).
 type ruleSet struct {
 	sites []string
 	ips   []string
-	surge []string
+	lists []string
+	// ipLists are blackmatrix7 IP lists for Loon and Quantumult X, whose
+	// local GEOIP rule would run before the remote lists.
+	ipLists []string
 }
 
 type ruleGroupDef struct {
@@ -47,28 +52,28 @@ type ruleGroupDef struct {
 // specific set comes before one that contains it: YouTube before Google).
 var ruleGroupDefs = []ruleGroupDef{
 	{key: "ads", name: "广告拦截", pick: pickReject,
-		set: ruleSet{sites: []string{"category-ads-all"}, surge: []string{"Advertising"}}},
+		set: ruleSet{sites: []string{"category-ads-all"}, lists: []string{"Advertising"}}},
 	{key: "ai", name: "AI 服务", pick: pickUS,
-		set: ruleSet{sites: []string{"openai", "anthropic", "google-gemini", "category-ai-!cn"}, surge: []string{"OpenAI", "Claude", "Gemini"}}},
+		set: ruleSet{sites: []string{"openai", "anthropic", "google-gemini", "category-ai-!cn"}, lists: []string{"OpenAI", "Claude", "Gemini"}}},
 	{key: "youtube", name: "YouTube", pick: pickProxy,
-		set: ruleSet{sites: []string{"youtube"}, surge: []string{"YouTube"}}},
+		set: ruleSet{sites: []string{"youtube"}, lists: []string{"YouTube"}}},
 	{key: "netflix", name: "Netflix", pick: pickProxy,
-		set: ruleSet{sites: []string{"netflix"}, ips: []string{"netflix"}, surge: []string{"Netflix"}}},
+		set: ruleSet{sites: []string{"netflix"}, ips: []string{"netflix"}, lists: []string{"Netflix"}}},
 	{key: "media", name: "国外媒体", pick: pickProxy,
-		set: ruleSet{sites: []string{"disney", "spotify", "tiktok"}, surge: []string{"Disney", "Spotify", "TikTok"}}},
+		set: ruleSet{sites: []string{"disney", "spotify", "tiktok"}, lists: []string{"Disney", "Spotify", "TikTok"}}},
 	{key: "telegram", name: "Telegram", pick: pickProxy,
-		set: ruleSet{sites: []string{"telegram"}, ips: []string{"telegram"}, surge: []string{"Telegram"}}},
+		set: ruleSet{sites: []string{"telegram"}, ips: []string{"telegram"}, lists: []string{"Telegram"}}},
 	{key: "google", name: "Google", pick: pickProxy,
-		set: ruleSet{sites: []string{"google"}, ips: []string{"google"}, surge: []string{"Google"}}},
+		set: ruleSet{sites: []string{"google"}, ips: []string{"google"}, lists: []string{"Google"}}},
 	// GitHub belongs to Microsoft but is slow or blocked when direct.
 	{key: "microsoft", name: "微软服务", pick: pickDirect,
-		set:    ruleSet{sites: []string{"onedrive", "microsoft"}, surge: []string{"OneDrive", "Microsoft"}},
-		before: ruleSet{sites: []string{"github"}, surge: []string{"GitHub"}}, beforeTarget: "节点选择"},
+		set:    ruleSet{sites: []string{"onedrive", "microsoft"}, lists: []string{"OneDrive", "Microsoft"}},
+		before: ruleSet{sites: []string{"github"}, lists: []string{"GitHub"}}, beforeTarget: "节点选择"},
 	{key: "apple", name: "苹果服务", pick: pickDirect,
-		set: ruleSet{sites: []string{"apple"}, surge: []string{"Apple"}}},
+		set: ruleSet{sites: []string{"apple"}, lists: []string{"Apple"}}},
 	{key: "games", name: "游戏平台", pick: pickDirect,
-		set:    ruleSet{sites: []string{"steam", "category-games"}, surge: []string{"Steam", "Game"}},
-		before: ruleSet{sites: []string{"steam@cn", "category-games@cn"}, surge: []string{"SteamCN"}}, beforeTarget: "DIRECT"},
+		set:    ruleSet{sites: []string{"steam", "category-games"}, lists: []string{"Steam", "Game"}},
+		before: ruleSet{sites: []string{"steam@cn", "category-games@cn"}, lists: []string{"SteamCN"}}, beforeTarget: "DIRECT"},
 }
 
 // RuleGroup is an optional service group, for the editor.
@@ -122,7 +127,7 @@ type ruleStep struct {
 // ruleSteps lists the rules in order; the final rule (ruleFinalGroup) is
 // left to each format.
 func ruleSteps(opts SubOptions) []ruleStep {
-	steps := []ruleStep{{set: ruleSet{sites: []string{"private"}, ips: []string{"private"}, surge: []string{"Lan"}}, target: ruleDirectGroup}}
+	steps := []ruleStep{{set: ruleSet{sites: []string{"private"}, ips: []string{"private"}, lists: []string{"Lan"}}, target: ruleDirectGroup}}
 	for _, d := range enabledRuleGroups(opts) {
 		if d.beforeTarget != "" {
 			steps = append(steps, ruleStep{set: d.before, target: d.beforeTarget})
@@ -130,8 +135,8 @@ func ruleSteps(opts SubOptions) []ruleStep {
 		steps = append(steps, ruleStep{set: d.set, target: d.name, reject: d.pick == pickReject})
 	}
 	return append(steps,
-		ruleStep{set: ruleSet{sites: []string{"geolocation-!cn"}, surge: []string{"Global"}}, target: "节点选择"},
-		ruleStep{set: ruleSet{sites: []string{"cn"}, ips: []string{"cn"}, surge: []string{"China"}}, target: ruleDirectGroup})
+		ruleStep{set: ruleSet{sites: []string{"geolocation-!cn"}, lists: []string{"Global"}}, target: "节点选择"},
+		ruleStep{set: ruleSet{sites: []string{"cn"}, ips: []string{"cn"}, lists: []string{"China"}, ipLists: []string{"ChinaIPs"}}, target: ruleDirectGroup})
 }
 
 // policyGroup is a select group in client-neutral form; "DIRECT" and
@@ -203,8 +208,10 @@ func metaRuleURL(branch, kind, name, ext string) string {
 	return metaRulesURL + branch + "/geo/" + kind + "/" + name + ext
 }
 
-func surgeRuleURL(name string) string {
-	return surgeRulesURL + name + "/" + name + ".list"
+// listRuleURL is a blackmatrix7 list in a client's directory ("Surge",
+// "Loon", "QuantumultX", "Clash").
+func listRuleURL(dir, name, ext string) string {
+	return listRulesURL + dir + "/" + name + "/" + name + ext
 }
 
 // ruleTarget maps a step target to a client's direct policy name.
@@ -343,8 +350,8 @@ func singboxRules(opts SubOptions) ([]interface{}, []interface{}, map[string]int
 func surgeRules(opts SubOptions) []string {
 	var lines []string
 	for _, s := range ruleSteps(opts) {
-		for _, n := range s.set.surge {
-			lines = append(lines, "RULE-SET,"+surgeRuleURL(n)+","+s.target)
+		for _, n := range s.set.lists {
+			lines = append(lines, "RULE-SET,"+listRuleURL("Surge", n, ".list")+","+s.target)
 		}
 	}
 	return append(lines, "GEOIP,CN,"+ruleDirectGroup, "FINAL,"+ruleFinalGroup+",dns-failed")

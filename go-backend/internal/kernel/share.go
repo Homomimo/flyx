@@ -614,10 +614,19 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		stash.Rules = false
 		return clashProfile(endpoints, opts.RegionGroups, stash), "text/yaml; charset=utf-8", nil
 	case FormatShadowrocket:
+		if opts.Rules {
+			return shadowrocketConfig(endpoints, opts), "text/yaml; charset=utf-8", nil
+		}
 		return shadowrocketProfile(endpoints), "text/yaml; charset=utf-8", nil
 	case FormatLoon:
+		if opts.Rules {
+			return loonConfig(endpoints, opts), "text/plain; charset=utf-8", nil
+		}
 		return loonList(endpoints), "text/plain; charset=utf-8", nil
 	case FormatQX:
+		if opts.Rules {
+			return qxConfig(endpoints, opts), "text/plain; charset=utf-8", nil
+		}
 		return qxList(endpoints), "text/plain; charset=utf-8", nil
 	case FormatSingbox:
 		body, err := singboxProfile(endpoints, groups, opts)

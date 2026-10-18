@@ -45,6 +45,13 @@ func yamlToMap(n yamlNode) map[string]interface{} {
 // a node subscription. Groups are not imported, so a chained landing node
 // names its relay directly: one landing node per relay node.
 func shadowrocketProfile(endpoints []Endpoint) string {
+	proxies, _ := shadowrocketProxies(endpoints)
+	return marshalYAML(yamlNode{{"proxies", proxies}})
+}
+
+// shadowrocketProxies returns the Clash proxies Shadowrocket imports and
+// their names.
+func shadowrocketProxies(endpoints []Endpoint) ([]interface{}, []string) {
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
@@ -55,20 +62,25 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 	}
 	_, relays, chain := chainGroups(rendered)
 	proxies := []interface{}{}
+	names := []string{}
 	for i, e := range rendered {
 		if !chain || e.ChainRole != ChainRoleLanding {
 			proxies = append(proxies, nodes[i])
+			names = append(names, e.Name)
 			continue
 		}
 		for _, relay := range relays {
 			p := append(yamlNode{}, nodes[i]...)
+			name := e.Name
 			if len(relays) > 1 {
-				p[0] = yamlField{"name", chainedName(e.Name, relay)}
+				name = chainedName(e.Name, relay)
+				p[0] = yamlField{"name", name}
 			}
 			proxies = append(proxies, append(p, yamlField{"dialer-proxy", relay}))
+			names = append(names, name)
 		}
 	}
-	return marshalYAML(yamlNode{{"proxies", proxies}})
+	return proxies, names
 }
 
 // chainedName names the copy of a landing node dialed through one relay.
@@ -408,6 +420,9 @@ func qxLine(p Proxy) (string, bool) {
 	default:
 		return "", false
 	}
-	tag := strings.NewReplacer(",", " ", "\n", " ").Replace(p.str("name"))
-	return kind + "=" + strings.Join(append(parts, "tag="+tag), ", "), true
+	return kind + "=" + strings.Join(append(parts, "tag="+qxName(p)), ", "), true
+}
+
+func qxName(p Proxy) string {
+	return strings.NewReplacer(",", " ", "\n", " ").Replace(p.str("name"))
 }
