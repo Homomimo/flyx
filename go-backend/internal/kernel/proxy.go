@@ -33,7 +33,7 @@ var importTypes = map[string]string{
 var proxyLabels = map[string]string{
 	"ss": "Shadowsocks", "vmess": "VMess", "vless": "VLESS", "trojan": "Trojan",
 	"hysteria2": "Hysteria2", "tuic": "TUIC", "anytls": "AnyTLS", "snell": "Snell",
-	"socks5": "SOCKS5", "http": "HTTP",
+	"socks5": "SOCKS5", "http": "HTTP", "wireguard": "WireGuard",
 }
 
 // ImportedNode is a node the panel does not deploy; it only relays and

@@ -16,8 +16,16 @@ type User struct {
 // Email tags the user in Xray configs (must be unique per inbound).
 func (u User) Email() string { return fmt.Sprintf("u%d@flvx", u.ID) }
 
-// Name tags the user in sing-box configs and is the NaïveProxy username.
+// Name tags the user in sing-box configs and is the NaïveProxy, SOCKS and
+// HTTP username.
 func (u User) Name() string { return fmt.Sprintf("u%d", u.ID) }
+
+// xrayUserMatch lists what Xray's routing "user" field sees for the user:
+// its email, or for SOCKS / HTTP the username itself.
+func xrayUserMatch(id int64) []string {
+	u := User{ID: id}
+	return []string{u.Email(), u.Name()}
+}
 
 // SupportsUsers reports whether the inbound can carry per-user credentials.
 // Snell has a single PSK. Shadowsocks stays shared too: 2022 multi-user
@@ -25,7 +33,8 @@ func (u User) Name() string { return fmt.Sprintf("u%d", u.ID) }
 // identity, breaking existing links.
 func (in Inbound) SupportsUsers() bool {
 	switch in.Protocol {
-	case ProtocolVLESS, ProtocolVMess, ProtocolTrojan, ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS, ProtocolNaive:
+	case ProtocolVLESS, ProtocolVMess, ProtocolTrojan, ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS, ProtocolNaive,
+		ProtocolSOCKS, ProtocolHTTP:
 		return true
 	}
 	return false
@@ -46,7 +55,7 @@ func (in Inbound) ForUser(u User) Inbound {
 	case ProtocolTUIC:
 		out.Settings.UUID = u.UUID
 		out.Settings.Password = u.Password
-	case ProtocolNaive:
+	case ProtocolNaive, ProtocolSOCKS, ProtocolHTTP:
 		out.Settings.Username = u.Name()
 		out.Settings.Password = u.Password
 	default:
@@ -73,6 +82,10 @@ func xrayUserClients(in Inbound) []interface{} {
 			c = obj{"id": u.UUID}
 		case ProtocolTrojan:
 			c = obj{"password": u.Password}
+		case ProtocolSOCKS, ProtocolHTTP:
+			// Xray reports the username as the user's email.
+			out = append(out, obj{"user": u.Name(), "pass": u.Password})
+			continue
 		default:
 			continue
 		}
@@ -102,7 +115,7 @@ func singboxUsers(in Inbound) []interface{} {
 			item = obj{"password": u.Password}
 		case ProtocolTUIC:
 			item = obj{"uuid": u.UUID, "password": u.Password}
-		case ProtocolNaive:
+		case ProtocolNaive, ProtocolSOCKS, ProtocolHTTP:
 			out = append(out, obj{"username": u.Name(), "password": u.Password})
 			continue
 		default:

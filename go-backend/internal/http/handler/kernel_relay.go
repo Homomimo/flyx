@@ -43,6 +43,8 @@ type shareEntry struct {
 	URI  string `json:"uri"`
 	// Surge is the Surge [Proxy] line; for Snell it is the only export.
 	Surge string `json:"surge"`
+	// Conf is the WireGuard client config (wg-quick format).
+	Conf string `json:"conf,omitempty"`
 }
 
 func relayMode(tunnelType int) string {
@@ -484,7 +486,8 @@ func (h *Handler) inboundShare(w http.ResponseWriter, r *http.Request) {
 	for i, e := range endpoints {
 		uri, _ := kernel.ShareURI(e)
 		surge, _ := kernel.SurgeLine(e)
-		out = append(out, shareEntry{Name: e.Name, Kind: kinds[i], Host: e.Host, Port: e.Port, URI: uri, Surge: surge})
+		conf, _ := kernel.WireGuardConf(e)
+		out = append(out, shareEntry{Name: e.Name, Kind: kinds[i], Host: e.Host, Port: e.Port, URI: uri, Surge: surge, Conf: conf})
 	}
 	response.WriteJSON(w, response.OK(out))
 }

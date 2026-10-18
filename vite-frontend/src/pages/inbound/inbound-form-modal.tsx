@@ -22,8 +22,10 @@ import {
   protocolCap,
   sniOptionalProtocols,
   toPayload,
+  usernameProtocols,
   uuidProtocols,
   visionAllowed,
+  vlessEncAllowed,
 } from "./presets";
 import { DROP_NOTICE, savedDespiteDrop } from "./save-recovery";
 
@@ -498,6 +500,23 @@ export function InboundFormModal({
                     onChange={(e) => set("uuid", e.target.value)}
                   />
                 )}
+                {vlessEncAllowed(form) && (
+                  <div className="flex items-start gap-2">
+                    <Switch
+                      isSelected={form.vlessEnc}
+                      size="sm"
+                      onValueChange={(v) => set("vlessEnc", v)}
+                    />
+                    <div>
+                      <p className="text-sm">VLESS Encryption（抗量子加密）</p>
+                      <p className="text-xs text-default-500">
+                        不用证书也能防探测，密钥自动生成。客户端需要 Xray
+                        25.9+（v2rayN 等）或 Mihomo；sing-box、Surge
+                        等客户端的订阅里会略过它
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {visionAllowed(form) && (
                   <div className="flex items-center gap-2">
                     <Switch
@@ -527,7 +546,7 @@ export function InboundFormModal({
                     ))}
                   </Select>
                 )}
-                {form.protocol === "naive" && (
+                {usernameProtocols.includes(form.protocol) && (
                   <Input
                     label="用户名"
                     placeholder="留空自动生成"
@@ -568,6 +587,36 @@ export function InboundFormModal({
                       v4
                     </SelectItem>
                   </Select>
+                )}
+                {(form.protocol === "socks" || form.protocol === "http") && (
+                  <p className="text-xs text-warning">
+                    {PROTOCOL_LABELS[form.protocol]}
+                    不加密，流量和密码都是明文，适合内网或经加密线路中转后使用
+                  </p>
+                )}
+                {form.protocol === "wireguard" && (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <Input
+                        description="服务端用同一网段的 .1"
+                        label="客户端地址"
+                        placeholder="10.66.66.2"
+                        value={form.wgPeerAddress}
+                        variant="bordered"
+                        onChange={(e) => set("wgPeerAddress", e.target.value)}
+                      />
+                      <Input
+                        label="MTU"
+                        placeholder="1420"
+                        value={form.wgMtu}
+                        variant="bordered"
+                        onChange={(e) => set("wgMtu", e.target.value)}
+                      />
+                    </div>
+                    <p className="text-xs text-default-500">
+                      密钥自动生成，所有人共用一份客户端配置（在“分享”里）；需要更换时用“换密钥”
+                    </p>
+                  </div>
                 )}
                 {form.protocol === "hysteria2" && (
                   <Input

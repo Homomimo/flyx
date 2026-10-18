@@ -17,10 +17,25 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 		}
 		list = append(list, items...)
 	}
+	// WireGuard servers are endpoints in sing-box's schema.
+	var endpoints, inboundList []interface{}
+	for _, item := range list {
+		if o, ok := item.(obj); ok && o["type"] == "wireguard" {
+			endpoints = append(endpoints, o)
+		} else {
+			inboundList = append(inboundList, item)
+		}
+	}
+	if inboundList == nil {
+		inboundList = []interface{}{}
+	}
 	cfg := obj{
 		"log":       obj{"level": "warn"},
-		"inbounds":  list,
+		"inbounds":  inboundList,
 		"outbounds": []interface{}{obj{"type": "direct", "tag": "direct"}},
+	}
+	if len(endpoints) > 0 {
+		cfg["endpoints"] = endpoints
 	}
 	if len(acme.list) > 0 {
 		cfg["certificate_providers"] = acme.list
@@ -162,6 +177,29 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 	case ProtocolNaive:
 		item["type"] = "naive"
 		item["users"] = []interface{}{obj{"username": s.Username, "password": s.Password}}
+	case ProtocolSOCKS:
+		item["type"] = "socks"
+		item["users"] = []interface{}{obj{"username": s.Username, "password": s.Password}}
+	case ProtocolHTTP:
+		item["type"] = "http"
+		item["users"] = []interface{}{obj{"username": s.Username, "password": s.Password}}
+	case ProtocolWireGuard:
+		// An endpoint, not an inbound (renderSingbox moves it); it listens
+		// on every address.
+		ep := obj{
+			"type":        "wireguard",
+			"tag":         in.Tag(),
+			"system":      false,
+			"mtu":         s.MTU,
+			"address":     []string{s.WireGuardServerAddress() + "/24"},
+			"private_key": s.PrivateKey,
+			"listen_port": in.Port,
+			"peers":       []interface{}{obj{"public_key": s.PeerPublicKey, "allowed_ips": []string{s.PeerAddress + "/32"}}},
+		}
+		if err := mergeExtra(ep, in.Extra); err != nil {
+			return nil, err
+		}
+		return []interface{}{ep}, nil
 	default:
 		return nil, fmt.Errorf("sing-box 不支持协议 %s", in.Protocol)
 	}

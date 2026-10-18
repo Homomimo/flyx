@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -77,6 +78,62 @@ func RealityPublicKey(privateKey string) (string, error) {
 		return "", fmt.Errorf("Reality 私钥格式错误")
 	}
 	return base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), nil
+}
+
+// WireGuardKeyPair returns a Curve25519 key pair in WireGuard's standard
+// base64 form.
+func WireGuardKeyPair() (privateKey, publicKey string, err error) {
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", err
+	}
+	return base64.StdEncoding.EncodeToString(key.Bytes()),
+		base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), nil
+}
+
+// WireGuardPublicKey derives the public key of a WireGuard private key.
+func WireGuardPublicKey(privateKey string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(privateKey)
+	if err != nil {
+		return "", fmt.Errorf("WireGuard 私钥格式错误")
+	}
+	key, err := ecdh.X25519().NewPrivateKey(raw)
+	if err != nil {
+		return "", fmt.Errorf("WireGuard 私钥格式错误")
+	}
+	return base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), nil
+}
+
+// VLESS Encryption (Xray 25.9+): ML-KEM-768 + X25519 key exchange with
+// X25519 authentication, as "xray vlessenc" generates it. The server keeps
+// the private key (decryption), clients get the public one (encryption).
+const vlessEncPrefix = "mlkem768x25519plus.native."
+
+// VLESSEncKeys returns a matching decryption / encryption pair.
+func VLESSEncKeys() (decryption, encryption string, err error) {
+	priv, pub, err := RealityKeyPair()
+	if err != nil {
+		return "", "", err
+	}
+	return vlessEncPrefix + "600s." + priv, vlessEncPrefix + "0rtt." + pub, nil
+}
+
+// vlessEncryptionFor derives the client setting from a server decryption
+// string, or "" when it is not one the panel generated.
+func vlessEncryptionFor(decryption string) string {
+	rest, ok := strings.CutPrefix(decryption, vlessEncPrefix)
+	if !ok {
+		return ""
+	}
+	parts := strings.Split(rest, ".")
+	if len(parts) != 2 {
+		return ""
+	}
+	pub, err := RealityPublicKey(parts[1])
+	if err != nil {
+		return ""
+	}
+	return vlessEncPrefix + "0rtt." + pub
 }
 
 func RealityShortID() string {

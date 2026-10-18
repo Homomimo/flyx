@@ -81,7 +81,9 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
   const [showQr, setShowQr] = useState(false);
   // Snell has no common link format; its Surge line is all there is.
   const surgeOnly = !entry.uri;
-  const text = entry.uri || entry.surge;
+  // WireGuard apps import a config file or scan it as a QR code.
+  const [asConf, setAsConf] = useState(Boolean(entry.conf));
+  const text = (asConf && entry.conf) || entry.uri || entry.surge;
 
   return (
     <div className="rounded-2xl border border-divider p-4 space-y-3">
@@ -101,6 +103,23 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
         </p>
       </div>
 
+      {entry.conf && (
+        <div className="grid grid-cols-2 gap-1 rounded-xl bg-default-100 p-1 text-sm">
+          {[
+            [true, "配置文件"],
+            [false, "分享链接"],
+          ].map(([conf, label]) => (
+            <button
+              key={String(conf)}
+              className={`rounded-lg py-1 ${asConf === conf ? "bg-background font-medium shadow-sm" : "text-default-500"}`}
+              type="button"
+              onClick={() => setAsConf(Boolean(conf))}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded-xl bg-default-100 p-3 max-h-32 overflow-y-auto select-all">
         {text}
       </pre>
@@ -111,10 +130,17 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
           color="primary"
           startContent={<Copy className="w-4 h-4" />}
           onPress={() =>
-            copyText(text, surgeOnly ? "Surge 配置行已复制" : "链接已复制")
+            copyText(
+              text,
+              asConf
+                ? "WireGuard 配置已复制"
+                : surgeOnly
+                  ? "Surge 配置行已复制"
+                  : "链接已复制",
+            )
           }
         >
-          {surgeOnly ? "复制 Surge 配置" : "复制链接"}
+          {asConf ? "复制配置" : surgeOnly ? "复制 Surge 配置" : "复制链接"}
         </Button>
         {!surgeOnly && (
           <Button
@@ -134,9 +160,15 @@ function ShareEntryCard({ entry }: { entry: InboundShareEntry }) {
           订阅。
         </p>
       )}
+      {asConf && (
+        <p className="text-xs text-default-500">
+          WireGuard 官方 App 扫码或导入配置即可；v2rayN、Clash
+          等用分享链接或订阅
+        </p>
+      )}
       {showQr && (
         <div className="flex justify-center">
-          <QrImage text={entry.uri} />
+          <QrImage text={text} />
         </div>
       )}
     </div>

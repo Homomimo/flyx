@@ -237,7 +237,7 @@ func xraySplitRoutes(in Inbound) ([]interface{}, []interface{}, error) {
 		}
 		for _, m := range r.match().xray() {
 			for _, id := range users {
-				rule := obj{"type": "field", "inboundTag": tags, "user": []string{User{ID: id}.Email()}, "outboundTag": userTag(id)}
+				rule := obj{"type": "field", "inboundTag": tags, "user": xrayUserMatch(id), "outboundTag": userTag(id)}
 				deepMerge(rule, m)
 				rules = append(rules, rule)
 			}

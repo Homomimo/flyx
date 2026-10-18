@@ -29,6 +29,7 @@
 | 模板 | 内核 | 说明 |
 |------|------|------|
 | VLESS + Reality + Vision | Xray / sing-box | 推荐，无需域名和证书 |
+| VLESS + Encryption + Vision | Xray | 抗量子加密，无需域名和证书；客户端需 Xray 25.9+ 或 Mihomo |
 | VLESS + XHTTP + Reality | Xray | |
 | Shadowsocks 2022 | Xray / sing-box | |
 | Trojan + TLS（自签） | Xray / sing-box | 需要填写域名 |
@@ -38,6 +39,8 @@
 | AnyTLS | sing-box | |
 | SS2022 + ShadowTLS | sing-box | 仅 TCP |
 | NaïveProxy | sing-box | 需要域名和真实证书 |
+| WireGuard | Xray / sing-box | 所有人共用一份客户端配置；分享里有配置文件和二维码，WireGuard 官方 App 可直接导入 |
+| SOCKS5 / HTTP 代理 | Xray / sing-box | 不加密，适合内网或经加密线路中转后使用；订阅用户各有自己的用户名和密码 |
 | Snell / Snell + ShadowTLS | Snell | Surge 专用 |
 
 ### 证书
@@ -111,12 +114,12 @@ NaïveProxy 必须使用真实证书（ACME 或证书文件）。
 |----------|------------|--------|
 | 自动识别 | 按客户端 UA 返回对应格式 | |
 | Clash / Mihomo | Clash Verge、Stash、FlClash | XHTTP、Snell、NaïveProxy |
-| sing-box | SFA / SFI / SFM | XHTTP、Snell |
-| Shadowrocket | Shadowrocket | XHTTP、Snell、NaïveProxy |
-| Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy |
-| Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy |
-| 通用 base64 | v2rayN、NekoBox | Snell |
-| Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy |
+| sing-box | SFA / SFI / SFM | XHTTP、Snell、VLESS Encryption |
+| Shadowrocket | Shadowrocket | XHTTP、Snell、NaïveProxy、WireGuard、VLESS Encryption |
+| Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy、WireGuard、VLESS Encryption |
+| Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy、WireGuard、VLESS Encryption |
+| 通用 base64 | v2rayN、NekoBox | Snell、HTTP 代理 |
+| Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy、WireGuard |
 
 ## 批量操作
 
