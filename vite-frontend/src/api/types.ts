@@ -757,8 +757,24 @@ export interface InboundProbe {
   ok: boolean;
   skipped?: boolean;
   latencyMs?: number;
+  /** Packet loss over the probe's samples, when made by a node agent. */
+  lossPct?: number;
+  /** Vantage point the probe was made from (e.g. "浙江移动"); empty means the panel server. */
+  from?: string;
   error?: string;
   checkedAt: number;
+  /** Per reference point results, when the node measured several. */
+  points?: InboundProbePoint[];
+}
+
+export interface InboundProbePoint {
+  name: string;
+  /** Chosen in settings to always show on cards. */
+  pinned?: boolean;
+  ok: boolean;
+  latencyMs?: number;
+  lossPct?: number;
+  error?: string;
 }
 
 export interface InboundApiItem {
@@ -798,7 +814,7 @@ export interface InboundApiItem {
   downloadBytes: number;
   createdTime: number;
   updatedTime: number;
-  /** Last TCP reachability check, made from the panel server. */
+  /** Last latency / reachability check. */
   probe?: InboundProbe;
   /** Inbound this one's traffic is chained through; 0 leaves directly. */
   outboundId: number;
