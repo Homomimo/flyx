@@ -15,7 +15,7 @@ const enc = encodeURIComponent;
 export const SUB_CLIENTS: SubClient[] = [
   {
     key: "clash",
-    label: "Clash",
+    label: "mihomo",
     format: "clash",
     importURL: (url, name) =>
       `clash://install-config?url=${enc(url)}&name=${enc(name)}`,
