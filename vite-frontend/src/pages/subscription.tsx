@@ -42,7 +42,7 @@ import {
 } from "@/shadcn-bridge/heroui/modal";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { formatTraffic } from "@/utils/traffic";
-import { SUB_CLIENTS } from "@/pages/subscription/clients";
+import { SubClientGrid } from "@/pages/subscription/client-grid";
 import { RenameRules } from "@/pages/subscription/rename-rules";
 import {
   EditorTabs,
@@ -1112,7 +1112,6 @@ export default function SubscriptionPage() {
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
   const [resettingTraffic, setResettingTraffic] = useState(false);
-
   const load = useCallback(async () => {
     try {
       const [subRes, inRes, srcRes] = await Promise.all([
@@ -1310,6 +1309,11 @@ export default function SubscriptionPage() {
         ["节点", `${s.nodeCount} 个`],
         ["来源", sourceText(s)],
         ["到期", s.expireTime ? expiryLabel(s.expireTime) : "永不过期"],
+        ...(s.userId
+          ? ([["用户", s.userName || `#${s.userId}`]] as Array<
+              [string, string]
+            >)
+          : []),
         ...(s.remark ? ([["备注", s.remark]] as Array<[string, string]>) : []),
       ]}
       status={
@@ -1352,6 +1356,7 @@ export default function SubscriptionPage() {
           {stateChip(s)}
         </div>
         <div className="truncate text-xs text-default-500">
+          {s.userId ? `👤 ${s.userName || `#${s.userId}`} · ` : ""}
           {s.nodeCount} 个节点 · {sourceText(s)}
           {s.expireTime ? ` · ${expiryLabel(s.expireTime)}` : ""}
           {s.remark ? ` · ${s.remark}` : ""}
@@ -1468,60 +1473,11 @@ export default function SubscriptionPage() {
                   >
                     复制订阅链接（自动识别客户端）
                   </Button>
-                  <div className="grid grid-cols-2 gap-2">
-                    {SUB_CLIENTS.map((c) => {
-                      const link = url(detail, c.format);
-                      const isConfig =
-                        detail.options.rules && c.configImportURL !== undefined;
-                      const importURL = isConfig
-                        ? (c.configImportURL ?? null)
-                        : c.importURL;
-                      const open = () => {
-                        if (importURL) {
-                          window.location.href = importURL(link, detail.name);
-                        } else {
-                          copyText(
-                            link,
-                            isConfig
-                              ? `${c.label}配置链接已复制，在 App 的配置里从 URL 下载`
-                              : `${c.label}订阅已复制`,
-                          );
-                        }
-                      };
-
-                      return (
-                        <div
-                          key={c.key}
-                          className="relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-default-100"
-                        >
-                          <button
-                            className="h-full min-w-0 flex-1 truncate pl-3 pr-9 text-left text-sm font-medium"
-                            title={
-                              importURL
-                                ? `导入到 ${c.label}`
-                                : isConfig
-                                  ? `复制 ${c.label} 配置链接`
-                                  : "复制通用订阅"
-                            }
-                            type="button"
-                            onClick={open}
-                          >
-                            {c.label}
-                          </button>
-                          <button
-                            aria-label={`复制 ${c.label} 订阅链接`}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-default-400 hover:bg-default-200 hover:text-default-600"
-                            type="button"
-                            onClick={() =>
-                              copyText(link, `${c.label} 订阅已复制`)
-                            }
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <SubClientGrid
+                    link={(format) => url(detail, format)}
+                    name={detail.name}
+                    rules={detail.options.rules}
+                  />
                   <p className="text-center text-xs text-default-400">
                     点客户端直接导入，右侧按钮复制链接
                   </p>
