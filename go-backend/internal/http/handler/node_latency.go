@@ -193,10 +193,11 @@ func targetsForNode(pool []latencyTarget, rawChoice string) []latencyTarget {
 type nodeLatencyStore struct {
 	mu      sync.RWMutex
 	results map[int64]reachProbe
+	rounds  probeRounds
 }
 
 func newNodeLatencyStore() *nodeLatencyStore {
-	return &nodeLatencyStore{results: make(map[int64]reachProbe)}
+	return &nodeLatencyStore{results: make(map[int64]reachProbe), rounds: make(probeRounds)}
 }
 
 func (s *nodeLatencyStore) get(nodeID int64) (reachProbe, bool) {
@@ -209,13 +210,26 @@ func (s *nodeLatencyStore) get(nodeID int64) (reachProbe, bool) {
 // replace stores fresh results; a full round also drops nodes it skipped
 // (offline, remote, or no reference points configured).
 func (s *nodeLatencyStore) replace(results map[int64]reachProbe, all bool) {
+	s.replaceRound(results, all, time.Now().UnixNano())
+}
+
+// replaceRound is replace for a round that started at started (unix ns):
+// results of a newer round that already finished are kept.
+func (s *nodeLatencyStore) replaceRound(results map[int64]reachProbe, all bool, started int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if all {
-		s.results = make(map[int64]reachProbe, len(results))
+		for id := range s.results {
+			if _, ok := results[id]; !ok && s.rounds.take(id, started) {
+				delete(s.results, id)
+				delete(s.rounds, id)
+			}
+		}
 	}
-	for id, p := range results {
-		s.results[id] = p
+	for id, r := range results {
+		if s.rounds.take(id, started) {
+			s.results[id] = r
+		}
 	}
 }
 
@@ -289,6 +303,7 @@ func latencyCommandError(err error) string {
 // probeNodeLatency measures the given local nodes' latency (all online ones
 // when ids is empty) to every enabled reference point and records it.
 func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]reachProbe, error) {
+	started := time.Now().UnixNano()
 	nodes, err := h.repo.ListMonitorNodes()
 	if err != nil {
 		return nil, err
@@ -343,8 +358,8 @@ func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]
 	for nodeID, list := range points {
 		results[nodeID] = latencyProbe(list, now)
 	}
-	h.nodeLatency.replace(results, len(ids) == 0)
 	if ctx.Err() == nil {
+		h.nodeLatency.replaceRound(results, len(ids) == 0, started)
 		h.recordLatencySamples(results)
 		// Streaks count scheduled rounds; a click's extra probe is not one.
 		if len(ids) == 0 {
@@ -383,7 +398,14 @@ func (h *Handler) inboundProbeView(row *model.NodeInbound) *reachProbe {
 	reach, hasReach := h.reachProbes.get(row.ID)
 	if !isExternalInbound(row) {
 		if node, ok := h.nodeLatency.get(row.NodeID); ok && len(node.Points) > 0 {
+			// The view combines a port check with reference-point samples.
+			// Recovering the port must not move its timestamp backwards to an
+			// older node sample, or clients will keep the newer cached failure.
+			if hasReach {
+				node.CheckedAt = max(node.CheckedAt, reach.CheckedAt)
+			}
 			if hasReach && !reach.Skipped && !reach.OK {
+				reach.CheckedAt = node.CheckedAt
 				return &reach
 			}
 			view := h.withRoutes(row.NodeID, node)

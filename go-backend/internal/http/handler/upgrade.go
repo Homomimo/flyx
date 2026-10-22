@@ -480,7 +480,12 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	if node, err := h.getNodeRecord(nodeID); err == nil && (node == nil || node.Status != 1) {
 		return // The next connection will resume any pending reconciliation.
 	}
-	go h.reconcileNodeKernels(nodeID)
+	go func() {
+		h.reconcileNodeKernels(nodeID)
+		// Probe once the kernels are restored: earlier, the node's ports
+		// would still look closed.
+		h.scheduleNodeReconnectProbe(nodeID)
+	}()
 	if !h.startNodeOnlineRedeploy(nodeID, time.Now()) {
 		return
 	}

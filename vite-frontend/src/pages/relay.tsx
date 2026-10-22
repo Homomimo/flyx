@@ -1,8 +1,10 @@
 import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { latestProbe } from "@/utils/latest-probe";
 import { getInboundList, getInboundRelays, probeInboundRelays } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
@@ -126,8 +128,17 @@ function LinesView() {
   const [viewMode, setViewMode] = useViewMode("relay");
   const card = viewMode === "card";
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
+  const loadingRef = useRef(false);
+  // A reload asked for during a silent poll (after an edit) runs after it.
+  const reloadRef = useRef(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false): Promise<void> => {
+    if (loadingRef.current) {
+      if (!silent) reloadRef.current = true;
+
+      return;
+    }
+    loadingRef.current = true;
     try {
       const [inRes, relRes] = await Promise.all([
         getInboundList(),
@@ -135,16 +146,34 @@ function LinesView() {
       ]);
 
       if (inRes.code === 0) setInbounds(inRes.data ?? []);
-      if (relRes.code === 0) setRelays(relRes.data ?? []);
-      if (inRes.code !== 0) toast.error(inRes.msg || "加载失败");
+      if (relRes.code === 0) {
+        setRelays((prev) => {
+          const previous = new Map(prev.map((r) => [r.id, r]));
+
+          return (relRes.data ?? []).map((r) => ({
+            ...r,
+            latency: latestProbe(r.latency, previous.get(r.id)?.latency),
+          }));
+        });
+      }
+      if (!silent && (inRes.code !== 0 || relRes.code !== 0))
+        toast.error(inRes.msg || relRes.msg || "加载失败");
+    } catch {
+      if (!silent) toast.error("加载失败");
     } finally {
+      loadingRef.current = false;
       setLoading(false);
+      if (reloadRef.current) {
+        reloadRef.current = false;
+        void load(true);
+      }
     }
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+  useVisiblePolling(useCallback(() => load(true), [load]));
 
   /** Measures the given lines (all when empty) and merges the results. */
   const probe = useCallback(
@@ -164,7 +193,9 @@ function LinesView() {
 
         setRelays((prev) =>
           prev.map((r) =>
-            data[String(r.id)] ? { ...r, latency: data[String(r.id)] } : r,
+            data[String(r.id)]
+              ? { ...r, latency: latestProbe(data[String(r.id)], r.latency) }
+              : r,
           ),
         );
       } catch {
@@ -369,7 +400,7 @@ function LinesView() {
 
       <RelayModal
         item={editing}
-        onChanged={load}
+        onChanged={() => load()}
         onClose={() => setEditing(null)}
       />
     </div>

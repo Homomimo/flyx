@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import toast from "react-hot-toast";
 import {
   DndContext,
@@ -73,6 +73,8 @@ import {
 import { buildNodeSystemInfo } from "@/pages/node/system-info";
 import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { latestProbe } from "@/utils/latest-probe";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import {
@@ -83,7 +85,6 @@ import {
   NodeFilterMode,
 } from "@/pages/node/types";
 import {
-  NODE_FALLBACK_REFRESH_INTERVAL_MS,
   getNodeReminderEnabled,
   getNodeExpiryMeta,
   mergeNodeRealtimeState,
@@ -325,8 +326,18 @@ export default function NodePage({
   }, []);
 
   // 加载节点列表
+  const nodesLoadingRef = useRef(false);
+  // A reload asked for during a silent poll (after an edit) runs after it.
+  const nodesReloadRef = useRef(false);
   const loadNodes = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
+
+    if (nodesLoadingRef.current) {
+      if (!silent) nodesReloadRef.current = true;
+
+      return;
+    }
+    nodesLoadingRef.current = true;
 
     if (!silent) {
       setLoading(true);
@@ -386,8 +397,13 @@ export default function NodePage({
         toast.error("网络错误，请重试");
       }
     } finally {
+      nodesLoadingRef.current = false;
       if (!silent) {
         setLoading(false);
+      }
+      if (nodesReloadRef.current) {
+        nodesReloadRef.current = false;
+        void loadNodes({ silent: true });
       }
     }
   }, []);
@@ -513,21 +529,10 @@ export default function NodePage({
     setSelectedIds(new Set());
   }, [activeTab]);
 
-  useEffect(() => {
-    if (!usingPollingFallback) {
-      return;
-    }
-
-    void loadNodes({ silent: true });
-
-    const interval = window.setInterval(() => {
-      void loadNodes({ silent: true });
-    }, NODE_FALLBACK_REFRESH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [loadNodes, usingPollingFallback]);
+  // Metrics arrive over WebSocket, but cached latency is only in node/list.
+  useVisiblePolling(
+    useCallback(() => loadNodes({ silent: true }), [loadNodes]),
+  );
 
   // 格式化速度
   const formatSpeed = (bytesPerSecond: number): string => {
@@ -1173,7 +1178,9 @@ export default function NodePage({
         return;
       }
       setNodeList((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, latency } : n)),
+        prev.map((n) =>
+          n.id === id ? { ...n, latency: latestProbe(latency, n.latency) } : n,
+        ),
       );
     } catch {
       toast.error("检测失败");

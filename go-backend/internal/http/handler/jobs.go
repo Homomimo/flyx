@@ -19,6 +19,9 @@ func (h *Handler) StartBackgroundJobs() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	queue := newNodeReconnectProbeQueue()
+	h.reconnectProbes = queue
+	h.jobsWG.Add(1)
 	h.jobsCancel = cancel
 	h.jobsCtx = ctx
 	h.jobsStarted = true
@@ -38,6 +41,10 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runNotifyLoop(ctx)
 	go h.runSubscriptionLoop(ctx)
 	go h.runRemoteSourceLoop(ctx)
+	go func() {
+		defer h.jobsWG.Done()
+		h.runNodeReconnectProbes(ctx, queue, 5*time.Second)
+	}()
 }
 
 func (h *Handler) runFederationCleanupRetryLoop(ctx context.Context) {
