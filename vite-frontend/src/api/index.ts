@@ -764,6 +764,8 @@ export interface SubPipeline {
   script: string;
   /** Subscription template id per client kind; a kind without one gets the built-in profile. */
   templates?: Partial<Record<SubTemplateSlot, number>>;
+  /** Expiry and traffic shown as placeholder nodes at the top of the list. */
+  infoNodes?: boolean;
 }
 export interface SubTemplateServiceGroup {
   key: string;
@@ -1036,6 +1038,8 @@ export interface RemoteSourceItem {
   nodeCount: number;
   /** The provider's Subscription-Userinfo header. */
   userinfo: string;
+  /** Sent when fetching; "" uses the panel's default (a Mihomo UA). */
+  userAgent: string;
 }
 export interface RemoteSyncResult {
   added: number;
@@ -1057,6 +1061,7 @@ export const saveRemoteSource = (data: {
   intervalHours: number;
   relayOnly: boolean;
   enabled?: boolean;
+  userAgent?: string;
 }) =>
   Network.post<
     RemoteSourceItem | { source: RemoteSourceItem; result: RemoteSyncResult }
