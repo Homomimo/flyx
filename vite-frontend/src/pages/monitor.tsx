@@ -5,8 +5,8 @@ import { Navigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import { AnimatedPage } from "@/components/animated-page";
-import { PageHeader, PageTabs } from "@/components/page-kit";
-import { ViewModeToggle, useViewMode } from "@/components/view-mode";
+import { PageHeader, PageTabs, PageToolbar } from "@/components/page-kit";
+import { useViewMode } from "@/components/view-mode";
 import { getMonitorNodes } from "@/api";
 import { MonitorView } from "@/pages/node/monitor-view";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
@@ -126,9 +126,9 @@ function MonitorOverview() {
         return;
       }
 
-      if (!silent) toast.error(response.msg || "加载节点失败");
+      if (!silent) toast.error(response.msg || "加载服务器失败");
     } catch {
-      if (!silent) toast.error("加载节点失败");
+      if (!silent) toast.error("加载服务器失败");
     } finally {
       if (!silent) setNodesLoading(false);
     }
@@ -211,7 +211,7 @@ function MonitorOverview() {
 
   return (
     <AnimatedPage className="px-3 lg:px-6 py-6">
-      <PageHeader description="节点资源与隧道质量的实时状态" title="监控" />
+      <PageHeader description="服务器资源与隧道质量的实时状态" title="监控" />
 
       <div className="mb-4 grid grid-cols-3 gap-2 sm:max-w-2xl">
         {stats.map((s) => (
@@ -227,19 +227,15 @@ function MonitorOverview() {
         ))}
       </div>
 
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <PageTabs
-            tabs={[
-              { key: "nodes", label: "节点" },
-              { key: "tunnels", label: "隧道" },
-            ]}
-            value={activeTab}
-            onChange={setActiveTab}
-          />
-        </div>
-        <ViewModeToggle value={viewMode} onChange={setViewMode} />
-      </div>
+      <PageTabs
+        tabs={[
+          { key: "nodes", label: "服务器" },
+          { key: "tunnels", label: "隧道" },
+        ]}
+        value={activeTab}
+        onChange={setActiveTab}
+      />
+      <PageToolbar view={{ value: viewMode, onChange: setViewMode }} />
 
       {nodesError && activeTab === "nodes" && (
         <div className="mb-3 rounded-xl border border-divider bg-content1 px-3 py-2 text-sm text-default-600">
@@ -283,9 +279,9 @@ export function NodeMonitorDetail({
 
         if (!active) return;
         if (res.code === 0 && Array.isArray(res.data)) setNodes(res.data);
-        else toast.error(res.msg || "加载节点失败");
+        else toast.error(res.msg || "加载服务器失败");
       } catch {
-        if (active) toast.error("加载节点失败");
+        if (active) toast.error("加载服务器失败");
       }
     })();
 

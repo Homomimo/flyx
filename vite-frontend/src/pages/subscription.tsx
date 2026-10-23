@@ -31,9 +31,14 @@ import {
   saveSubscription,
 } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
-import { EmptyHint, PageHeader } from "@/components/page-kit";
+import {
+  EmptyHint,
+  PageHeader,
+  PageTabs,
+  PageToolbar,
+} from "@/components/page-kit";
 import { CARD_GRID, InfoCard } from "@/components/info-card";
-import { ViewModeToggle, useViewMode } from "@/components/view-mode";
+import { useViewMode } from "@/components/view-mode";
 import { PageLoadingState } from "@/components/page-state";
 import { copyText, panelOrigin } from "@/pages/inbound/share";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -493,7 +498,7 @@ function Editor({
               />
               <p className="text-xs text-default-500">
                 有独立的 UUID /
-                密码：停用、到期或流量用完后从节点上删除，已导入的配置也连不上
+                密码：停用、到期或流量用完后从服务器上删除，已导入的配置也连不上
               </p>
               <div className="space-y-1">
                 <label className="text-sm font-medium" htmlFor="sub-expire">
@@ -564,7 +569,7 @@ function Editor({
                 </div>
                 <p className="text-xs text-default-500">
                   上传 +
-                  下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
+                  下载合计，用完自动断开；在服务器上按用户统计，仅支持多用户协议
                 </p>
               </div>
             </Section>
@@ -667,7 +672,7 @@ function Editor({
               )}
               {pickedGroups.length > 1 && (
                 <p className="text-xs text-default-500">
-                  几个组里有同一个落地时它会出现多次，可以在节点组里用筛选区分
+                  几个组里有同一个节点时它会出现多次，可以在节点组里用筛选区分
                 </p>
               )}
             </Section>
@@ -1100,6 +1105,7 @@ export default function SubscriptionPage() {
   const [groups, setGroups] = useState<NodeGroupItem[]>([]);
   const [groupDraft, setGroupDraft] = useState<NodeGroupDraft | null>(null);
   const [tab, setTab] = useState<"subs" | "groups">("subs");
+  const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [detail, setDetail] = useState<SubscriptionItem | null>(null);
@@ -1195,10 +1201,14 @@ export default function SubscriptionPage() {
     }
   };
 
-  const moveGroup = async (i: number, delta: -1 | 1) => {
+  /** Swaps two groups by id, so it works on a search-filtered list too. */
+  const moveGroup = async (a: number, b: number) => {
     const next = [...groups];
+    const i = next.findIndex((g) => g.id === a);
+    const j = next.findIndex((g) => g.id === b);
 
-    [next[i], next[i + delta]] = [next[i + delta], next[i]];
+    if (i < 0 || j < 0) return;
+    [next[i], next[j]] = [next[j], next[i]];
     setGroups(next);
     const res = await orderNodeGroups(next.map((g) => g.id));
 
@@ -1256,6 +1266,13 @@ export default function SubscriptionPage() {
   if (loading) return <PageLoadingState message="正在加载..." />;
 
   const groupName = new Map(groups.map((g) => [g.id, g.name]));
+  const q = query.trim().toLowerCase();
+  const shownSubs = q
+    ? subs.filter((s) => `${s.name} ${s.remark}`.toLowerCase().includes(q))
+    : subs;
+  const shownGroups = q
+    ? groups.filter((g) => g.name.toLowerCase().includes(q))
+    : groups;
   const sourceText = (s: SubscriptionItem) =>
     (s.groupIds ?? [])
       .map((id) => groupName.get(id))
@@ -1402,7 +1419,7 @@ export default function SubscriptionPage() {
         description={
           tab === "subs"
             ? "每个订阅一个链接：选节点组、分流和链式代理，客户端自动识别格式"
-            : "节点组：从落地和订阅源挑节点，筛选、改名后给订阅用，多个订阅可以共用"
+            : "节点组：从自建、导入的节点和订阅源里挑选，筛选、改名后给订阅用，多个订阅可以共用"
         }
         primary={
           tab === "subs"
@@ -1434,36 +1451,43 @@ export default function SubscriptionPage() {
         onClose={() => setTemplatesOpen(false)}
       />
 
-      <div className="max-w-xs">
-        <Segmented
-          options={[
-            ["subs", `订阅 ${subs.length}`],
-            ["groups", `节点组 ${groups.length}`],
-          ]}
-          value={tab}
-          onChange={setTab}
-        />
-      </div>
+      <PageTabs
+        tabs={[
+          { key: "subs", label: "订阅", badge: subs.length },
+          { key: "groups", label: "节点组", badge: groups.length },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      <PageToolbar
+        placeholder={tab === "subs" ? "搜索订阅名称或备注" : "搜索节点组名称"}
+        search={query}
+        view={
+          tab === "subs"
+            ? { value: viewMode, onChange: setViewMode }
+            : undefined
+        }
+        onSearch={setQuery}
+      />
 
       {tab === "groups" ? (
         <NodeGroupList
-          groups={groups}
+          groups={shownGroups}
           onEdit={(g) => setGroupDraft(groupDraftFrom(g))}
-          onMove={(i, d) => void moveGroup(i, d)}
+          onMove={(i, d) =>
+            void moveGroup(shownGroups[i].id, shownGroups[i + d].id)
+          }
         />
       ) : subs.length === 0 ? (
         <EmptyHint
           text={
             inbounds.length === 0
-              ? "还没有落地。先在“落地”里搭建或导入节点，订阅里才会有内容"
+              ? "还没有节点。先在“节点”里搭建或导入，订阅里才会有内容"
               : "每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开"
           }
         />
       ) : (
         <>
-          <div className="flex justify-end">
-            <ViewModeToggle value={viewMode} onChange={setViewMode} />
-          </div>
           <div
             className={
               viewMode === "card"
@@ -1471,7 +1495,7 @@ export default function SubscriptionPage() {
                 : "grid grid-cols-1 gap-2 2xl:grid-cols-2"
             }
           >
-            {subs.map(viewMode === "card" ? subCard : row)}
+            {shownSubs.map(viewMode === "card" ? subCard : row)}
           </div>
         </>
       )}
@@ -1490,15 +1514,7 @@ export default function SubscriptionPage() {
           {(onClose) =>
             detail && (
               <>
-                <ModalHeader className="relative flex flex-col gap-1 pr-12">
-                  <button
-                    aria-label="关闭"
-                    className="absolute right-4 top-4 rounded-full p-1.5 text-default-500 hover:bg-default-100 hover:text-foreground"
-                    type="button"
-                    onClick={onClose}
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
+                <ModalHeader closable className="flex flex-col gap-1">
                   <h2 className="text-lg font-bold break-all">{detail.name}</h2>
                   <p className="text-small font-normal text-default-500">
                     {detail.nodeCount} 个节点
@@ -1540,7 +1556,7 @@ export default function SubscriptionPage() {
                       className={`text-xs ${detail.overQuota ? "text-danger" : "text-default-500"}`}
                     >
                       {detail.overQuota
-                        ? "流量已用完，已从节点上断开"
+                        ? "流量已用完，已从服务器上断开"
                         : [
                             `↑ ${formatTraffic(detail.uploadBytes)} ↓ ${formatTraffic(detail.downloadBytes)}`,
                             `${new Date(detail.trafficSince).toLocaleDateString(undefined, { month: "numeric", day: "numeric" })} 起`,
@@ -1590,7 +1606,7 @@ export default function SubscriptionPage() {
                         {detail.sharedIds.length > 0 && (
                           <p className="text-warning">
                             {detail.sharedIds.length}{" "}
-                            个落地是共用凭据，停用后已导入的配置仍能连接
+                            个节点是共用凭据，停用后已导入的配置仍能连接
                           </p>
                         )}
                       </div>
@@ -1727,7 +1743,7 @@ export default function SubscriptionPage() {
                   isLoading={saving}
                   onPress={runConfirm}
                 >
-                  确认
+                  {confirm === "delete" ? "删除" : "重置"}
                 </Button>
               </ModalFooter>
             </>
