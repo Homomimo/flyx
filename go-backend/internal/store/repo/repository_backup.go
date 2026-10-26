@@ -226,6 +226,7 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 			TCPListenAddr: n.TCPListenAddr, UDPListenAddr: n.UDPListenAddr,
 			Inx: n.Inx, IsRemote: n.IsRemote,
 			LatencyTargets: n.LatencyTargets,
+			NotifyEvents:   &n.NotifyEvents,
 		}
 		if n.ExpiryTime.Valid {
 			b.ExpiryTime = n.ExpiryTime.Int64
@@ -696,13 +697,18 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64) (int, error) 
 			RemoteConfig:   sql.NullString{String: n.RemoteConfig, Valid: true},
 			LatencyTargets: n.LatencyTargets,
 		}
+		columns := []string{
+			"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "port", "interface_name", "version",
+			"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
+			"inx", "is_remote", "remote_url", "remote_token", "remote_config",
+		}
+		if n.NotifyEvents != nil {
+			item.NotifyEvents = *n.NotifyEvents
+			columns = append(columns, "notify_events")
+		}
 		err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{
-				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "port", "interface_name", "version",
-				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "is_remote", "remote_url", "remote_token", "remote_config",
-			}),
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns(columns),
 		}).Create(&item).Error
 		if err != nil {
 			return count, err
