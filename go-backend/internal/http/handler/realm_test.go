@@ -74,13 +74,13 @@ func TestRealmForwardRenderAndTraffic(t *testing.T) {
 	if flow.InFlow != 200 || flow.OutFlow != 500 {
 		t.Fatalf("forward flow = %+v, want 200/500", flow)
 	}
-	// A new agent epoch restarts the counters without crediting them.
+	// A known new epoch credits its initial counter from zero.
 	h.applyRealmCounters(nodeID, "e2", []agentKernelCounter{counter("in", 50)}, now.Add(2*time.Minute))
 	if err := r.DB().Raw(`SELECT in_flow, out_flow FROM forward WHERE id = ?`, forward.ID).Scan(&flow).Error; err != nil {
 		t.Fatal(err)
 	}
-	if flow.InFlow != 200 {
-		t.Fatalf("epoch change credited traffic: %+v", flow)
+	if flow.InFlow != 250 {
+		t.Fatalf("epoch change lost new traffic: %+v", flow)
 	}
 }
 

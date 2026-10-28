@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
 	"sort"
@@ -53,6 +54,11 @@ func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		log.Printf("nftables traffic collection failed op=ssh_config node_id=%d err=%v", nodeID, err)
 		return
 	}
+	sequence, err := h.repo.NextCounterSnapshot(nodeID, "nftables")
+	if err != nil {
+		log.Printf("counter sequence failed: %v", err)
+		return
+	}
 	samples, err := h.nftablesManager.CollectCounters(context.Background(), sshCfg)
 	if err != nil {
 		log.Printf("nftables traffic collection failed op=collect node_id=%d err=%v", nodeID, err)
@@ -75,17 +81,58 @@ func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeS
 		hashes[binding.ForwardID] = ruleHash
 	}
 
-	h.accountForwardCounterSamples(nodeID, filterNftCounterSamplesWithBinding(samples, hashes), hashes, now)
+	epoch := ""
+	for _, sample := range samples {
+		if sample.Epoch != "" {
+			epoch = sample.Epoch
+			break
+		}
+	}
+	// The table generation travels with the sampled counters. A concurrently
+	// updated database binding must not label an old remote snapshot as new.
+	if epoch != "" {
+		for id := range hashes {
+			hashes[id] = "nft:" + epoch
+		}
+	}
+
+	h.accountForwardCounterSamplesOrdered(nodeID, filterNftCounterSamplesWithBinding(samples, hashes), hashes, now, "nftables", sequence, epoch)
 }
 
 // accountForwardCounterSamples turns per-forward byte counters (nftables
 // rules, realm ports) into forward traffic, quota usage and flow policies.
 // hashes identify each forward's counter generation: a change restarts it.
 func (h *Handler) accountForwardCounterSamples(nodeID int64, samples []runtimenft.CounterSample, hashes map[int64]string, now time.Time) {
+	seq, err := h.repo.NextCounterSnapshot(nodeID, "forward")
+	if err != nil {
+		log.Printf("counter sequence failed: %v", err)
+		return
+	}
+	h.accountForwardCounterSamplesOrdered(nodeID, samples, hashes, now, "forward", seq, "")
+}
+
+func (h *Handler) accountForwardCounterSamplesOrdered(nodeID int64, samples []runtimenft.CounterSample, hashes map[int64]string, now time.Time, source string, sequence int64, epoch string) {
+	var batch flowUploadBatch
+	var quotas map[int64]*model.UserQuotaView
+	applied, err := h.repo.ApplyCounterSnapshot(nodeID, source, sequence, epoch, func(tx *repo.Repository) error {
+		var err error
+		batch, quotas, err = (&Handler{repo: tx}).accountForwardCounterSamplesTx(nodeID, samples, hashes, now)
+		return err
+	})
+	if err != nil {
+		log.Printf("counter accounting failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+	if applied {
+		h.enforceFlowUploadBatch(nodeID, batch, quotas)
+	}
+}
+
+func (h *Handler) accountForwardCounterSamplesTx(nodeID int64, samples []runtimenft.CounterSample, hashes map[int64]string, now time.Time) (flowUploadBatch, map[int64]*model.UserQuotaView, error) {
 	oldStates, err := h.repo.GetNftCounterStatesByNode(nodeID)
 	if err != nil {
 		log.Printf("forward counter accounting failed op=list_states node_id=%d err=%v", nodeID, err)
-		return
+		return flowUploadBatch{}, nil, err
 	}
 	nowMs := now.UnixMilli()
 	deltas, newStates := buildNftCounterDeltas(nodeID, samples, oldStates, hashes, nowMs)
@@ -93,7 +140,7 @@ func (h *Handler) accountForwardCounterSamples(nodeID int64, samples []runtimenf
 		if len(deltas) != 0 {
 			log.Printf("forward counter accounting skipped suspicious deltas without states node_id=%d deltas=%d", nodeID, len(deltas))
 		}
-		return
+		return flowUploadBatch{}, nil, nil
 	}
 
 	var metas map[int64]repo.FlowUploadForwardMeta
@@ -107,7 +154,7 @@ func (h *Handler) accountForwardCounterSamples(nodeID int64, samples []runtimenf
 		metas, err = h.repo.GetFlowUploadForwardMetas(forwardIDs)
 		if err != nil {
 			log.Printf("forward counter accounting failed op=load_flow_metas node_id=%d err=%v", nodeID, err)
-			return
+			return flowUploadBatch{}, nil, err
 		}
 		// A deleted rule can remain on the node after a failed cleanup. Keep
 		// its baseline for a later retry without blocking unrelated forwards.
@@ -131,37 +178,31 @@ func (h *Handler) accountForwardCounterSamples(nodeID int64, samples []runtimenf
 		}
 		newStates = keptStates
 		if len(newStates) == 0 {
-			return
+			return flowUploadBatch{}, nil, nil
 		}
 	}
 	if len(deltas) == 0 {
 		if err := h.repo.UpsertNftCounterStates(newStates, nowMs); err != nil {
 			log.Printf("forward counter accounting failed op=upsert_states node_id=%d err=%v", nodeID, err)
-			return
+			return flowUploadBatch{}, nil, err
 		}
-		return
+		return flowUploadBatch{}, nil, nil
 	}
 
 	batch := buildNftFlowUploadBatch(deltas, metas)
 	if missingForwardID, ok := firstNftBatchMissingDelta(deltas, batch); ok {
 		log.Printf("forward counter accounting skipped state advance op=unaccounted_delta node_id=%d forward_id=%d", nodeID, missingForwardID)
-		return
+		return flowUploadBatch{}, nil, fmt.Errorf("unaccounted counter delta for forward %d", missingForwardID)
 	}
 	quotaViews, err := h.repo.ApplyNftTrafficAccounting(batch.flowDeltas, batch.quotaUsage, newStates, now)
 	if err != nil {
 		log.Printf("forward counter accounting failed op=accounting node_id=%d err=%v", nodeID, err)
-		return
+		return flowUploadBatch{}, nil, err
 	}
-	h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs)
-	for userID, quota := range quotaViews {
-		h.enforceUserQuotaIfNeeded(userID, quota)
+	if err := h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs); err != nil {
+		return flowUploadBatch{}, nil, err
 	}
-	for _, target := range batch.policyTargets {
-		if target.UserID <= 0 || target.UserTunnelID <= 0 {
-			continue
-		}
-		h.enforceFlowPolicies(target.UserID, target.UserTunnelID)
-	}
+	return batch, quotaViews, nil
 }
 
 func firstNftBatchMissingDelta(deltas []nftTrafficDelta, batch flowUploadBatch) (int64, bool) {
@@ -260,22 +301,30 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 		}
 
 		old, exists := oldByKey[nftCounterKey(sample.ForwardID, protocol, direction)]
-		if !exists || old.RuleHash != ruleHash {
+		// A managed nft generation is issued only after rebuilding the table,
+		// including the first upgrade from legacy rules without a generation.
+		knownReset := strings.HasPrefix(ruleHash, "nft:") || (strings.HasPrefix(old.RuleHash, "realm:") && strings.HasPrefix(ruleHash, "realm:"))
+		if !exists || (old.RuleHash != ruleHash && !knownReset) {
 			stateInputs = append(stateInputs, stateInput)
+			oldByKey[nftCounterKey(sample.ForwardID, protocol, direction)] = model.NftCounterState{NodeID: nodeID, ForwardID: sample.ForwardID, Protocol: protocol, Direction: direction, RuleHash: ruleHash, Bytes: int64(sample.Bytes), Packets: int64(sample.Packets)}
 			continue
 		}
 		if old.Bytes < 0 {
 			stateInputs = append(stateInputs, stateInput)
+			oldByKey[nftCounterKey(sample.ForwardID, protocol, direction)] = model.NftCounterState{NodeID: nodeID, ForwardID: sample.ForwardID, Protocol: protocol, Direction: direction, RuleHash: ruleHash, Bytes: int64(sample.Bytes), Packets: int64(sample.Packets)}
 			continue
 		}
 		oldBytes := uint64(old.Bytes)
-		if sample.Bytes < oldBytes {
-			stateInputs = append(stateInputs, stateInput)
-			continue
+		if old.RuleHash != ruleHash {
+			oldBytes = 0
 		}
+		if sample.Bytes < oldBytes {
+			continue
+		} // A snapshot cannot lower a generation's high-water mark.
 		rawDelta := sample.Bytes - oldBytes
 		if rawDelta == 0 {
 			stateInputs = append(stateInputs, stateInput)
+			oldByKey[nftCounterKey(sample.ForwardID, protocol, direction)] = model.NftCounterState{NodeID: nodeID, ForwardID: sample.ForwardID, Protocol: protocol, Direction: direction, RuleHash: ruleHash, Bytes: int64(sample.Bytes), Packets: int64(sample.Packets)}
 			continue
 		}
 
@@ -294,6 +343,7 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 			delta.BytesOut += rawDeltaInt
 		}
 		stateInputs = append(stateInputs, stateInput)
+		oldByKey[nftCounterKey(sample.ForwardID, protocol, direction)] = model.NftCounterState{NodeID: nodeID, ForwardID: sample.ForwardID, Protocol: protocol, Direction: direction, RuleHash: ruleHash, Bytes: int64(sample.Bytes), Packets: int64(sample.Packets)}
 		deltaByForward[sample.ForwardID] = delta
 	}
 

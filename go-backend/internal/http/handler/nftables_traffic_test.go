@@ -52,7 +52,7 @@ func TestBuildNftCounterDeltasNormalGrowthProducesDirectionalBytes(t *testing.T)
 	}
 }
 
-func TestBuildNftCounterDeltasResetRefreshesBaselineWithoutDelta(t *testing.T) {
+func TestBuildNftCounterDeltasRegressionKeepsPreviousBaseline(t *testing.T) {
 	deltas, states := buildNftCounterDeltas(11, []runtimenft.CounterSample{
 		{ForwardID: 42, Protocol: "tcp", Direction: runtimenft.CounterDirectionToTarget, Bytes: 25, Packets: 2},
 	}, []model.NftCounterState{
@@ -62,8 +62,8 @@ func TestBuildNftCounterDeltasResetRefreshesBaselineWithoutDelta(t *testing.T) {
 	if len(deltas) != 0 {
 		t.Fatalf("expected reset to produce no deltas, got %#v", deltas)
 	}
-	if len(states) != 1 || states[0].Bytes != 25 || states[0].RuleHash != "hash-a" {
-		t.Fatalf("expected refreshed baseline state, got %#v", states)
+	if len(states) != 0 {
+		t.Fatalf("regressing snapshot advanced the baseline: %#v", states)
 	}
 }
 
@@ -722,5 +722,14 @@ func TestForwardCounterAccountingIsolatesMissingMetadata(t *testing.T) {
 	h.accountForwardCounterSamples(f.nodeID, sample(200), hashes, now.Add(3*time.Minute))
 	if got := mustHandlerCount(t, h, "SELECT in_flow FROM forward"); got != 100 {
 		t.Fatalf("healthy sample counted twice: %d", got)
+	}
+}
+
+func TestManagedNftGenerationCreditsFirstPostUpgradeSample(t *testing.T) {
+	old := []model.NftCounterState{{NodeID: 1, ForwardID: 2, Protocol: "tcp", Direction: runtimenft.CounterDirectionToTarget, RuleHash: "legacy-config-hash", Bytes: 900}}
+	samples := []runtimenft.CounterSample{{ForwardID: 2, Protocol: "tcp", Direction: runtimenft.CounterDirectionToTarget, Bytes: 50}}
+	deltas, states := buildNftCounterDeltas(1, samples, old, map[int64]string{2: "nft:new-table-generation"}, 1000)
+	if len(deltas) != 1 || deltas[0].BytesIn != 50 || len(states) != 1 {
+		t.Fatalf("deltas=%+v states=%+v", deltas, states)
 	}
 }
