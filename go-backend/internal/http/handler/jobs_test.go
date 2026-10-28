@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"gorm.io/gorm"
 	"path/filepath"
 	"testing"
 	"time"
@@ -111,6 +112,14 @@ func TestRunResetAndExpiryJobResetsFlowAndDisablesExpiredRecords(t *testing.T) {
 		t.Fatalf("insert non-expiring forward: %v", err)
 	}
 
+	// These records have a known previous cycle, as records created by the
+	// repository do. Legacy zero markers are covered separately.
+	for _, table := range []string{"user", "user_tunnel"} {
+		if err := r.DB().Table(table).Where("1 = 1").Update("flow_reset_at", now.AddDate(0, -1, 0).UnixMilli()).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	h.runResetAndExpiryJob(now)
 
 	userIn, userOut, userStatus := mustQueryInt64Int64Int(t, r, `SELECT in_flow, out_flow, status FROM user WHERE id = 2`)
@@ -142,6 +151,19 @@ func TestRunResetAndExpiryJobResetsFlowAndDisablesExpiredRecords(t *testing.T) {
 	if nonExpForwardStatus != 1 {
 		t.Fatalf("expected non-expiring forward to remain enabled, got status=%d", nonExpForwardStatus)
 	}
+	// Once the state has changed, minute expiry checks must not repeat writes
+	// or pause already stopped forwards. Future/unlimited entries stay active.
+	updates := 0
+	if err := r.DB().Callback().Update().Before("gorm:update").Register("test:expiry_noop", func(tx *gorm.DB) { updates++ }); err != nil {
+		t.Fatal(err)
+	}
+	defer r.DB().Callback().Update().Remove("test:expiry_noop")
+	h.disableExpiredUsers(nowMs)
+	h.disableExpiredUserTunnels(nowMs)
+	if updates != 0 {
+		t.Fatalf("repeated expiry check issued %d updates", updates)
+	}
+
 }
 
 func TestResetUserQuotaWindowsResetsUsageAndUnblocksUser(t *testing.T) {
