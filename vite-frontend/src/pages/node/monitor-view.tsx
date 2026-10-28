@@ -6,7 +6,13 @@ import type {
   ServiceMonitorLimitsApiData,
 } from "@/api/types";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+} from "react";
 import {
   LineChart,
   Line,
@@ -44,6 +50,7 @@ import {
   deleteServiceMonitor,
   runServiceMonitor,
 } from "@/api";
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import {
   Modal,
@@ -640,6 +647,10 @@ export function MonitorView({
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(
     focusNodeId,
   );
+  const loadMetricsPending = useRef(0);
+  const loadServiceMonitorsPending = useRef(0);
+  const loadLatestMonitorResultsPending = useRef(0);
+
   const [metrics, setMetrics] = useState<NodeMetricApiItem[]>([]);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsTruncated, setMetricsTruncated] = useState(false);
@@ -815,6 +826,8 @@ export function MonitorView({
 
   const loadMetrics = useCallback(
     async (nodeId: number, options?: { silent?: boolean }) => {
+      if (options?.silent && loadMetricsPending.current > 0) return;
+      loadMetricsPending.current += 1;
       const silent = options?.silent ?? false;
       const isCurrent = beginMetricsRequest();
 
@@ -822,7 +835,11 @@ export function MonitorView({
       try {
         const end = Date.now();
         const start = end - metricsRangeMs;
-        const response = await getNodeMetrics(nodeId, start, end);
+        const response = await getNodeMetrics(nodeId, start, end).finally(
+          () => {
+            loadMetricsPending.current -= 1;
+          },
+        );
 
         if (!isCurrent()) return;
 
@@ -874,6 +891,8 @@ export function MonitorView({
 
   const loadServiceMonitors = useCallback(
     async (options?: { silent?: boolean }) => {
+      if (options?.silent && loadServiceMonitorsPending.current > 0) return;
+      loadServiceMonitorsPending.current += 1;
       const silent = options?.silent ?? false;
 
       if (!silent) setMonitorsLoading(true);
@@ -899,6 +918,7 @@ export function MonitorView({
         if (!silent) setMonitorsError("加载服务监控失败");
       } finally {
         if (!silent) setMonitorsLoading(false);
+        loadServiceMonitorsPending.current -= 1;
       }
     },
     [],
@@ -954,7 +974,10 @@ export function MonitorView({
     [],
   );
 
-  const loadLatestMonitorResults = useCallback(async () => {
+  const loadLatestMonitorResults = useCallback(async (silent = false) => {
+    if (silent && loadLatestMonitorResultsPending.current > 0) return;
+    loadLatestMonitorResultsPending.current += 1;
+
     try {
       const response = await getServiceMonitorLatestResults();
 
@@ -999,6 +1022,8 @@ export function MonitorView({
       setLatestResultsError(response.msg || "加载最新监控结果失败");
     } catch {
       setLatestResultsError("加载最新监控结果失败");
+    } finally {
+      loadLatestMonitorResultsPending.current -= 1;
     }
   }, []);
 
@@ -1018,14 +1043,15 @@ export function MonitorView({
     void loadLatestMonitorResults();
   }, [loadLatestMonitorResults, loadServiceMonitorLimits, loadServiceMonitors]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadServiceMonitors({ silent: true });
-      void loadLatestMonitorResults();
-    }, 5_000);
-
-    return () => window.clearInterval(timer);
-  }, [loadLatestMonitorResults, loadServiceMonitors]);
+  useVisiblePolling(
+    useCallback(async () => {
+      await Promise.all([
+        loadServiceMonitors({ silent: true }),
+        loadLatestMonitorResults(true),
+      ]);
+    }, [loadLatestMonitorResults, loadServiceMonitors]),
+    5_000,
+  );
 
   useEffect(() => {
     if (selectedNodeId) {
@@ -1033,14 +1059,12 @@ export function MonitorView({
     }
   }, [selectedNodeId, loadMetrics]);
 
-  useEffect(() => {
-    if (!selectedNodeId) return;
-    const timer = window.setInterval(() => {
-      void loadMetrics(selectedNodeId, { silent: true });
-    }, 15_000);
-
-    return () => window.clearInterval(timer);
-  }, [selectedNodeId, loadMetrics]);
+  useVisiblePolling(
+    useCallback(async () => {
+      if (selectedNodeId) await loadMetrics(selectedNodeId, { silent: true });
+    }, [selectedNodeId, loadMetrics]),
+    15_000,
+  );
 
   useEffect(() => {
     if (!resultsModalOpen || !resultsMonitorId) return;
