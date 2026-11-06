@@ -837,7 +837,7 @@ func exportBackupPayload(t *testing.T, router http.Handler, path, token string) 
 	return payload
 }
 
-func setupContractRouter(t *testing.T, jwtSecret string) (http.Handler, *repo.Repository) {
+func setupContractRouter(t *testing.T, jwtSecret string, configure ...func(*handler.Handler)) (http.Handler, *repo.Repository) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "contract.db")
 	r, err := repo.Open(dbPath)
@@ -849,6 +849,9 @@ func setupContractRouter(t *testing.T, jwtSecret string) (http.Handler, *repo.Re
 	})
 
 	h := handler.New(r, jwtSecret)
+	for _, apply := range configure {
+		apply(h)
+	}
 	return httpserver.NewRouter(h, jwtSecret), r
 }
 

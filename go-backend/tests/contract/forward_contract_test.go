@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"go-backend/internal/auth"
+	"go-backend/internal/http/handler"
 	"go-backend/internal/http/response"
+	"go-backend/internal/ws"
 )
 
 func TestForwardOwnershipAndScopeContracts(t *testing.T) {
@@ -925,7 +927,12 @@ func TestForwardCreateThenPauseResumeContract(t *testing.T) {
 
 func TestForwardUpdateRecoversFromAddressInUseContract(t *testing.T) {
 	secret := "contract-jwt-secret"
-	router, repo := setupContractRouter(t, secret)
+	// This test counts commands from one explicit update. Reconnect restoration
+	// runs asynchronously after the mock node comes online and can otherwise
+	// consume the injected conflict or change those counts midway through it.
+	router, repo := setupContractRouter(t, secret, func(h *handler.Handler) {
+		h.WebSocketHandler().(*ws.Server).SetNodeOnlineHook(nil)
+	})
 	server := httptest.NewServer(router)
 	defer server.Close()
 
