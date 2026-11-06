@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -44,6 +45,7 @@ func TestAgentStartupAndFailedReloadPreservePanelRules(t *testing.T) {
 	wsReady := make(chan struct{})
 	responses := make(chan map[string]any, 8)
 	var ready sync.Once
+	var connectionCount atomic.Int32
 	upgrader := websocket.Upgrader{}
 	panel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/system-info" {
@@ -55,6 +57,7 @@ func TestAgentStartupAndFailedReloadPreservePanelRules(t *testing.T) {
 			return
 		}
 		defer c.Close()
+		connectionCount.Add(1)
 		ready.Do(func() { close(wsReady) })
 		panelConnections <- c
 		if err := c.WriteJSON(map[string]any{"type": "AddService", "requestId": "early-rule", "data": []any{service("70_1_0", early)}}); err != nil {
@@ -196,13 +199,28 @@ func TestAgentStartupAndFailedReloadPreservePanelRules(t *testing.T) {
 		t.Fatal("shutdown left listeners open")
 	}
 
-	// Startup errors must exit without advertising a node ready to accept rules.
+	// LoadStartup deliberately skips broken forwarding rules to keep the panel
+	// able to repair them. Use an invalid auxiliary API address for a fatal
+	// startup error instead, and do not reuse the earlier process's deadline.
 	bad := filepath.Join(dir, "invalid.json")
-	writeJSON(t, bad, map[string]any{"services": []any{invalid}})
-	failed := exec.CommandContext(ctx, binary, "-C", bad)
+	writeJSON(t, bad, map[string]any{"api": map[string]any{"addr": "127.0.0.1:not-a-port"}})
+	connectionsBefore := connectionCount.Load()
+	failedCtx, failedCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer failedCancel()
+	failed := exec.CommandContext(failedCtx, binary, "-C", bad)
 	failed.Dir = dir
-	if output, err := failed.CombinedOutput(); err == nil {
+	output, err := failed.CombinedOutput()
+	if failedCtx.Err() != nil {
+		t.Fatalf("invalid startup did not exit before timeout: %v\n%s", failedCtx.Err(), output)
+	}
+	if err == nil {
 		t.Fatalf("invalid startup succeeded: %s", output)
+	}
+	if _, ok := err.(*exec.ExitError); !ok {
+		t.Fatalf("could not run invalid startup: %v\n%s", err, output)
+	}
+	if connectionCount.Load() != connectionsBefore {
+		t.Fatalf("failed startup connected to panel: %s", output)
 	}
 	select {
 	case response := <-responses:
