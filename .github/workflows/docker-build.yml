@@ -387,7 +387,7 @@ jobs:
           OWNER="${{ needs.check-version.outputs.image_owner }}"
 
           # 更新内容取自 doc/changelog.md 里这个版本的一节，没有时列出上个版本以来的提交
-          .github/scripts/release-notes.sh "${VERSION}" "${{ github.repository }}" \
+          bash .github/scripts/release-notes.sh "${VERSION}" "${{ github.repository }}" \
             "${{ env.REGISTRY }}/${OWNER}" "${{ github.sha }}" > release-notes.md
           cat release-notes.md
 
