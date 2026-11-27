@@ -1,0 +1,1 @@
+import{ji as e}from"./index-Bheve1_b.js";var t=e(`chevron-right`,[[`path`,{d:`m9 18 6-6-6-6`,key:`mthhwq`}]]);export{t};

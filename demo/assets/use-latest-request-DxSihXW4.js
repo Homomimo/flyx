@@ -1,0 +1,1 @@
+import{Bi as e,Ui as t}from"./index-Bheve1_b.js";var n=t(e(),1);function r(e){let t=(0,n.useRef)(0);return(0,n.useLayoutEffect)(()=>()=>{t.current+=1},[e]),(0,n.useCallback)(()=>{let e=++t.current;return()=>e===t.current},[])}export{r as t};
